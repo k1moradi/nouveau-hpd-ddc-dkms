@@ -1,5 +1,5 @@
 #!/bin/bash
-set -euo pipefail
+set -Eeuo pipefail
 
 kernelver="${1:-${kernelver:-}}"
 if [ -z "$kernelver" ]; then
@@ -22,14 +22,25 @@ fi
 
 base="${kernelver%%-*}"
 srcpkg="linux-source-$base"
-work="$PWD/.work/$kernelver"
 out="$PWD/output"
-rm -rf "$work" "$out"
-mkdir -p "$work" "$out"
+rm -rf "$out"
+mkdir -p "$out"
 
-# Prefer a kernel binary package built from Ubuntu's 'linux' source package.
-# linux-modules and linux-headers avoid the +N suffix sometimes used by
-# linux-signed image packages.
+# Use tmpfs for the temporary source/object tree when /tmp is tmpfs.  The tree
+# is deleted on every normal exit and on HUP/INT/TERM so RAM/swap is released.
+tmp_parent="${NOUVEAU_DKMS_TMPDIR:-/tmp}"
+mkdir -p "$tmp_parent"
+work=$(mktemp -d -p "$tmp_parent" "nouveau-hpd-ddc.${kernelver}.XXXXXX")
+cleanup() {
+    rc=$?
+    rm -rf -- "$work" 2>/dev/null || true
+    exit "$rc"
+}
+trap cleanup EXIT
+trap 'exit 129' HUP
+trap 'exit 130' INT
+trap 'exit 143' TERM
+
 desired_ver=""
 for p in \
     "linux-modules-$kernelver" \
@@ -47,66 +58,72 @@ if [ -z "$desired_ver" ]; then
     exit 2
 fi
 
-# A signed image may carry a packaging-only +N suffix not present on
-# linux-source. Strip only that final +suffix as a fallback candidate.
 plain_ver="${desired_ver%%+*}"
-
 echo "nouveau-hpd-ddc: kernel=$kernelver source-package=$srcpkg desired-version=$desired_ver"
+echo "nouveau-hpd-ddc: temporary build tree: $work (auto-cleaned on exit)"
 
-find_installed_tarball() {
-    local installed=""
-    installed=$(dpkg-query -W -f='${Version}' "$srcpkg" 2>/dev/null || true)
-    if [ "$installed" = "$desired_ver" ] || [ "$installed" = "$plain_ver" ]; then
-        find /usr/src -maxdepth 1 -type f \
-            \( -name "$srcpkg.tar.bz2" -o -name "$srcpkg.tar.xz" -o -name "$srcpkg.tar.gz" \) \
-            -print -quit
-    fi
-}
+src_tar=""
+installed_ver=$(dpkg-query -W -f='${Version}' "$srcpkg" 2>/dev/null || true)
+if [ "$installed_ver" = "$desired_ver" ] || [ "$installed_ver" = "$plain_ver" ]; then
+    src_tar=$(find /usr/src -maxdepth 3 -type f \
+        \( -name "$srcpkg.tar.bz2" -o -name "$srcpkg.tar.xz" -o -name "$srcpkg.tar.gz" -o -name "$srcpkg.tar.zst" \) \
+        -print -quit)
+fi
 
-src_tar=$(find_installed_tarball || true)
+# Future ABI fallback: retrieve the exact Ubuntu source binary package without
+# installing it globally, extract it into our temporary directory, and remove
+# it automatically when the DKMS build exits.
 if [ -z "$src_tar" ]; then
-    echo "nouveau-hpd-ddc: exact installed source tarball not found; downloading matching Ubuntu source binary package"
-    mkdir -p "$work/download"
+    echo "nouveau-hpd-ddc: exact installed source archive not found; downloading $srcpkg=$desired_ver"
+    mkdir -p "$work/download" "$work/source-pkg"
     (
         cd "$work/download"
-        if ! apt-get download "$srcpkg=$desired_ver"; then
-            if [ "$plain_ver" != "$desired_ver" ]; then
-                apt-get download "$srcpkg=$plain_ver"
-            else
-                exit 1
-            fi
-        fi
+        apt-get download "$srcpkg=$desired_ver"
     )
     deb=$(find "$work/download" -maxdepth 1 -type f -name "${srcpkg}_*.deb" -print -quit)
-    if [ -z "$deb" ]; then
-        echo "ERROR: failed to download $srcpkg matching $desired_ver" >&2
+    if [ -z "${deb:-}" ]; then
+        echo "ERROR: apt downloaded no $srcpkg package for $desired_ver" >&2
         exit 2
     fi
-    mkdir -p "$work/pkg"
-    dpkg-deb -x "$deb" "$work/pkg"
-    src_tar=$(find "$work/pkg/usr/src" -maxdepth 1 -type f -name "$srcpkg.tar.*" -print -quit)
+    dpkg-deb -x "$deb" "$work/source-pkg"
+    src_tar=$(find "$work/source-pkg/usr/src" -maxdepth 3 -type f \
+        \( -name "$srcpkg.tar.bz2" -o -name "$srcpkg.tar.xz" -o -name "$srcpkg.tar.gz" -o -name "$srcpkg.tar.zst" \) \
+        -print -quit)
 fi
 
 if [ -z "${src_tar:-}" ] || [ ! -f "$src_tar" ]; then
-    echo "ERROR: Ubuntu kernel source tarball for $kernelver not found" >&2
+    echo "ERROR: Ubuntu kernel source archive for $kernelver not found" >&2
     exit 2
 fi
 
-echo "nouveau-hpd-ddc: source tarball: $src_tar"
-tar -xf "$src_tar" -C "$work"
-srcdir=$(find "$work" -mindepth 1 -maxdepth 1 -type d -name 'linux-source-*' -print -quit)
-if [ -z "$srcdir" ]; then
-    echo "ERROR: could not locate extracted Ubuntu kernel source" >&2
-    exit 2
-fi
+echo "nouveau-hpd-ddc: source archive: $src_tar"
+echo "nouveau-hpd-ddc: extracting only drivers/gpu/drm/nouveau"
 
+subtree="$srcpkg/drivers/gpu/drm/nouveau"
+case "$src_tar" in
+    *.tar.bz2)
+        if command -v lbzip2 >/dev/null 2>&1; then
+            lbzip2 -dc "$src_tar" | tar -x -C "$work" "$subtree"
+        else
+            bzip2 -dc "$src_tar" | tar -x -C "$work" "$subtree"
+        fi
+        ;;
+    *.tar.xz)  xz -dc "$src_tar"   | tar -x -C "$work" "$subtree" ;;
+    *.tar.gz)  gzip -dc "$src_tar" | tar -x -C "$work" "$subtree" ;;
+    *.tar.zst) zstd -dc "$src_tar" | tar -x -C "$work" "$subtree" ;;
+    *)
+        echo "ERROR: unsupported source archive format: $src_tar" >&2
+        exit 2
+        ;;
+esac
+
+srcdir="$work/$srcpkg"
 target="$srcdir/drivers/gpu/drm/nouveau/nvkm/engine/disp/outp.c"
 if [ ! -f "$target" ]; then
     echo "ERROR: Nouveau source layout changed; refusing an unsafe patch" >&2
     exit 2
 fi
 
-# If Ubuntu/upstream already has the intended behavior, do not re-patch it.
 if python3 - "$target" <<'PY'
 import pathlib, re, sys
 p = pathlib.Path(sys.argv[1])
@@ -124,24 +141,56 @@ else
     fi
 fi
 
-# Build only the Nouveau external module against the exact target Ubuntu
-# kernel headers. The complete Nouveau source comes from Ubuntu's source
-# package, while symbol versions/config come from /lib/modules/$kernelver/build.
-nproc_count=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 2)
-make -C "$kdir" \
-    M="$srcdir/drivers/gpu/drm/nouveau" \
-    -j"$nproc_count" \
-    modules
+# Force the GNU C compiler even on systems where Clang is the interactive
+# default.  Remove inherited LLVM/Kbuild tool-selection variables first so a
+# shell/profile setting such as LLVM=1 cannot silently switch this DKMS build
+# back to Clang.  NOUVEAU_DKMS_CC remains an explicit expert override.
+cc="${NOUVEAU_DKMS_CC:-gcc}"
+if ! command -v "$cc" >/dev/null 2>&1; then
+    echo "ERROR: requested C compiler '$cc' is not installed" >&2
+    exit 2
+fi
+cc_path=$(command -v "$cc")
+cc_version=$($cc --version 2>/dev/null | head -n 1 || true)
+echo "nouveau-hpd-ddc: compiler: $cc_path${cc_version:+ ($cc_version)}"
+
+# Use every online logical CPU by default.  This is what matters for make -j
+# throughput (rather than physical-core count).  An explicit positive integer
+# NOUVEAU_DKMS_JOBS overrides autodetection when a low-memory system needs it.
+cpus=$(nproc 2>/dev/null || getconf _NPROCESSORS_ONLN 2>/dev/null || echo 1)
+case "$cpus" in
+    ''|*[!0-9]*|0) cpus=1 ;;
+esac
+
+if [ -n "${NOUVEAU_DKMS_JOBS:-}" ]; then
+    jobs="$NOUVEAU_DKMS_JOBS"
+    case "$jobs" in
+        ''|*[!0-9]*|0)
+            echo "ERROR: NOUVEAU_DKMS_JOBS must be a positive integer (got '$jobs')" >&2
+            exit 2
+            ;;
+    esac
+else
+    jobs="$cpus"
+fi
+
+echo "nouveau-hpd-ddc: online logical CPUs: $cpus; make jobs: $jobs"
+echo "nouveau-hpd-ddc: building only Nouveau against $kdir with GNU GCC"
+env -u LLVM -u LLVM_IAS -u CC -u HOSTCC \
+    make -C "$kdir" \
+        M="$srcdir/drivers/gpu/drm/nouveau" \
+        CC="$cc_path" \
+        HOSTCC="$cc_path" \
+        -j"$jobs" \
+        modules
 
 module="$srcdir/drivers/gpu/drm/nouveau/nouveau.ko"
 if [ ! -f "$module" ]; then
-    echo "ERROR: build completed without nouveau.ko" >&2
+    echo "ERROR: build completed without $module" >&2
     exit 2
 fi
 
 cp -f "$module" "$out/nouveau.ko"
-
-# Sanity: vermagic must name the target kernel release.
 vermagic=$(modinfo -F vermagic "$out/nouveau.ko" 2>/dev/null || true)
 case "$vermagic" in
     "$kernelver"*) ;;
@@ -152,3 +201,4 @@ case "$vermagic" in
 esac
 
 echo "nouveau-hpd-ddc: built $out/nouveau.ko"
+echo "nouveau-hpd-ddc: temporary tree will now be removed from $tmp_parent"

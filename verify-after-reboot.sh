@@ -4,7 +4,7 @@ k=$(uname -r)
 echo '=== module ==='
 modinfo -n nouveau
 echo '=== DKMS ==='
-dkms status -m nouveau-hpd-ddc -v 0.1.0 || true
+dkms status -m nouveau-hpd-ddc -v 0.1.5 || true
 echo '=== EDID ==='
 for e in /sys/class/drm/card*-DVI-I-*/edid; do
     [ -e "$e" ] || continue

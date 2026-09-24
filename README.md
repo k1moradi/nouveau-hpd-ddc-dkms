@@ -41,3 +41,34 @@ This removes the DKMS override and rebuilds the initramfs so the stock Ubuntu No
 ## Secure Boot
 
 This package does not manage Machine Owner Keys. The test system has Secure Boot disabled. On systems enforcing Secure Boot, the locally built module must be signed/enrolled according to that system's policy.
+
+### Ubuntu build-tree note (0.1.1)
+
+Version 0.1.1 prepares a separate Ubuntu kernel output tree before compiling Nouveau, following Canonical's documented single-module rebuild sequence (`outputmakefile`, `archprepare`, `prepare`, `M=scripts`, then the driver subtree). This fixes the 0.1.0 DKMS build failure caused by treating Nouveau's in-tree source subtree as a generic external module.
+
+### Ubuntu linux-source archive discovery (0.1.2)
+
+Version 0.1.2 fixes source-archive discovery on Ubuntu packages that expose `/usr/src/linux-source-X.Y.Z.tar.bz2` as a link while storing the actual archive under `/usr/src/linux-source-X.Y.Z/linux-source-X.Y.Z.tar.bz2`. The DKMS build now searches both levels for an actual archive, including after extracting an exact-version `.deb` downloaded with `apt-get download`.
+
+### Faster exact-source retrieval (0.1.4)
+
+Version 0.1.4 removed the full-kernel extraction/output-tree preparation used by 0.1.1/0.1.2. It uses the exact matching Ubuntu `linux-source-X.Y.Z` archive, selectively extracts only `drivers/gpu/drm/nouveau/`, applies the patch there, and builds that subtree as an external module against the target kernel's installed `/lib/modules/<ABI>/build` headers and `Module.symvers`.
+
+### GCC and CPU parallelism (0.1.5)
+
+Version 0.1.5 explicitly forces GNU GCC for both target and host C compilation (`CC=gcc`, `HOSTCC=gcc`) and removes inherited `LLVM`, `LLVM_IAS`, `CC`, and `HOSTCC` environment selections before invoking Kbuild. This prevents a shell or distribution default from silently switching the DKMS build to Clang.
+
+The build detects all online logical CPUs with `nproc` (falling back to `_NPROCESSORS_ONLN`) and uses that value for `make -j`. Set `NOUVEAU_DKMS_JOBS=<N>` to override parallelism on memory-constrained systems. Set `NOUVEAU_DKMS_CC=<compiler>` only if intentionally overriding GCC.
+
+## Temporary build directory and RAM cleanup
+
+Version 0.1.4 uses a unique `/tmp/nouveau-hpd-ddc.<kernel>.*` directory for the
+selectively extracted Nouveau source and object files. On systems where `/tmp`
+is `tmpfs`, this makes the compile faster but consumes RAM/swap temporarily.
+The DKMS build script installs an EXIT/HUP/INT/TERM trap and removes that tree
+whether the build succeeds, fails, or is interrupted. `install.sh`, `uninstall.sh`,
+and the DKMS clean hook also remove only this project's stale temporary trees.
+They never clear arbitrary `/tmp` content.
+
+Set `NOUVEAU_DKMS_TMPDIR=/path/on/disk` before a manual DKMS build if you want
+to avoid tmpfs entirely.

@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 NAME=nouveau-hpd-ddc
-VER=0.1.0
+VER=0.1.5
 rm -f /etc/modprobe.d/99-nouveau-i2c-test.conf
 rm -f /etc/dracut.conf.d/61-nouveau-i2c-test.conf
 if ! dkms status -m "$NAME" -v "$VER" 2>/dev/null | grep -q .; then
