@@ -1,0 +1,12 @@
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/disp/outp.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/disp/outp.c
+@@ -261,8 +261,10 @@ nvkm_outp_detect(struct nvkm_outp *outp)
+ 		 *      so we're returning UNKNOWN, and the DRM will probe DDC instead.
+ 		 */
+ 		if (outp->info.type == DCB_OUTPUT_DP)
+ 			return 0;
++
++		return -EINVAL;
+ 	}
+ 
+ 	return ret;
