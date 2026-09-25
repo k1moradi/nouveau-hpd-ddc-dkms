@@ -154,6 +154,15 @@ preload_ddc_summary() {
 }
 
 boot_log=$(read_boot_log)
+nouveau_config=$(cat /sys/module/nouveau/parameters/config 2>/dev/null || true)
+if [ -z "$nouveau_config" ] && command -v sudo >/dev/null 2>&1; then
+    nouveau_config=$(sudo -n cat /sys/module/nouveau/parameters/config 2>/dev/null || true)
+fi
+ack_slot_lines=$(printf '%s\n' "$boot_log" |
+    grep -F 'DDC_DIAG: ACK_SLOT ' |
+    grep -F 'addr=50 ' || true)
+ack_slot_count=$(printf '%s\n' "$ack_slot_lines" |
+    awk 'NF { count++ } END { print count + 0 }')
 
 module_path=$(modinfo -n nouveau 2>/dev/null || true)
 module_vermagic=$(modinfo -F vermagic nouveau 2>/dev/null || true)
@@ -196,6 +205,36 @@ if [ -n "$dkms_status" ]; then
     printf '%s\n' "$dkms_status"
 else
     echo "$NAME/$VER: no DKMS status returned"
+fi
+
+echo '=== ACK-slot diagnostic ==='
+if [ -n "$nouveau_config" ]; then
+    printf 'active nouveau config: %s\n' "$nouveau_config"
+else
+    echo 'active nouveau config: UNAVAILABLE (the sysfs parameter is root-readable only)'
+fi
+case "$nouveau_config" in
+    *NvI2C=1*) echo 'internal Nouveau I2C path: ACTIVE' ;;
+    '')
+        if [ "$ack_slot_count" -gt 0 ]; then
+            echo 'internal Nouveau I2C path: CONFIRMED by ACK_SLOT samples'
+        else
+            echo 'internal Nouveau I2C path: NOT CONFIRMED (expected NvI2C=1)'
+        fi
+        ;;
+    *) echo 'internal Nouveau I2C path: NOT CONFIRMED (expected NvI2C=1)' ;;
+esac
+printf '0x50 ACK-slot samples: %s\n' "$ack_slot_count"
+if [ "$ack_slot_count" -eq 0 ]; then
+    echo 'No samples found; the run is inconclusive. Confirm NvI2C=1 is active and the ACK-slot DKMS build is loaded.'
+else
+    if [ "$ack_slot_count" -gt 80 ]; then
+        echo 'Showing the latest 80 samples:'
+        printf '%s\n' "$ack_slot_lines" | tail -n 80
+    else
+        printf '%s\n' "$ack_slot_lines"
+    fi
+    echo 'For each sample, SCL is bit 4 and SDA is bit 5; SCL high with SDA low is an ACK at the GPU input.'
 fi
 
 echo '=== EDID ==='

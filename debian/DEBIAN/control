@@ -7,4 +7,5 @@ Depends: dkms, build-essential, patch, python3, binutils, bzip2, xz-utils, zstd,
 Maintainer: Local Administrator <root@localhost>
 Description: DKMS rebuild of Ubuntu Nouveau with HPD/DDC fix and diagnostics
  Builds Nouveau from matching Ubuntu kernel sources and applies the maintained
- HPD-low/DDC patch. An optional read-only PNVIO IBUF diagnostic is available.
+ HPD-low/DDC patch. Optional read-only PNVIO IBUF and ACK-slot diagnostics
+ and a DAC load-detect DDC probe are available for the K4200 investigation.

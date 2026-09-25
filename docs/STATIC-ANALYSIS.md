@@ -171,7 +171,9 @@ EnvyTools defines explicit VBIOS GPIO functions including `I2C_OR_DDC`, `I2C_SCL
 
 The remaining uncertainty is increasingly about undocumented electrical behavior inside the GPU/board rather than an identifiable missing Nouveau software step. Static analysis cannot determine the PCB destination of GPIO31 or the exact electrical side effects of the DAC load-detect registers on this board.
 
-The highest-information next step is therefore the opt-in two-phase DAC/load-detect DDC diagnostic. Do not invent a permanent register write before observing that result.
+The two-phase DAC/load-detect DDC diagnostic is available as an opt-in probe.
+The next software-only discriminator is the ACK-slot sampler described below.
+Do not invent a permanent register write before observing those results.
 
 ## Experiment safety
 
@@ -189,3 +191,22 @@ Avoid:
 - global userspace workarounds presented as fixes;
 - hard-coded bus indices when `outp->i2c` already identifies the DCB-selected bus;
 - adding hybrid-pad `.mode` handling to exclusive pads without new evidence.
+
+## ACK-slot diagnostic
+
+`patches/diagnostic/ack-slot-sampler.patch` adds an optional sampler to the
+internal bit-bang algorithm. With `--diag-ack-slot`, the DAC load-detect probe
+generates known EDID `0x50` transactions and Nouveau samples physical PNVIO
+register `0xd014` three times during each address ACK slot. The first raw read
+continues to decide the transaction result; the other reads are observational.
+The sampler does not write PNVIO registers and is restricted by the physical
+register address, not Nouveau's encoded bus ID.
+
+The diagnostic build defines `CONFIG_NOUVEAU_I2C_INTERNAL`, which Ubuntu's
+headers otherwise leave unset and which gates compilation of this existing
+implementation. The diagnostic boot sets `config=NvI2C=1` so that algorithm
+runs. On the captured GPU-side input, SCL bit 4 high with SDA bit 5 low means an ACK
+reached the GPU; SDA bit 5 high means no ACK was observed there. Because this
+test keeps the monitor connected, it cannot distinguish a monitor response
+from a board-level buffer or path failure. Missing samples are inconclusive
+until the active module configuration confirms `NvI2C=1`.

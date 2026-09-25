@@ -6,6 +6,9 @@ if [ "$EUID" -ne 0 ]; then
     exec sudo "$0" "$@"
 fi
 
+rm -f /etc/modprobe.d/99-nouveau-i2c-test.conf
+rm -f /etc/dracut.conf.d/61-nouveau-i2c-test.conf
+
 for ver in "${VERSIONS[@]}"; do
     if dkms status -m "$NAME" -v "$ver" 2>/dev/null | grep -q .; then
         dkms remove -m "$NAME" -v "$ver" --all

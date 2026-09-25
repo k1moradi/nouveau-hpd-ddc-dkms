@@ -15,6 +15,7 @@ generated DKMS staging data and are replaced during installation.
 | `patches/hpd-low-ddc-probe.patch` | Confirmed HPD-low/DDC fix |
 | `patches/diagnostic/ibuf-state-snapshot.patch` | Optional read-only IBUF diagnostic |
 | `patches/diagnostic/dac-powered-ddc-probe.patch` | Optional DAC-powered DDC diagnostic |
+| `patches/diagnostic/ack-slot-sampler.patch` | Optional read-only PNVIO ACK-slot sampler |
 | `docs/STATIC-ANALYSIS.md` | Current static-analysis conclusions and eliminated hypotheses |
 | `dkms/` | DKMS config, build script, and hooks |
 | `docs/BUG-REPORT.md` | Hardware and diagnostic evidence |
@@ -42,11 +43,41 @@ To test whether the monitor ACKs DDC only in the analog DAC load-detect state, u
 pkexec ./install.sh --diag-dac-ddc
 ```
 
-The two diagnostic flags may be combined.  `--diag-dac-ddc` performs one EDID
+The diagnostic flags may be combined.  `--diag-dac-ddc` performs one EDID
 byte-0 transaction after the DAC enters its non-normal load-detect power state and
 another after the existing load-sense delay while load-sense remains active. It uses
 the DCB/VBIOS-selected I2C bus and does not modify IBUF, GPIO, or PNVIO routing
 state.
+
+For the K4200 ACK-slot capture, use:
+
+```bash
+pkexec ./install.sh --diag-ack-slot
+```
+
+This flag also enables the DAC-powered probe, which generates known EDID
+`0x50` transactions. For address ACK slots on physical PNVIO port 0, Nouveau
+logs three consecutive read-only samples of register `0xd014`. The first sample
+supplies the existing ACK decision; the log decodes SCL input bit 4 and SDA
+input bit 5 for all three reads. For this diagnostic build, the DKMS script
+compiles Nouveau's existing internal bit-bang implementation, which the
+Ubuntu headers otherwise leave disabled. It then selects that path by staging
+`options nouveau config=NvI2C=1` for the next boot and includes it in the
+initramfs. Normal builds do not enable the internal implementation.
+
+Keep the monitor connected for the diagnostic boot, then run
+`./verify-after-reboot.sh`. An SCL-high/SDA-low sample means an ACK reached the
+GPU input; SDA-high means no ACK was observed there. This connected-only
+capture cannot distinguish a monitor that does not pull SDA low from an
+intervening board-level buffer or signal-path issue. A missing sample is
+inconclusive; check the active `NvI2C=1` option and confirm that the
+ACK-slot DKMS module loaded. The active sysfs parameter is root-readable; if
+the verifier cannot read it non-interactively, ACK-slot samples themselves
+confirm that the internal transfer path ran.
+
+After saving the output, run a normal `pkexec ./install.sh` to rebuild without
+diagnostics and remove the temporary `NvI2C=1` module option for the next boot.
+`pkexec ./uninstall.sh` also removes that option.
 
 The installer removes the known older DKMS revisions (0.1.0 through 0.1.5),
 copies this project's DKMS files and patches into the package staging directory,
@@ -80,9 +111,9 @@ headers. A patch that no longer applies stops the build for review. The build
 uses GCC and all online logical CPUs by default; set `NOUVEAU_DKMS_JOBS=<N>` to
 limit parallelism or `NOUVEAU_DKMS_TMPDIR=/path` to choose a build location.
 
-The optional diagnostics are enabled only by `install.sh --diag-ibuf` and/or
-`install.sh --diag-dac-ddc`. A normal install replaces the staged source and
-removes both diagnostic markers.
+The optional diagnostics are enabled only by their `install.sh` flags. A normal
+install replaces the staged source and removes all diagnostic markers and the
+temporary `NvI2C=1` module option.
 
 To create the Debian package from this same canonical source tree, run:
 

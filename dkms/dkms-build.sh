@@ -155,7 +155,8 @@ fi
 
 # Optional probe of the output's VBIOS-selected DDC bus while analog DAC power
 # is active.  This marker is created only by install.sh --diag-dac-ddc.
-if [ -f "$PWD/diagnostic-dac-ddc.enabled" ]; then
+if [ -f "$PWD/diagnostic-dac-ddc.enabled" ] || \
+   [ -f "$PWD/diagnostic-ack-slot.enabled" ]; then
     echo "nouveau-hpd-ddc: applying DAC-powered DDC diagnostic"
     if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/diagnostic/dac-powered-ddc-probe.patch"; then
         echo "ERROR: DAC-powered DDC diagnostic patch did not apply cleanly; refusing to guess." >&2
@@ -163,6 +164,19 @@ if [ -f "$PWD/diagnostic-dac-ddc.enabled" ]; then
     fi
 else
     echo "nouveau-hpd-ddc: DAC-powered DDC diagnostic is disabled"
+fi
+
+# Optional ACK-slot sampler for physical GF119 PNVIO port 0. The installer
+# also enables the DAC-powered probe so each diagnostic boot makes known 0x50
+# address transactions. This patch adds only MMIO reads at the ACK decision.
+if [ -f "$PWD/diagnostic-ack-slot.enabled" ]; then
+    echo "nouveau-hpd-ddc: applying read-only ACK-slot sampler"
+    if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/diagnostic/ack-slot-sampler.patch"; then
+        echo "ERROR: ACK-slot sampler patch did not apply cleanly; refusing to guess." >&2
+        exit 2
+    fi
+else
+    echo "nouveau-hpd-ddc: ACK-slot sampler is disabled"
 fi
 
 # Force the GNU C compiler even on systems where Clang is the interactive
@@ -200,11 +214,20 @@ fi
 
 echo "nouveau-hpd-ddc: online logical CPUs: $cpus; make jobs: $jobs"
 echo "nouveau-hpd-ddc: building only Nouveau against $kdir with GNU GCC"
+internal_i2c_cflags=()
+if [ -f "$PWD/diagnostic-ack-slot.enabled" ]; then
+    # The Ubuntu headers leave Nouveau's existing internal bit-bang transfer
+    # implementation behind this compile-time guard. Enable it only for the
+    # ACK-slot diagnostic; NvI2C=1 selects it at runtime for that boot.
+    internal_i2c_cflags+=("KCFLAGS=-DCONFIG_NOUVEAU_I2C_INTERNAL")
+    echo "nouveau-hpd-ddc: compiling internal I2C transfer support for ACK-slot diagnostic"
+fi
 env -u LLVM -u LLVM_IAS -u CC -u HOSTCC \
     make -C "$kdir" \
         M="$srcdir/drivers/gpu/drm/nouveau" \
         CC="$cc_path" \
         HOSTCC="$cc_path" \
+        "${internal_i2c_cflags[@]}" \
         -j"$jobs" \
         modules
 

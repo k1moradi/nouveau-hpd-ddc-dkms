@@ -128,3 +128,17 @@ and one after the existing load-sense delay while load-sense is still active. It
 not write IBUF, GPIO, or PNVIO routing state. A successful first `ret=2` implicates the
 non-normal DAC state; settled-only success implicates load-sense or settling. Failure
 in both phases substantially weakens the whole DAC/load-detect-state hypothesis.
+
+### ACK-slot sampler
+
+The opt-in `patches/diagnostic/ack-slot-sampler.patch` instruments Nouveau's
+internal bit-bang algorithm at the address ACK slot for I2C address `0x50`.
+`--diag-ack-slot` enables the DAC-powered probe, compiles the existing internal
+bit-bang implementation (disabled by this Ubuntu header config), and stages
+`config=NvI2C=1` for the diagnostic boot. On physical PNVIO register
+`0xd014`, it logs three raw reads; the first read remains the transaction's
+ACK/NACK decision. SCL input is bit 4 and SDA input is bit 5. SCL high with
+SDA low means an ACK reached the GPU input. SDA high means no ACK was observed
+there, but this connected-only experiment cannot distinguish the monitor from
+an intervening board-level signal path. The sampler adds no PNVIO writes. The
+verifier reports the active module option when readable and prints the samples.

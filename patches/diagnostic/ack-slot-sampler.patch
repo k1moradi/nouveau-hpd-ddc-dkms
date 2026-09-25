@@ -1,0 +1,137 @@
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/bus.h
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/bus.h
+@@ -10,6 +10,7 @@
+ 	int (*sense_scl)(struct nvkm_i2c_bus *);
+ 	int (*sense_sda)(struct nvkm_i2c_bus *);
+ 	int (*xfer)(struct nvkm_i2c_bus *, struct i2c_msg *, int num);
++	int (*sample_ack)(struct nvkm_i2c_bus *, u32 samples[3]);
+ };
+ 
+ int nvkm_i2c_bus_ctor(const struct nvkm_i2c_bus_func *, struct nvkm_i2c_pad *,
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/busgf119.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/busgf119.c
+@@ -61,6 +61,22 @@
+ 	return !!(nvkm_rd32(device, bus->addr) & 0x00000020);
+ }
+ 
++static int
++gf119_i2c_bus_sample_ack(struct nvkm_i2c_bus *base, u32 samples[3])
++{
++	struct gf119_i2c_bus *bus = gf119_i2c_bus(base);
++	struct nvkm_device *device = bus->base.pad->i2c->subdev.device;
++	int i;
++
++	if (bus->addr != 0x00d014)
++		return 0;
++
++	for (i = 0; i < 3; i++)
++		samples[i] = nvkm_rd32(device, bus->addr);
++
++	return 1;
++}
++
+ static void
+ gf119_i2c_bus_init(struct nvkm_i2c_bus *base)
+ {
+@@ -77,6 +93,7 @@
+ 	.sense_scl = gf119_i2c_bus_sense_scl,
+ 	.sense_sda = gf119_i2c_bus_sense_sda,
+ 	.xfer = nvkm_i2c_bit_xfer,
++	.sample_ack = gf119_i2c_bus_sample_ack,
+ };
+ 
+ int
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/bit.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/bit.c
+@@ -120,8 +120,10 @@
+ }
+ 
+ static int
+-i2c_bitr(struct nvkm_i2c_bus *bus)
+-{
++i2c_bitr(struct nvkm_i2c_bus *bus, bool sample_ack)
++{
++	u32 samples[3] = { 0 };
++	bool sampled = false;
+ 	int sda;
+ 
+ 	nvkm_i2c_drive_sda(bus, 1);
+@@ -131,10 +133,29 @@
+ 		return -ETIMEDOUT;
+ 	nvkm_i2c_delay(bus, T_HOLD);
+ 
+-	sda = nvkm_i2c_sense_sda(bus);
+-
+-	nvkm_i2c_drive_scl(bus, 0);
+-	nvkm_i2c_delay(bus, T_HOLD);
++	if (sample_ack && bus->func->sample_ack &&
++	    bus->func->sample_ack(bus, samples)) {
++		sda = !!(samples[0] & 0x00000020);
++		sampled = true;
++	} else {
++		sda = nvkm_i2c_sense_sda(bus);
++	}
++
++	nvkm_i2c_drive_scl(bus, 0);
++	nvkm_i2c_delay(bus, T_HOLD);
++	if (sampled) {
++		nvkm_info(&bus->pad->i2c->subdev,
++			  "DDC_DIAG: ACK_SLOT bus=%04x port=0 reg=d014 addr=50 "
++			  "raw0=%08x raw1=%08x raw2=%08x "
++			  "scl=%d,%d,%d sda=%d,%d,%d ack=%d\n",
++			  bus->id, samples[0], samples[1], samples[2],
++			  !!(samples[0] & 0x00000010),
++			  !!(samples[1] & 0x00000010),
++			  !!(samples[2] & 0x00000010),
++			  !!(samples[0] & 0x00000020),
++			  !!(samples[1] & 0x00000020),
++			  !!(samples[2] & 0x00000020), !sda);
++	}
+ 	return sda;
+ }
+ 
+@@ -145,7 +166,7 @@
+ 
+ 	*byte = 0;
+ 	for (i = 7; i >= 0; i--) {
+-		bit = i2c_bitr(bus);
++		bit = i2c_bitr(bus, false);
+ 		if (bit < 0)
+ 			return bit;
+ 		*byte |= bit << i;
+@@ -155,7 +176,7 @@
+ }
+ 
+ static int
+-nvkm_i2c_put_byte(struct nvkm_i2c_bus *bus, u8 byte)
++nvkm_i2c_put_byte(struct nvkm_i2c_bus *bus, u8 byte, bool sample_ack)
+ {
+ 	int i, ret;
+ 	for (i = 7; i >= 0; i--) {
+@@ -164,7 +185,7 @@
+ 			return ret;
+ 	}
+ 
+-	ret = i2c_bitr(bus);
++	ret = i2c_bitr(bus, sample_ack);
+ 	if (ret == 1) /* nack */
+ 		ret = -EIO;
+ 	return ret;
+@@ -176,7 +197,7 @@
+ 	u32 addr = msg->addr << 1;
+ 	if (msg->flags & I2C_M_RD)
+ 		addr |= 1;
+-	return nvkm_i2c_put_byte(bus, addr);
++	return nvkm_i2c_put_byte(bus, addr, msg->addr == 0x50);
+ }
+ 
+ int
+@@ -198,7 +219,7 @@
+ 				ret = nvkm_i2c_get_byte(bus, ptr++, !remaining);
+ 		} else {
+ 			while (!ret && remaining--)
+-				ret = nvkm_i2c_put_byte(bus, *ptr++);
++				ret = nvkm_i2c_put_byte(bus, *ptr++, false);
+ 		}
+ 
+ 		msg++;
