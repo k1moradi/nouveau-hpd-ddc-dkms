@@ -1,0 +1,44 @@
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/disp/nv50.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/disp/nv50.c
+@@ -280,6 +280,28 @@
+ 	nvkm_mask(device, 0x614280 + doff, 0x07070707, 0x00000000);
+ }
+ 
++static void
++nv50_dac_ddc_diag(struct nvkm_ior *dac, const char *stage)
++{
++	struct nvkm_outp *outp = dac->asy.outp;
++	u8 offset = 0x00;
++	u8 edid0 = 0xff;
++	struct i2c_msg msgs[] = {
++		{ .addr = 0x50, .flags = 0, .len = 1, .buf = &offset },
++		{ .addr = 0x50, .flags = I2C_M_RD, .len = 1, .buf = &edid0 },
++	};
++	int ret;
++
++	if (!outp || !outp->i2c)
++		return;
++
++	ret = i2c_transfer(&outp->i2c->i2c, msgs, ARRAY_SIZE(msgs));
++	nvkm_info(&dac->disp->engine.subdev,
++		  "DDC_DIAG: DAC_POWERED_DDC stage=%s dac=%d bus=%04x "
++		  "ret=%d edid0=%02x\n",
++		  stage, dac->id, outp->i2c->id, ret, edid0);
++}
++
+ int
+ nv50_dac_sense(struct nvkm_ior *dac, u32 loadval)
+ {
+@@ -287,10 +309,12 @@
+ 	const u32 doff = nv50_ior_base(dac);
+ 
+ 	dac->func->power(dac, false, true, false, false, false);
++	nv50_dac_ddc_diag(dac, "power-on");
+ 
+ 	nvkm_wr32(device, 0x61a00c + doff, 0x00100000 | loadval);
+ 	mdelay(9);
+ 	udelay(500);
++	nv50_dac_ddc_diag(dac, "load-sense");
+ 	loadval = nvkm_mask(device, 0x61a00c + doff, 0xffffffff, 0x00000000);
+ 
+ 	dac->func->power(dac, false, false, false, false, false);

@@ -18,6 +18,7 @@ mkdir -p "$SRC/patches/diagnostic" "$STAGE/DEBIAN"
 cp -a "$ROOT/dkms/." "$SRC/"
 cp -a "$ROOT/patches/hpd-low-ddc-probe.patch" "$SRC/patches/"
 cp -a "$ROOT/patches/diagnostic/ibuf-state-snapshot.patch" "$SRC/patches/diagnostic/"
+cp -a "$ROOT/patches/diagnostic/dac-powered-ddc-probe.patch" "$SRC/patches/diagnostic/"
 cp -a "$ROOT/debian/DEBIAN/." "$STAGE/DEBIAN/"
 
 chmod 0755 \

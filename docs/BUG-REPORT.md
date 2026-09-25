@@ -112,3 +112,19 @@ accessor for `0xe1b8`. The existing `0xd014 = 0x7` write still occurs exactly
 once. The two samples occur before VBIOS POST and during later normal I2C
 initialization, after the intervening device fini pass. The additional reads
 validate whether the IBUF value can be interpreted on this GPU.
+
+### DAC-powered DDC diagnostic
+
+Static tracing shows that `nvkm_uoutp_mthd_load_detect()` privately acquires the
+analog output before calling `nv50_dac_sense()`. At that point `dac->asy.outp`
+identifies the acquired output and `outp->i2c` is the DCB/VBIOS-selected DDC
+bus. GK104 uses the GF119 DAC implementation, whose `.sense` callback is
+`nv50_dac_sense()` and whose `.power` callback is `nv50_dac_power()`.
+
+The opt-in `patches/diagnostic/dac-powered-ddc-probe.patch` therefore performs
+two EDID byte-0 read transactions on that existing bus in the load-detect path:
+one after the DAC enters its non-normal power-control state, before load-sense starts,
+and one after the existing load-sense delay while load-sense is still active. It does
+not write IBUF, GPIO, or PNVIO routing state. A successful first `ret=2` implicates the
+non-normal DAC state; settled-only success implicates load-sense or settling. Failure
+in both phases substantially weakens the whole DAC/load-detect-state hypothesis.

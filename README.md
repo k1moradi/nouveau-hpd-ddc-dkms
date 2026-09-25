@@ -14,6 +14,8 @@ generated DKMS staging data and are replaced during installation.
 | --- | --- |
 | `patches/hpd-low-ddc-probe.patch` | Confirmed HPD-low/DDC fix |
 | `patches/diagnostic/ibuf-state-snapshot.patch` | Optional read-only IBUF diagnostic |
+| `patches/diagnostic/dac-powered-ddc-probe.patch` | Optional DAC-powered DDC diagnostic |
+| `docs/STATIC-ANALYSIS.md` | Current static-analysis conclusions and eliminated hypotheses |
 | `dkms/` | DKMS config, build script, and hooks |
 | `docs/BUG-REPORT.md` | Hardware and diagnostic evidence |
 | `debian/` | Debian package metadata and maintainer scripts |
@@ -33,6 +35,18 @@ diagnostic patch:
 ```bash
 pkexec ./install.sh --diag-ibuf
 ```
+
+To test whether the monitor ACKs DDC only in the analog DAC load-detect state, use:
+
+```bash
+pkexec ./install.sh --diag-dac-ddc
+```
+
+The two diagnostic flags may be combined.  `--diag-dac-ddc` performs one EDID
+byte-0 transaction after the DAC enters its non-normal load-detect power state and
+another after the existing load-sense delay while load-sense remains active. It uses
+the DCB/VBIOS-selected I2C bus and does not modify IBUF, GPIO, or PNVIO routing
+state.
 
 The installer removes the known older DKMS revisions (0.1.0 through 0.1.5),
 copies this project's DKMS files and patches into the package staging directory,
@@ -66,8 +80,9 @@ headers. A patch that no longer applies stops the build for review. The build
 uses GCC and all online logical CPUs by default; set `NOUVEAU_DKMS_JOBS=<N>` to
 limit parallelism or `NOUVEAU_DKMS_TMPDIR=/path` to choose a build location.
 
-The optional diagnostic is enabled only by `install.sh --diag-ibuf`. A normal
-install replaces the staged source and removes its diagnostic marker.
+The optional diagnostics are enabled only by `install.sh --diag-ibuf` and/or
+`install.sh --diag-dac-ddc`. A normal install replaces the staged source and
+removes both diagnostic markers.
 
 To create the Debian package from this same canonical source tree, run:
 

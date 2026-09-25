@@ -153,6 +153,18 @@ else
     echo "nouveau-hpd-ddc: IBUF state diagnostic is disabled"
 fi
 
+# Optional probe of the output's VBIOS-selected DDC bus while analog DAC power
+# is active.  This marker is created only by install.sh --diag-dac-ddc.
+if [ -f "$PWD/diagnostic-dac-ddc.enabled" ]; then
+    echo "nouveau-hpd-ddc: applying DAC-powered DDC diagnostic"
+    if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/diagnostic/dac-powered-ddc-probe.patch"; then
+        echo "ERROR: DAC-powered DDC diagnostic patch did not apply cleanly; refusing to guess." >&2
+        exit 2
+    fi
+else
+    echo "nouveau-hpd-ddc: DAC-powered DDC diagnostic is disabled"
+fi
+
 # Force the GNU C compiler even on systems where Clang is the interactive
 # default.  Remove inherited LLVM/Kbuild tool-selection variables first so a
 # shell/profile setting such as LLVM=1 cannot silently switch this DKMS build

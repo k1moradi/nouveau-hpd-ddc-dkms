@@ -5,15 +5,18 @@ VER=0.1.6
 SRC_DIR="/usr/src/$NAME-$VER"
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 diag_ibuf=0
+diag_dac_ddc=0
 
-case "${1:-}" in
-    "") ;;
-    --diag-ibuf) diag_ibuf=1 ;;
-    *)
-        echo "Usage: $0 [--diag-ibuf]" >&2
-        exit 2
-        ;;
+for arg in "$@"; do
+    case "$arg" in
+        --diag-ibuf) diag_ibuf=1 ;;
+        --diag-dac-ddc) diag_dac_ddc=1 ;;
+        *)
+            echo "Usage: $0 [--diag-ibuf] [--diag-dac-ddc]" >&2
+            exit 2
+            ;;
     esac
+done
 
 if [ "$EUID" -ne 0 ]; then
     exec sudo "$0" "$@"
@@ -23,7 +26,8 @@ for source_file in \
     dkms/dkms.conf \
     dkms/dkms-build.sh \
     patches/hpd-low-ddc-probe.patch \
-    patches/diagnostic/ibuf-state-snapshot.patch; do
+    patches/diagnostic/ibuf-state-snapshot.patch \
+    patches/diagnostic/dac-powered-ddc-probe.patch; do
     if [ ! -f "$HERE/$source_file" ]; then
         echo "ERROR: canonical project source is missing: $HERE/$source_file" >&2
         exit 2
@@ -89,9 +93,14 @@ cp -a "$HERE/dkms/." "$SRC_DIR/"
 mkdir -p "$SRC_DIR/patches/diagnostic"
 cp -a "$HERE/patches/hpd-low-ddc-probe.patch" "$SRC_DIR/patches/"
 cp -a "$HERE/patches/diagnostic/ibuf-state-snapshot.patch" "$SRC_DIR/patches/diagnostic/"
+cp -a "$HERE/patches/diagnostic/dac-powered-ddc-probe.patch" "$SRC_DIR/patches/diagnostic/"
 if [ "$diag_ibuf" -eq 1 ]; then
     touch "$SRC_DIR/diagnostic-ibuf.enabled"
     echo "Enabling read-only IBUF state diagnostics for this DKMS build."
+fi
+if [ "$diag_dac_ddc" -eq 1 ]; then
+    touch "$SRC_DIR/diagnostic-dac-ddc.enabled"
+    echo "Enabling DAC-powered DDC diagnostics for this DKMS build."
 fi
 
 dkms add -m "$NAME" -v "$VER"
