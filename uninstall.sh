@@ -1,24 +1,27 @@
 #!/bin/bash
 set -euo pipefail
 NAME=nouveau-hpd-ddc
-VER=0.1.5
+VERSIONS=(0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6)
 if [ "$EUID" -ne 0 ]; then
     exec sudo "$0" "$@"
 fi
 
-kernels=$(dkms status -m "$NAME" -v "$VER" 2>/dev/null | sed -n 's/.*\/\([^,]*\),.*/\1/p' | sort -u || true)
-dkms remove -m "$NAME" -v "$VER" --all || true
-rm -rf "/usr/src/$NAME-$VER"
+for ver in "${VERSIONS[@]}"; do
+    if dkms status -m "$NAME" -v "$ver" 2>/dev/null | grep -q .; then
+        dkms remove -m "$NAME" -v "$ver" --all
+    fi
+    rm -rf "/usr/src/$NAME-$ver" "/var/lib/dkms/$NAME/$ver"
+done
 find /tmp -maxdepth 1 -type d \
     \( -name 'nouveau-hpd-ddc.*' -o -name 'nouveau-hpd-test-*' \) \
     -exec rm -rf -- {} + 2>/dev/null || true
 
-for k in $kernels "$(uname -r)"; do
-    [ -d "/lib/modules/$k" ] || continue
-    depmod -a "$k" || true
-    if command -v update-initramfs >/dev/null 2>&1; then
-        update-initramfs -u -k "$k" || true
-    fi
+for modules_dir in /lib/modules/*; do
+    [ -d "$modules_dir" ] || continue
+    depmod -a "${modules_dir##*/}" || true
 done
+if command -v update-initramfs >/dev/null 2>&1; then
+    update-initramfs -u -k all || true
+fi
 
-echo "Removed $NAME/$VER; stock Ubuntu nouveau will be used after reboot."
+echo "Removed all known $NAME revisions; stock Ubuntu nouveau will be used after reboot."

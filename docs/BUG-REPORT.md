@@ -69,9 +69,12 @@ return ret;
 
 When HPD is present but low, `ret` is 0, so the non-DP path actually returns NOT_PRESENT rather than UNKNOWN. The observed control flow matches this exactly.
 
-## Proposed fix
+## Maintained fix
 
-For HPD-present-but-low non-DP outputs, return a negative value so `nvkm_uoutp_mthd_detect()` maps it to `NVIF_OUTP_DETECT_V0_UNKNOWN` and DRM performs the DDC probe:
+For HPD-present-but-low non-DP outputs, return a negative value so
+`nvkm_uoutp_mthd_detect()` maps it to `NVIF_OUTP_DETECT_V0_UNKNOWN` and DRM
+performs the DDC probe. The maintained patch is
+[`patches/hpd-low-ddc-probe.patch`](../patches/hpd-low-ddc-probe.patch):
 
 ```diff
  if (outp->info.type == DCB_OUTPUT_DP)
@@ -81,11 +84,25 @@ For HPD-present-but-low non-DP outputs, return a negative value so `nvkm_uoutp_m
  }
 ```
 
-This preserves DP behavior while implementing the behavior described by the existing comment for DVI/HDMI/analog outputs.
+The fix preserves DP behavior and follows the existing comment for
+DVI/HDMI/analog outputs. It has been applied in Nouveau: connector detection
+now proceeds to DDC probing.
 
-## Additional observations
+## Remaining DDC failure
 
-- `/sys/class/drm/card1-DVI-I-1/edid` is 0 bytes.
-- With the default I2C implementation a direct userspace transaction to bus 0 / address 0x50 returns ENXIO.
-- `nouveau.config=NvI2C=1` was also tested; EDID remained 0 bytes.
-- The proposed control-flow fix should therefore be tested first; a second lower-level DDC issue may still be revealed after DDC is no longer skipped.
+- EDID address `0x50` returns `ENXIO` on all eight Nouveau PNVIO buses.
+- VBIOS routing maps the DVI-I analog/TMDS outputs to PNVIO bus 0. Bus 0 uses
+  bitbang mode; Nouveau drives and senses SCL/SDA, but sees no address ACK.
+- The same GPU, adapter, cable, and monitor work under Windows.
+- A previous full ROM dump was 184,320 bytes and includes a GPIO-31 sequence.
+  The sysfs ROM read exposed only a 59,392-byte first image. GPIO 31's function
+  remains unknown, so it is not treated as proven DDC power control.
+- The DDC +5 V rail has not been measured.
+
+The next software diagnostic is the opt-in
+[`patches/diagnostic/ibuf-state-snapshot.patch`](../patches/diagnostic/ibuf-state-snapshot.patch).
+It reads `IBUF_ENABLE_0` at physical PNVIO port 0 initialization and logs the
+full value plus bits 16-19. It never writes that register. The two boot samples
+occur before VBIOS POST and later during normal I2C initialization, after the
+intervening device fini pass. This tests the input-buffer hypothesis without
+changing GPIO, I2C, or output state.

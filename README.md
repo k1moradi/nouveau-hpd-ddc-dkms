@@ -1,74 +1,99 @@
-# nouveau-hpd-ddc DKMS patch
+# Nouveau HPD/DDC DKMS fix
 
-This DKMS package fixes a Nouveau output-detection control-flow problem seen on an NVIDIA Quadro K4200 (GK104) using DVI-I -> passive DVI-to-VGA -> VGA monitor.
+This project builds a maintained Nouveau module for the Quadro K4200 DVI-I to
+VGA EDID investigation. The confirmed fix lets DRM try DDC when HPD is low on a
+non-DisplayPort output. It does not change DisplayPort detection.
 
-The VBIOS maps the DVI-I analog/TMDS connector to I2C/DDC bus 0. Linux detects the analog load, but `nvkm_outp_detect()` returns `0` when connector HPD is low. The NVIF layer maps `0` to `NOT_PRESENT`, and `nouveau_connector_ddc_detect()` then skips the DDC/EDID probe. This contradicts the nearby source comment saying non-DP HPD-low should be `UNKNOWN` so DRM can probe DDC.
+## Source layout
 
-The patch changes only the non-DP, HPD-present-but-low path to return `-EINVAL`, which the NVIF wrapper maps to `UNKNOWN`. DisplayPort still returns NOT_PRESENT when HPD is low.
+This directory is the canonical source for the fix and its build. Make changes
+here; `/usr/src/nouveau-hpd-ddc-*` and `/var/lib/dkms/nouveau-hpd-ddc/*` are
+generated DKMS staging data and are replaced during installation.
+
+| Path | Contents |
+| --- | --- |
+| `patches/hpd-low-ddc-probe.patch` | Confirmed HPD-low/DDC fix |
+| `patches/diagnostic/ibuf-state-snapshot.patch` | Optional read-only IBUF diagnostic |
+| `dkms/` | DKMS config, build script, and hooks |
+| `docs/BUG-REPORT.md` | Hardware and diagnostic evidence |
+| `debian/` | Debian package metadata and maintainer scripts |
+| `install.sh`, `uninstall.sh`, `verify-after-reboot.sh` | Local install, cleanup, and verification entry points |
 
 ## Install
 
-From this directory:
+Install the confirmed fix:
 
 ```bash
-sudo ./install.sh
+pkexec ./install.sh
 ```
 
-The installer removes the temporary Nouveau debug configuration used during diagnosis, installs DKMS/build prerequisites plus Ubuntu's `linux-source` metapackage, builds the patched `nouveau.ko` for the running kernel, installs it under DKMS, runs `depmod`, and rebuilds the initramfs.
+For the current read-only PNVIO input-buffer investigation, include the
+diagnostic patch:
 
-Reboot and run:
+```bash
+pkexec ./install.sh --diag-ibuf
+```
+
+The installer removes the known older DKMS revisions (0.1.0 through 0.1.5),
+copies this project's DKMS files and patches into the package staging directory,
+builds Nouveau for the running kernel, installs it, and updates the initramfs.
+It also cleans only this project's temporary build/test directories under
+`/tmp`.
+
+After reboot, run:
 
 ```bash
 ./verify-after-reboot.sh
 ```
 
-This patch fixes the confirmed control-flow bug that prevents Nouveau from attempting DDC when non-DP HPD is low. Earlier direct I2C testing also failed to read address 0x50, so EDID may still remain unavailable after this fix; if that happens, the next bug is lower in the GK104 PNVIO/DDC path rather than in connector detection.
+With `--diag-ibuf`, Nouveau logs the full `IBUF_ENABLE_0` value and bits 16-19
+when physical I2C port 0 is initialized. The first sample is during preinit,
+before VBIOS POST. The next is during normal I2C initialization, after POST and
+the intervening device fini pass. The diagnostic only reads register `0xe1b8`;
+the existing bus initialization write is unchanged.
 
-## Future kernels
+## Build behavior
 
-`AUTOINSTALL=yes` lets DKMS rebuild for newly installed kernels. The build script obtains the complete Nouveau source from the matching Ubuntu `linux-source-X.Y.Z` package, preferring the installed source tarball. If the exact source package isn't installed, it attempts to download the exact binary source package version matching the target Ubuntu kernel ABI.
+`dkms/dkms-build.sh` extracts only `drivers/gpu/drm/nouveau/` from the exact
+Ubuntu `linux-source` package for the target kernel. It applies the patch files
+from the staged copy of this project and builds against the matching installed
+headers. A patch that no longer applies stops the build for review. The build
+uses GCC and all online logical CPUs by default; set `NOUVEAU_DKMS_JOBS=<N>` to
+limit parallelism or `NOUVEAU_DKMS_TMPDIR=/path` to choose a build location.
 
-If Nouveau's source layout changes or the patch no longer applies cleanly, the build intentionally fails rather than making a guessed modification. If Ubuntu/upstream already contains the intended fallback, the script detects that and builds without reapplying the patch.
+The optional diagnostic is enabled only by `install.sh --diag-ibuf`. A normal
+install replaces the staged source and removes its diagnostic marker.
 
-## Roll back
+To create the Debian package from this same canonical source tree, run:
 
 ```bash
-sudo ./uninstall.sh
+./build-deb.sh
 ```
 
-This removes the DKMS override and rebuilds the initramfs so the stock Ubuntu Nouveau module is used again.
+The generated package and staging tree live under ignored `build/` output.
 
-## Secure Boot
+## Remove the override
 
-This package does not manage Machine Owner Keys. The test system has Secure Boot disabled. On systems enforcing Secure Boot, the locally built module must be signed/enrolled according to that system's policy.
+```bash
+pkexec ./uninstall.sh
+```
 
-### Ubuntu build-tree note (0.1.1)
+This removes all known DKMS revisions from 0.1.0 through 0.1.6, their source
+staging directories, and project temporary trees, then refreshes module
+dependencies and initramfs files. Nouveau uses the distribution module after
+reboot.
 
-Version 0.1.1 prepares a separate Ubuntu kernel output tree before compiling Nouveau, following Canonical's documented single-module rebuild sequence (`outputmakefile`, `archprepare`, `prepare`, `M=scripts`, then the driver subtree). This fixes the 0.1.0 DKMS build failure caused by treating Nouveau's in-tree source subtree as a generic external module.
+## Investigation notes
 
-### Ubuntu linux-source archive discovery (0.1.2)
+The hardware setup and captured evidence are in [docs/BUG-REPORT.md](docs/BUG-REPORT.md).
+The IBUF experiment remains diagnostic: the K4200 VBIOS setting bit 17 does not
+prove that bit 16 should be enabled, so the patch does not modify `0xe1b8`.
 
-Version 0.1.2 fixes source-archive discovery on Ubuntu packages that expose `/usr/src/linux-source-X.Y.Z.tar.bz2` as a link while storing the actual archive under `/usr/src/linux-source-X.Y.Z/linux-source-X.Y.Z.tar.bz2`. The DKMS build now searches both levels for an actual archive, including after extracting an exact-version `.deb` downloaded with `apt-get download`.
+Version 0.1.6 organizes the canonical patches, retires earlier DKMS revisions
+during installation, and fixes executable hook invocation. Versions 0.1.1 to
+0.1.5 added Ubuntu kernel build compatibility, exact source retrieval, GCC
+selection, and bounded temporary-build cleanup.
 
-### Faster exact-source retrieval (0.1.4)
-
-Version 0.1.4 removed the full-kernel extraction/output-tree preparation used by 0.1.1/0.1.2. It uses the exact matching Ubuntu `linux-source-X.Y.Z` archive, selectively extracts only `drivers/gpu/drm/nouveau/`, applies the patch there, and builds that subtree as an external module against the target kernel's installed `/lib/modules/<ABI>/build` headers and `Module.symvers`.
-
-### GCC and CPU parallelism (0.1.5)
-
-Version 0.1.5 explicitly forces GNU GCC for both target and host C compilation (`CC=gcc`, `HOSTCC=gcc`) and removes inherited `LLVM`, `LLVM_IAS`, `CC`, and `HOSTCC` environment selections before invoking Kbuild. This prevents a shell or distribution default from silently switching the DKMS build to Clang.
-
-The build detects all online logical CPUs with `nproc` (falling back to `_NPROCESSORS_ONLN`) and uses that value for `make -j`. Set `NOUVEAU_DKMS_JOBS=<N>` to override parallelism on memory-constrained systems. Set `NOUVEAU_DKMS_CC=<compiler>` only if intentionally overriding GCC.
-
-## Temporary build directory and RAM cleanup
-
-Version 0.1.4 uses a unique `/tmp/nouveau-hpd-ddc.<kernel>.*` directory for the
-selectively extracted Nouveau source and object files. On systems where `/tmp`
-is `tmpfs`, this makes the compile faster but consumes RAM/swap temporarily.
-The DKMS build script installs an EXIT/HUP/INT/TERM trap and removes that tree
-whether the build succeeds, fails, or is interrupted. `install.sh`, `uninstall.sh`,
-and the DKMS clean hook also remove only this project's stale temporary trees.
-They never clear arbitrary `/tmp` content.
-
-Set `NOUVEAU_DKMS_TMPDIR=/path/on/disk` before a manual DKMS build if you want
-to avoid tmpfs entirely.
+Secure Boot key enrollment is outside the scope of this package. On systems
+that enforce Secure Boot, sign and enroll the locally built module according
+to the system's policy.

@@ -1,9 +1,21 @@
 #!/bin/bash
 set -e
 NAME=nouveau-hpd-ddc
-VER=0.1.5
+VER=0.1.6
 rm -f /etc/modprobe.d/99-nouveau-i2c-test.conf
 rm -f /etc/dracut.conf.d/61-nouveau-i2c-test.conf
+
+# Remove superseded local DKMS revisions before registering the current source.
+for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5; do
+    if dkms status -m "$NAME" -v "$oldver" 2>/dev/null | grep -q .; then
+        dkms remove -m "$NAME" -v "$oldver" --all
+    fi
+    rm -rf "/usr/src/$NAME-$oldver" "/var/lib/dkms/$NAME/$oldver"
+done
+find /tmp -maxdepth 1 -type d \
+    \( -name 'nouveau-hpd-ddc.*' -o -name 'nouveau-hpd-test-*' \) \
+    -exec rm -rf -- {} + 2>/dev/null || true
+
 if ! dkms status -m "$NAME" -v "$VER" 2>/dev/null | grep -q .; then
     dkms add -m "$NAME" -v "$VER"
 fi
@@ -12,5 +24,12 @@ fi
 k=$(uname -r)
 if [ -d "/lib/modules/$k/build" ]; then
     dkms install -m "$NAME" -v "$VER" -k "$k" --force
+fi
+for modules_dir in /lib/modules/*; do
+    [ -d "$modules_dir" ] || continue
+    depmod -a "${modules_dir##*/}"
+done
+if command -v update-initramfs >/dev/null 2>&1; then
+    update-initramfs -u -k all
 fi
 exit 0

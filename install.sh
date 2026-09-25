@@ -1,13 +1,34 @@
 #!/bin/bash
 set -Eeuo pipefail
 NAME=nouveau-hpd-ddc
-VER=0.1.5
+VER=0.1.6
 SRC_DIR="/usr/src/$NAME-$VER"
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
+diag_ibuf=0
+
+case "${1:-}" in
+    "") ;;
+    --diag-ibuf) diag_ibuf=1 ;;
+    *)
+        echo "Usage: $0 [--diag-ibuf]" >&2
+        exit 2
+        ;;
+    esac
 
 if [ "$EUID" -ne 0 ]; then
     exec sudo "$0" "$@"
 fi
+
+for source_file in \
+    dkms/dkms.conf \
+    dkms/dkms-build.sh \
+    patches/hpd-low-ddc-probe.patch \
+    patches/diagnostic/ibuf-state-snapshot.patch; do
+    if [ ! -f "$HERE/$source_file" ]; then
+        echo "ERROR: canonical project source is missing: $HERE/$source_file" >&2
+        exit 2
+    fi
+done
 
 # Clean only temporary trees created during this Nouveau investigation.  This
 # is intentionally narrow: it never clears arbitrary /tmp content.
@@ -39,28 +60,51 @@ rm -f /etc/modprobe.d/99-nouveau-i2c-test.conf
 rm -f /etc/dracut.conf.d/61-nouveau-i2c-test.conf
 
 # Clean up failed/older test revisions before installing this revision.
-for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4; do
+for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5; do
     if dkms status -m "$NAME" -v "$oldver" 2>/dev/null | grep -q .; then
-        dkms remove -m "$NAME" -v "$oldver" --all || true
+        echo "Removing older DKMS revision $NAME/$oldver"
+        dkms remove -m "$NAME" -v "$oldver" --all
     fi
     rm -rf "/usr/src/$NAME-$oldver"
+    rm -rf "/var/lib/dkms/$NAME/$oldver"
+done
+
+for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5; do
+    if dkms status -m "$NAME" -v "$oldver" 2>/dev/null | grep -q . \
+        || [ -e "/usr/src/$NAME-$oldver" ] \
+        || [ -e "/var/lib/dkms/$NAME/$oldver" ]; then
+        echo "ERROR: older revision $NAME/$oldver remains after cleanup" >&2
+        exit 2
+    fi
 done
 
 if dkms status -m "$NAME" -v "$VER" 2>/dev/null | grep -q .; then
-    dkms remove -m "$NAME" -v "$VER" --all || true
+    echo "Removing existing DKMS revision $NAME/$VER before reinstall"
+    dkms remove -m "$NAME" -v "$VER" --all
 fi
+rm -rf "/var/lib/dkms/$NAME/$VER"
 rm -rf "$SRC_DIR"
 mkdir -p "$SRC_DIR"
 cp -a "$HERE/dkms/." "$SRC_DIR/"
+mkdir -p "$SRC_DIR/patches/diagnostic"
+cp -a "$HERE/patches/hpd-low-ddc-probe.patch" "$SRC_DIR/patches/"
+cp -a "$HERE/patches/diagnostic/ibuf-state-snapshot.patch" "$SRC_DIR/patches/diagnostic/"
+if [ "$diag_ibuf" -eq 1 ]; then
+    touch "$SRC_DIR/diagnostic-ibuf.enabled"
+    echo "Enabling read-only IBUF state diagnostics for this DKMS build."
+fi
 
 dkms add -m "$NAME" -v "$VER"
 dkms build -m "$NAME" -v "$VER" -k "$k"
 dkms install -m "$NAME" -v "$VER" -k "$k"
 
-# POST_INSTALL normally handles this; repeat harmlessly so Dracut definitely
-# sees the DKMS override on the portable installation.
-depmod -a "$k"
-update-initramfs -u -k "$k"
+# Refresh every installed kernel so stale copies of earlier DKMS revisions are
+# removed from old initramfs images as well as the running kernel's image.
+for modules_dir in /lib/modules/*; do
+    [ -d "$modules_dir" ] || continue
+    depmod -a "${modules_dir##*/}"
+done
+update-initramfs -u -k all
 
 # Explicit cleanup here plus EXIT trap: tmpfs RAM is released before returning.
 cleanup_tmp

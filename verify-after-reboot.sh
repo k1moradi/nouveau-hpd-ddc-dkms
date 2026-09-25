@@ -4,7 +4,7 @@ k=$(uname -r)
 echo '=== module ==='
 modinfo -n nouveau
 echo '=== DKMS ==='
-dkms status -m nouveau-hpd-ddc -v 0.1.5 || true
+dkms status -m nouveau-hpd-ddc -v 0.1.6 || true
 echo '=== EDID ==='
 for e in /sys/class/drm/card*-DVI-I-*/edid; do
     [ -e "$e" ] || continue
@@ -14,4 +14,4 @@ done
 echo '=== modes ==='
 xrandr --query || true
 echo '=== relevant boot log ==='
-dmesg | grep -Ei 'nouveau|edid|ddc|load.detect' | tail -n 100 || true
+dmesg | grep -Ei 'DDC_DIAG|nouveau|edid|ddc|load.detect' | tail -n 100 || true

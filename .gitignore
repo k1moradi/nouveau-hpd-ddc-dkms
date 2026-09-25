@@ -1,16 +1,18 @@
-# Generated release/package artifacts
+# Generated package and release files
 *.deb
 *.tar.gz
 *.tgz
 *.zip
 *.SHA256
 
-# Local build/staging output
-build/
+# DKMS staging and local build output
 .dkms-build/
+build/
+output/
 debian/usr/
+*.log
 
-# Editor/OS clutter
+# Editor and OS files
 *~
 *.swp
 .DS_Store

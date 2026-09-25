@@ -135,10 +135,22 @@ then
     echo "nouveau-hpd-ddc: source already contains the non-DP UNKNOWN fallback; no patch needed"
 else
     echo "nouveau-hpd-ddc: applying HPD-low/DDC fallback patch"
-    if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/fix-nouveau-hpd-ddc.patch"; then
+    if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/hpd-low-ddc-probe.patch"; then
         echo "ERROR: patch did not apply cleanly. Nouveau changed; refusing to guess." >&2
         exit 2
     fi
+fi
+
+# Optional read-only PNVIO input-buffer snapshot for the K4200 DDC diagnosis.
+# The installer creates this marker only when invoked with --diag-ibuf.
+if [ -f "$PWD/diagnostic-ibuf.enabled" ]; then
+    echo "nouveau-hpd-ddc: applying read-only IBUF state diagnostic"
+    if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/diagnostic/ibuf-state-snapshot.patch"; then
+        echo "ERROR: IBUF diagnostic patch did not apply cleanly; refusing to guess." >&2
+        exit 2
+    fi
+else
+    echo "nouveau-hpd-ddc: IBUF state diagnostic is disabled"
 fi
 
 # Force the GNU C compiler even on systems where Clang is the interactive

@@ -1,11 +1,10 @@
 Package: nouveau-hpd-ddc-dkms
-Version: 0.1.5
+Version: 0.1.6
 Section: kernel
 Priority: optional
 Architecture: all
 Depends: dkms, build-essential, patch, python3, binutils, bzip2, xz-utils, zstd, linux-source
 Maintainer: Local Administrator <root@localhost>
-Description: DKMS rebuild of Ubuntu Nouveau with non-DP HPD-low DDC fallback fix
- Builds Nouveau from the matching Ubuntu linux-source package and changes
- nvkm_outp_detect() so non-DisplayPort outputs with low HPD fall back to
- UNKNOWN, allowing DRM to probe DDC/EDID as the source comment intends.
+Description: DKMS rebuild of Ubuntu Nouveau with HPD/DDC fix and diagnostics
+ Builds Nouveau from matching Ubuntu kernel sources and applies the maintained
+ HPD-low/DDC patch. An optional read-only PNVIO IBUF diagnostic is available.

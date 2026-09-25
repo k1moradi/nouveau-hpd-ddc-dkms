@@ -1,0 +1,12 @@
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/busgf119.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/busgf119.c
+@@ -68,0 +69,9 @@
++	/* Diagnostic only: snapshot port 0 input-buffer enables before init. */
++	if (bus->addr == 0x00d014) {
++		u32 ibuf = nvkm_rd32(device, 0x00e1b8);
++
++		nvkm_info(&bus->base.pad->i2c->subdev,
++			 "DDC_DIAG: IBUF_ENABLE_0=%08x I2C[3:0]=%x\n",
++			 ibuf, (ibuf >> 16) & 0x0f);
++	}
++
