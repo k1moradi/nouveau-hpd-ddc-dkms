@@ -1,12 +1,23 @@
 --- a/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/busgf119.c
 +++ b/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/busgf119.c
-@@ -68,0 +69,9 @@
-+	/* Diagnostic only: snapshot port 0 input-buffer enables before init. */
+@@ -68,0 +69,20 @@
++
 +	if (bus->addr == 0x00d014) {
++		u32 boot0 = nvkm_rd32(device, 0x00000000);
++		u32 bit_before = nvkm_rd32(device, bus->addr);
++		u32 pnvio_e500 = nvkm_rd32(device, 0x00e500);
 +		u32 ibuf = nvkm_rd32(device, 0x00e1b8);
++		u32 devinit = nvkm_rd32(device, 0x02240c);
++
++		nvkm_wr32(device, bus->addr, 0x00000007);
 +
 +		nvkm_info(&bus->base.pad->i2c->subdev,
-+			 "DDC_DIAG: IBUF_ENABLE_0=%08x I2C[3:0]=%x\n",
-+			 ibuf, (ibuf >> 16) & 0x0f);
++			 "DDC_DIAG: BOOT0=%08x D014_BEFORE=%08x "
++			 "D014_AFTER=%08x E500=%08x DEVINIT=%08x "
++			 "IBUF=%08x I2C[3:0]=%x\n",
++			 boot0, bit_before, nvkm_rd32(device, bus->addr),
++			 pnvio_e500, devinit, ibuf,
++			 (ibuf >> 16) & 0x0f);
++		return;
 +	}
 +

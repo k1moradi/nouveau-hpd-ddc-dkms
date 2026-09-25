@@ -46,11 +46,16 @@ After reboot, run:
 ./verify-after-reboot.sh
 ```
 
-With `--diag-ibuf`, Nouveau logs the full `IBUF_ENABLE_0` value and bits 16-19
-when physical I2C port 0 is initialized. The first sample is during preinit,
-before VBIOS POST. The next is during normal I2C initialization, after POST and
-the intervening device fini pass. The diagnostic only reads register `0xe1b8`;
-the existing bus initialization write is unchanged.
+With `--diag-ibuf`, Nouveau logs `BOOT0`, the DDC bit-bang register before and
+after its existing initialization write, PNVIO register `0xe500`, devinit
+status, and IBUF register `0xe1b8` when physical I2C port 0 is initialized.
+The first sample is during preinit, before VBIOS POST. The next is during normal
+I2C initialization, after POST and the intervening device fini pass. The
+existing `0xd014 = 0x7` write still happens exactly once; the diagnostic adds
+read-only samples around it. IBUF readback validity remains under investigation:
+do not interpret its bits as enabled until the control register samples
+validate the read. In particular, `0xffffffff` is unvalidated, not proof that
+all four input buffers are enabled.
 
 ## Build behavior
 

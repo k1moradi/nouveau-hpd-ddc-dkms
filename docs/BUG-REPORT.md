@@ -98,11 +98,17 @@ now proceeds to DDC probing.
   The sysfs ROM read exposed only a 59,392-byte first image. GPIO 31's function
   remains unknown, so it is not treated as proven DDC power control.
 - The DDC +5 V rail has not been measured.
+- After rebooting with the initial IBUF diagnostic, both samples were
+  `IBUF_ENABLE_0=ffffffff I2C[3:0]=f`. This is unvalidated readback, not proof
+  that any input buffer is enabled; no IBUF-setting patch is justified.
 
-The next software diagnostic is the opt-in
-[`patches/diagnostic/ibuf-state-snapshot.patch`](../patches/diagnostic/ibuf-state-snapshot.patch).
-It reads `IBUF_ENABLE_0` at physical PNVIO port 0 initialization and logs the
-full value plus bits 16-19. It never writes that register. The two boot samples
-occur before VBIOS POST and later during normal I2C initialization, after the
-intervening device fini pass. This tests the input-buffer hypothesis without
-changing GPIO, I2C, or output state.
+The opt-in diagnostic in
+[`patches/diagnostic/ibuf-state-snapshot.patch`](../patches/diagnostic/ibuf-state-snapshot.patch)
+now logs `PMC_BOOT_0`, the DDC bit-bang register before and after its existing
+initialization write, PNVIO register `0xe500`, devinit status, and IBUF register
+`0xe1b8`. The VBIOS interpreter and this diagnostic use the normal
+`nvkm_rd32()` path for MMIO reads; static analysis found no GK104-specific
+accessor for `0xe1b8`. The existing `0xd014 = 0x7` write still occurs exactly
+once. The two samples occur before VBIOS POST and during later normal I2C
+initialization, after the intervening device fini pass. The additional reads
+validate whether the IBUF value can be interpreted on this GPU.
