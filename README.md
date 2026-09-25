@@ -79,6 +79,23 @@ After saving the output, run a normal `pkexec ./install.sh` to rebuild without
 diagnostics and remove the temporary `NvI2C=1` module option for the next boot.
 `pkexec ./uninstall.sh` also removes that option.
 
+To capture the firmware-transferred EDID base block alongside the ACK-slot
+samples in the same diagnostic boot, install both opt-in diagnostics:
+
+```bash
+pkexec ./install.sh --diag-ack-slot --diag-firmware-edid
+```
+
+The firmware snapshot runs only on the DVI-I analog fallback path. It checks
+whether this GPU is marked as the firmware-primary display, then logs whether
+the retained 128-byte EDID base block has a valid header and checksum, its
+analog/digital input bit and extension count, and the raw bytes. It is
+read-only: it does not attach the firmware EDID to the connector, add modes, or
+change live DDC behavior. `./verify-after-reboot.sh` displays these records
+alongside the ACK-slot samples. A valid analog block is evidence that firmware
+transferred an analog EDID; it is not by itself proof that the EDID belongs to
+the currently connected monitor.
+
 The installer removes the known older DKMS revisions (0.1.0 through 0.1.5),
 copies this project's DKMS files and patches into the package staging directory,
 builds Nouveau for the running kernel, installs it, and updates the initramfs.

@@ -179,6 +179,19 @@ else
     echo "nouveau-hpd-ddc: ACK-slot sampler is disabled"
 fi
 
+# Optional read-only snapshot of firmware-transferred EDID for the primary
+# display GPU. This diagnostic logs only the retained base block and does not
+# attach it to the connector or change mode detection.
+if [ -f "$PWD/diagnostic-firmware-edid.enabled" ]; then
+    echo "nouveau-hpd-ddc: applying firmware EDID snapshot diagnostic"
+    if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/diagnostic/firmware-edid-snapshot.patch"; then
+        echo "ERROR: firmware EDID diagnostic patch did not apply cleanly; refusing to guess." >&2
+        exit 2
+    fi
+else
+    echo "nouveau-hpd-ddc: firmware EDID snapshot diagnostic is disabled"
+fi
+
 # Force the GNU C compiler even on systems where Clang is the interactive
 # default.  Remove inherited LLVM/Kbuild tool-selection variables first so a
 # shell/profile setting such as LLVM=1 cannot silently switch this DKMS build

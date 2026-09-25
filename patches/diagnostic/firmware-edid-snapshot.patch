@@ -1,0 +1,91 @@
+diff --git a/drivers/gpu/drm/nouveau/nouveau_connector.c b/drivers/gpu/drm/nouveau/nouveau_connector.c
+index 355c5af..f5f2608 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_connector.c
++++ b/drivers/gpu/drm/nouveau/nouveau_connector.c
+@@ -27,6 +27,7 @@
+ #include <acpi/button.h>
+ 
+ #include <linux/pm_runtime.h>
++#include <linux/sysfb.h>
+ #include <linux/vga_switcheroo.h>
+ 
+ #include <drm/drm_atomic_helper.h>
+@@ -559,6 +560,70 @@ nouveau_connector_set_edid(struct nouveau_connector *nv_connector,
+ 	}
+ }
+ 
++/*
++ * Read-only diagnostic for the 128-byte EDID base block transferred by
++ * firmware for the primary display.  Do not attach this EDID to the DRM
++ * connector here: firmware EDID is associated with the firmware-primary
++ * display device, not with an arbitrary DRM connector.
++ */
++static void
++nouveau_connector_firmware_edid_diag(struct drm_connector *connector)
++{
++#if IS_ENABLED(CONFIG_FIRMWARE_EDID)
++	struct drm_device *dev = connector->dev;
++	struct nouveau_drm *drm = nouveau_drm(dev);
++	struct pci_dev *pdev;
++	const u8 *edid = sysfb_primary_display.edid.dummy;
++	u8 checksum = 0;
++	bool primary;
++	bool valid;
++	int header;
++	int i;
++
++	/* Keep this diagnostic scoped to the DVI-I path under investigation. */
++	if (connector->connector_type != DRM_MODE_CONNECTOR_DVII)
++		return;
++
++	if (!dev_is_pci(dev->dev)) {
++		NV_INFO_ONCE(drm,
++			     "DDC_DIAG: FIRMWARE_EDID connector=%s pci=0 usable=0\n",
++			     connector->name);
++		return;
++	}
++
++	pdev = to_pci_dev(dev->dev);
++	primary = !!(pdev->resource[PCI_ROM_RESOURCE].flags & IORESOURCE_ROM_SHADOW);
++	if (!primary) {
++		NV_INFO_ONCE(drm,
++			     "DDC_DIAG: FIRMWARE_EDID connector=%s primary=0 usable=0\n",
++			     connector->name);
++		return;
++	}
++
++	for (i = 0; i < EDID_LENGTH; i++)
++		checksum += edid[i];
++
++	header = drm_edid_header_is_valid(edid);
++	valid = header == 8 && checksum == 0;
++
++	NV_INFO_ONCE(drm,
++		     "DDC_DIAG: FIRMWARE_EDID connector=%s primary=1 "
++		     "header=%d checksum=%02x valid=%d input=%s extensions=%u\n",
++		     connector->name, header, (unsigned int)checksum, valid,
++		     valid ? (edid[20] & DRM_EDID_INPUT_DIGITAL ?
++			      "digital" : "analog") : "unknown",
++		     (unsigned int)edid[126]);
++	NV_INFO_ONCE(drm, "DDC_DIAG: FIRMWARE_EDID_RAW0=%64phN\n", edid);
++	NV_INFO_ONCE(drm, "DDC_DIAG: FIRMWARE_EDID_RAW1=%64phN\n", edid + 64);
++#else
++	struct nouveau_drm *drm = nouveau_drm(connector->dev);
++
++	NV_INFO_ONCE(drm,
++		     "DDC_DIAG: FIRMWARE_EDID connector=%s config=disabled\n",
++		     connector->name);
++#endif
++}
++
+ static enum drm_connector_status
+ nouveau_connector_detect(struct drm_connector *connector, bool force)
+ {
+@@ -653,6 +718,7 @@ nouveau_connector_detect(struct drm_connector *connector, bool force)
+ 	}
+ 
+ detect_analog:
++	nouveau_connector_firmware_edid_diag(connector);
+ 	nv_encoder = find_encoder(connector, DCB_OUTPUT_ANALOG);
+ 	if (!nv_encoder && !nouveau_tv_disable)
+ 		nv_encoder = find_encoder(connector, DCB_OUTPUT_TV);

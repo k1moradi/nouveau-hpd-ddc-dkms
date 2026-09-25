@@ -210,3 +210,21 @@ reached the GPU; SDA bit 5 high means no ACK was observed there. Because this
 test keeps the monitor connected, it cannot distinguish a monitor response
 from a board-level buffer or path failure. Missing samples are inconclusive
 until the active module configuration confirms `NvI2C=1`.
+
+## Firmware EDID snapshot
+
+`patches/diagnostic/firmware-edid-snapshot.patch` adds a separate opt-in,
+read-only diagnostic enabled with `--diag-firmware-edid`. It runs when Nouveau
+falls through to analog detection and only for DVI-I. The diagnostic checks
+whether the PCI device is marked as the firmware-primary display GPU, then
+examines the 128-byte base EDID retained in `sysfb_primary_display`. It logs
+the header score, base-block checksum, analog/digital input bit, extension
+count, and both 64-byte halves of the raw block.
+
+The diagnostic does not depend on legacy fbdev, call `fb_firmware_edid()`,
+attach the firmware data to a DRM connector, add modes, or write hardware. Its
+validity test covers only the base block because this firmware handoff retains
+128 bytes even when the EDID advertises extensions. A valid analog base block
+shows that firmware transferred an analog EDID, but does not alone prove that
+it belongs to the currently connected monitor. The flag can be combined with
+`--diag-ack-slot` so firmware and live DDC evidence are captured in one boot.

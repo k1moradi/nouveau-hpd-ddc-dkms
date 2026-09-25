@@ -163,6 +163,10 @@ ack_slot_lines=$(printf '%s\n' "$boot_log" |
     grep -F 'addr=50 ' || true)
 ack_slot_count=$(printf '%s\n' "$ack_slot_lines" |
     awk 'NF { count++ } END { print count + 0 }')
+firmware_edid_lines=$(printf '%s\n' "$boot_log" |
+    grep -F 'DDC_DIAG: FIRMWARE_EDID' || true)
+firmware_edid_count=$(printf '%s\n' "$firmware_edid_lines" |
+    awk 'NF { count++ } END { print count + 0 }')
 
 module_path=$(modinfo -n nouveau 2>/dev/null || true)
 module_vermagic=$(modinfo -F vermagic nouveau 2>/dev/null || true)
@@ -235,6 +239,13 @@ else
         printf '%s\n' "$ack_slot_lines"
     fi
     echo 'For each sample, SCL is bit 4 and SDA is bit 5; SCL high with SDA low is an ACK at the GPU input.'
+fi
+
+echo '=== firmware EDID snapshot ==='
+if [ "$firmware_edid_count" -eq 0 ]; then
+    echo 'No firmware EDID snapshot records found; confirm --diag-firmware-edid was used and DVI-I detection reached the analog fallback.'
+else
+    printf '%s\n' "$firmware_edid_lines"
 fi
 
 echo '=== EDID ==='

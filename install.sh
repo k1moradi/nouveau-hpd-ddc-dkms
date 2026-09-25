@@ -7,14 +7,16 @@ HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 diag_ibuf=0
 diag_dac_ddc=0
 diag_ack_slot=0
+diag_firmware_edid=0
 
 for arg in "$@"; do
     case "$arg" in
         --diag-ibuf) diag_ibuf=1 ;;
         --diag-dac-ddc) diag_dac_ddc=1 ;;
         --diag-ack-slot) diag_ack_slot=1; diag_dac_ddc=1 ;;
+        --diag-firmware-edid) diag_firmware_edid=1 ;;
         *)
-            echo "Usage: $0 [--diag-ibuf] [--diag-dac-ddc] [--diag-ack-slot]" >&2
+            echo "Usage: $0 [--diag-ibuf] [--diag-dac-ddc] [--diag-ack-slot] [--diag-firmware-edid]" >&2
             exit 2
             ;;
     esac
@@ -30,7 +32,8 @@ for source_file in \
     patches/hpd-low-ddc-probe.patch \
     patches/diagnostic/ibuf-state-snapshot.patch \
     patches/diagnostic/dac-powered-ddc-probe.patch \
-    patches/diagnostic/ack-slot-sampler.patch; do
+    patches/diagnostic/ack-slot-sampler.patch \
+    patches/diagnostic/firmware-edid-snapshot.patch; do
     if [ ! -f "$HERE/$source_file" ]; then
         echo "ERROR: canonical project source is missing: $HERE/$source_file" >&2
         exit 2
@@ -99,6 +102,7 @@ cp -a "$HERE/patches/hpd-low-ddc-probe.patch" "$SRC_DIR/patches/"
 cp -a "$HERE/patches/diagnostic/ibuf-state-snapshot.patch" "$SRC_DIR/patches/diagnostic/"
 cp -a "$HERE/patches/diagnostic/dac-powered-ddc-probe.patch" "$SRC_DIR/patches/diagnostic/"
 cp -a "$HERE/patches/diagnostic/ack-slot-sampler.patch" "$SRC_DIR/patches/diagnostic/"
+cp -a "$HERE/patches/diagnostic/firmware-edid-snapshot.patch" "$SRC_DIR/patches/diagnostic/"
 if [ "$diag_ibuf" -eq 1 ]; then
     touch "$SRC_DIR/diagnostic-ibuf.enabled"
     echo "Enabling read-only IBUF state diagnostics for this DKMS build."
@@ -110,6 +114,10 @@ fi
 if [ "$diag_ack_slot" -eq 1 ]; then
     touch "$SRC_DIR/diagnostic-ack-slot.enabled"
     echo "Enabling read-only DDC ACK-slot sampling for physical PNVIO port 0."
+fi
+if [ "$diag_firmware_edid" -eq 1 ]; then
+    touch "$SRC_DIR/diagnostic-firmware-edid.enabled"
+    echo "Enabling read-only firmware EDID snapshot diagnostics for DVI-I."
 fi
 
 dkms add -m "$NAME" -v "$VER"
@@ -144,4 +152,7 @@ if [ "$diag_ack_slot" -eq 1 ]; then
     echo "After saving the samples, run install.sh without diagnostic flags to remove NvI2C=1."
 else
     echo "Reboot, then verify EDID/modes."
+fi
+if [ "$diag_firmware_edid" -eq 1 ]; then
+    echo "The verifier will also show the read-only firmware EDID base-block snapshot."
 fi

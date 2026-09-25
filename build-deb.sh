@@ -20,6 +20,7 @@ cp -a "$ROOT/patches/hpd-low-ddc-probe.patch" "$SRC/patches/"
 cp -a "$ROOT/patches/diagnostic/ibuf-state-snapshot.patch" "$SRC/patches/diagnostic/"
 cp -a "$ROOT/patches/diagnostic/dac-powered-ddc-probe.patch" "$SRC/patches/diagnostic/"
 cp -a "$ROOT/patches/diagnostic/ack-slot-sampler.patch" "$SRC/patches/diagnostic/"
+cp -a "$ROOT/patches/diagnostic/firmware-edid-snapshot.patch" "$SRC/patches/diagnostic/"
 cp -a "$ROOT/debian/DEBIAN/." "$STAGE/DEBIAN/"
 
 chmod 0755 \
