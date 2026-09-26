@@ -4,6 +4,10 @@ set -u
 NAME=nouveau-hpd-ddc
 VER=0.1.6
 k=$(uname -r)
+dac_ddc_diag_enabled=0
+if [ -f "/usr/src/$NAME-$VER/diagnostic-dac-ddc.enabled" ]; then
+    dac_ddc_diag_enabled=1
+fi
 
 read_boot_log() {
     if [ -n "${NOUVEAU_VERIFY_LOG:-}" ]; then
@@ -320,8 +324,12 @@ if powered_ddc_partial power-on || powered_ddc_partial load-sense; then partial_
 if powered_ddc_mixed power-on || powered_ddc_mixed load-sense; then mixed_response=1; fi
 
 if [ "$power_samples" -eq 0 ] && [ "$load_samples" -eq 0 ]; then
-    echo 'No DAC-powered DDC diagnostic samples were found in this boot log.'
-    echo 'Result is inconclusive: verify that the --diag-dac-ddc DKMS build is installed and that analog load detection ran.'
+    if [ "$dac_ddc_diag_enabled" -eq 1 ]; then
+        echo 'No DAC-powered DDC diagnostic samples were found in this boot log.'
+        echo 'Result is inconclusive: verify that analog load detection ran and that the diagnostic module loaded.'
+    else
+        echo 'The DAC-powered DDC probe was not enabled for this boot; no DAC-powered samples were expected.'
+    fi
 elif [ "$power_samples" -eq 0 ] || [ "$load_samples" -eq 0 ]; then
     echo 'Only one DAC diagnostic phase is present in the boot log.'
     echo 'Result is inconclusive: do not treat a missing phase as a failed DDC probe; preserve the full log and verify the diagnostic path ran to completion.'
