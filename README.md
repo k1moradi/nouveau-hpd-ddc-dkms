@@ -74,9 +74,10 @@ sampled input. The external-pad mapping is unvalidated. This connected-only
 capture cannot distinguish a monitor that does not pull SDA low from an
 intervening board-level buffer or signal-path issue. A missing sample is
 inconclusive; check the active `NvI2C=1` option and confirm that the
-ACK-slot DKMS module loaded. The active sysfs parameter is root-readable; if
-the verifier cannot read it non-interactively, ACK-slot samples themselves
-confirm that the internal transfer path ran.
+ACK-slot DKMS module loaded. The installer explicitly includes the temporary
+modprobe option in the generated initramfs, where Nouveau is loaded during
+early boot. If the active sysfs parameter is unreadable, the verifier reports
+the path as unknown; ACK-slot samples themselves confirm that it ran.
 
 After saving the output, run a normal `pkexec ./install.sh` to rebuild without
 diagnostics and remove the temporary `NvI2C=1` module option for the next boot.

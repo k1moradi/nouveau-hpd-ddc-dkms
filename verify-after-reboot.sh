@@ -154,9 +154,13 @@ preload_ddc_summary() {
 }
 
 boot_log=$(read_boot_log)
-nouveau_config=$(cat /sys/module/nouveau/parameters/config 2>/dev/null || true)
-if [ -z "$nouveau_config" ] && command -v sudo >/dev/null 2>&1; then
-    nouveau_config=$(sudo -n cat /sys/module/nouveau/parameters/config 2>/dev/null || true)
+nouveau_config=""
+nouveau_config_readable=0
+if nouveau_config=$(cat /sys/module/nouveau/parameters/config 2>/dev/null); then
+    nouveau_config_readable=1
+elif command -v sudo >/dev/null 2>&1 && \
+     nouveau_config=$(sudo -n cat /sys/module/nouveau/parameters/config 2>/dev/null); then
+    nouveau_config_readable=1
 fi
 ack_slot_lines=$(printf '%s\n' "$boot_log" |
     grep -F 'DDC_DIAG: ACK_SLOT ' |
@@ -220,7 +224,7 @@ else
 fi
 
 echo '=== ACK-slot diagnostic ==='
-if [ -n "$nouveau_config" ]; then
+if [ "$nouveau_config_readable" -eq 1 ]; then
     printf 'active nouveau config: %s\n' "$nouveau_config"
 else
     echo 'active nouveau config: UNAVAILABLE (the sysfs parameter is root-readable only)'
@@ -230,11 +234,19 @@ case "$nouveau_config" in
     '')
         if [ "$ack_slot_count" -gt 0 ]; then
             echo 'internal Nouveau I2C path: CONFIRMED by ACK_SLOT samples'
+        elif [ "$nouveau_config_readable" -eq 0 ]; then
+            echo 'internal Nouveau I2C path: UNKNOWN (the active config could not be read)'
         else
-            echo 'internal Nouveau I2C path: NOT CONFIRMED (expected NvI2C=1)'
+            echo 'internal Nouveau I2C path: NOT ACTIVE (expected NvI2C=1)'
         fi
         ;;
-    *) echo 'internal Nouveau I2C path: NOT CONFIRMED (expected NvI2C=1)' ;;
+    *)
+        if [ "$ack_slot_count" -gt 0 ]; then
+            echo 'internal Nouveau I2C path: CONFIRMED by ACK_SLOT samples'
+        else
+            echo 'internal Nouveau I2C path: NOT ACTIVE (expected NvI2C=1)'
+        fi
+        ;;
 esac
 printf '0x50 ACK-slot samples: %s\n' "$ack_slot_count"
 if [ "$ack_slot_count" -eq 0 ]; then

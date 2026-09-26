@@ -265,6 +265,16 @@ could not distinguish a monitor response from an intervening board-level
 buffer or path failure. Missing samples are inconclusive until the active
 module configuration confirms `NvI2C=1`.
 
+The 2026-09-26 combined diagnostic boot produced no ACK-slot or matrix samples.
+Root inspection showed the loaded module's `config` parameter was `(null)`, and
+the generated dracut initramfs contained the DKMS module but not
+`/etc/modprobe.d/99-nouveau-i2c-test.conf`. The option had only been staged on
+the root filesystem, after Nouveau was loaded from the initramfs. The installer
+now adds that modprobe file to dracut's `install_items` before refreshing the
+image. The D014 init snapshots (`0x33 -> 0x37`, then `0x37 -> 0x37`) and the
+firmware EDID snapshot (all zeroes, invalid header) remain useful independent
+observations; the missing samplers from that boot are inconclusive.
+
 ## Firmware EDID snapshot
 
 `patches/diagnostic/firmware-edid-snapshot.patch` adds a separate opt-in,

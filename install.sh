@@ -139,7 +139,11 @@ if [ "$diag_ack_slot" -eq 1 ]; then
     printf '%s\n' 'options nouveau config=NvI2C=1' \
         > /etc/modprobe.d/99-nouveau-i2c-test.conf
     chmod 0644 /etc/modprobe.d/99-nouveau-i2c-test.conf
-    echo "Staged config=NvI2C=1 for the diagnostic boot."
+    install -d -m 0755 /etc/dracut.conf.d
+    printf '%s\n' 'install_items+=" /etc/modprobe.d/99-nouveau-i2c-test.conf "' \
+        > /etc/dracut.conf.d/61-nouveau-i2c-test.conf
+    chmod 0644 /etc/dracut.conf.d/61-nouveau-i2c-test.conf
+    echo "Staged config=NvI2C=1 and included it in the diagnostic initramfs."
 fi
 
 # Refresh every installed kernel so stale copies of earlier DKMS revisions are

@@ -156,3 +156,19 @@ Nouveau's existing `0x7` write.
 These captures can show whether sense bits change with Nouveau's own
 drive/release commands, but a connected-only run cannot distinguish pad
 loopback from an isolated external path.
+
+### 2026-09-26 combined diagnostic boot
+
+The DKMS module matched the module selected for the running kernel. D014 init
+snapshots were `before=0x33 after=0x37`, then `before=0x37 after=0x37`. There
+were no ACK-slot or drive/sense samples. Root inspection found
+`/sys/module/nouveau/parameters/config` was `(null)`: the host modprobe file had
+been staged, but dracut had not included it in the initramfs, so early Nouveau
+loading did not receive `NvI2C=1`. This boot therefore does not test the
+internal bit-bang sampler. The installer now adds the modprobe file to dracut's
+`install_items` list and regenerates the initramfs.
+
+The firmware-primary DVI-I snapshot contained 128 zero bytes, header score 2,
+checksum 0, and `valid=0`. Firmware-primary association alone did not provide a
+usable EDID for this display. The verifier was also corrected to report an
+unreadable active config as unknown rather than inactive.
