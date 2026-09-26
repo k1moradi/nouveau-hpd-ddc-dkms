@@ -155,8 +155,7 @@ fi
 
 # Optional probe of the output's VBIOS-selected DDC bus while analog DAC power
 # is active.  This marker is created only by install.sh --diag-dac-ddc.
-if [ -f "$PWD/diagnostic-dac-ddc.enabled" ] || \
-   [ -f "$PWD/diagnostic-ack-slot.enabled" ]; then
+if [ -f "$PWD/diagnostic-dac-ddc.enabled" ]; then
     echo "nouveau-hpd-ddc: applying DAC-powered DDC diagnostic"
     if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/diagnostic/dac-powered-ddc-probe.patch"; then
         echo "ERROR: DAC-powered DDC diagnostic patch did not apply cleanly; refusing to guess." >&2
@@ -177,6 +176,26 @@ if [ -f "$PWD/diagnostic-ack-slot.enabled" ]; then
     fi
 else
     echo "nouveau-hpd-ddc: ACK-slot sampler is disabled"
+fi
+
+# Optional read-only sample of each normal bus-0 line-drive state during an
+# existing I2C address-0x50 transfer.  This flag also enables the ACK sampler
+# and internal bit-bang path, but does not add a DAC-powered test transfer.
+if [ -f "$PWD/diagnostic-d014-sense.enabled" ]; then
+    if [ ! -f "$PWD/diagnostic-ibuf.enabled" ]; then
+        echo "nouveau-hpd-ddc: applying read-only D014 init snapshot"
+        if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/diagnostic/d014-init-snapshot.patch"; then
+            echo "ERROR: D014 init snapshot patch did not apply cleanly; refusing to guess." >&2
+            exit 2
+        fi
+    fi
+    echo "nouveau-hpd-ddc: applying bounded read-only PNVIO D014 drive/sense sampler"
+    if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/diagnostic/pnvio-d014-sense-matrix.patch"; then
+        echo "ERROR: PNVIO D014 sense matrix patch did not apply cleanly; refusing to guess." >&2
+        exit 2
+    fi
+else
+    echo "nouveau-hpd-ddc: PNVIO D014 sense matrix is disabled"
 fi
 
 # Optional read-only snapshot of firmware-transferred EDID for the primary

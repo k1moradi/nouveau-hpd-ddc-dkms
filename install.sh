@@ -8,6 +8,7 @@ diag_ibuf=0
 diag_dac_ddc=0
 diag_ack_slot=0
 diag_firmware_edid=0
+diag_d014_sense=0
 
 for arg in "$@"; do
     case "$arg" in
@@ -15,8 +16,9 @@ for arg in "$@"; do
         --diag-dac-ddc) diag_dac_ddc=1 ;;
         --diag-ack-slot) diag_ack_slot=1; diag_dac_ddc=1 ;;
         --diag-firmware-edid) diag_firmware_edid=1 ;;
+        --diag-d014-sense) diag_d014_sense=1; diag_ack_slot=1 ;;
         *)
-            echo "Usage: $0 [--diag-ibuf] [--diag-dac-ddc] [--diag-ack-slot] [--diag-firmware-edid]" >&2
+            echo "Usage: $0 [--diag-ibuf] [--diag-dac-ddc] [--diag-ack-slot] [--diag-firmware-edid] [--diag-d014-sense]" >&2
             exit 2
             ;;
     esac
@@ -33,6 +35,8 @@ for source_file in \
     patches/diagnostic/ibuf-state-snapshot.patch \
     patches/diagnostic/dac-powered-ddc-probe.patch \
     patches/diagnostic/ack-slot-sampler.patch \
+    patches/diagnostic/d014-init-snapshot.patch \
+    patches/diagnostic/pnvio-d014-sense-matrix.patch \
     patches/diagnostic/firmware-edid-snapshot.patch; do
     if [ ! -f "$HERE/$source_file" ]; then
         echo "ERROR: canonical project source is missing: $HERE/$source_file" >&2
@@ -102,6 +106,8 @@ cp -a "$HERE/patches/hpd-low-ddc-probe.patch" "$SRC_DIR/patches/"
 cp -a "$HERE/patches/diagnostic/ibuf-state-snapshot.patch" "$SRC_DIR/patches/diagnostic/"
 cp -a "$HERE/patches/diagnostic/dac-powered-ddc-probe.patch" "$SRC_DIR/patches/diagnostic/"
 cp -a "$HERE/patches/diagnostic/ack-slot-sampler.patch" "$SRC_DIR/patches/diagnostic/"
+cp -a "$HERE/patches/diagnostic/d014-init-snapshot.patch" "$SRC_DIR/patches/diagnostic/"
+cp -a "$HERE/patches/diagnostic/pnvio-d014-sense-matrix.patch" "$SRC_DIR/patches/diagnostic/"
 cp -a "$HERE/patches/diagnostic/firmware-edid-snapshot.patch" "$SRC_DIR/patches/diagnostic/"
 if [ "$diag_ibuf" -eq 1 ]; then
     touch "$SRC_DIR/diagnostic-ibuf.enabled"
@@ -114,6 +120,10 @@ fi
 if [ "$diag_ack_slot" -eq 1 ]; then
     touch "$SRC_DIR/diagnostic-ack-slot.enabled"
     echo "Enabling read-only DDC ACK-slot sampling for physical PNVIO port 0."
+fi
+if [ "$diag_d014_sense" -eq 1 ]; then
+    touch "$SRC_DIR/diagnostic-d014-sense.enabled"
+    echo "Enabling bounded read-only D014 drive/sense sampling during normal 0x50 transfers."
 fi
 if [ "$diag_firmware_edid" -eq 1 ]; then
     touch "$SRC_DIR/diagnostic-firmware-edid.enabled"
@@ -155,4 +165,7 @@ else
 fi
 if [ "$diag_firmware_edid" -eq 1 ]; then
     echo "The verifier will also show the read-only firmware EDID base-block snapshot."
+fi
+if [ "$diag_d014_sense" -eq 1 ]; then
+    echo "The matrix samples only address-0x50 traffic already requested by Nouveau; it adds no DDC transaction."
 fi

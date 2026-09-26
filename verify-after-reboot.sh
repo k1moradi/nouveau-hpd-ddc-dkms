@@ -167,6 +167,14 @@ firmware_edid_lines=$(printf '%s\n' "$boot_log" |
     grep -F 'DDC_DIAG: FIRMWARE_EDID' || true)
 firmware_edid_count=$(printf '%s\n' "$firmware_edid_lines" |
     awk 'NF { count++ } END { print count + 0 }')
+d014_init_lines=$(printf '%s\n' "$boot_log" |
+    grep -E 'DDC_DIAG: D014_INIT |DDC_DIAG: BOOT0=.*D014_BEFORE=.*D014_AFTER=' || true)
+d014_init_count=$(printf '%s\n' "$d014_init_lines" |
+    awk 'NF { count++ } END { print count + 0 }')
+d014_matrix_lines=$(printf '%s\n' "$boot_log" |
+    grep -F 'DDC_DIAG: D014_MATRIX ' || true)
+d014_matrix_count=$(printf '%s\n' "$d014_matrix_lines" |
+    awk 'NF { count++ } END { print count + 0 }')
 
 module_path=$(modinfo -n nouveau 2>/dev/null || true)
 module_vermagic=$(modinfo -F vermagic nouveau 2>/dev/null || true)
@@ -238,7 +246,21 @@ else
     else
         printf '%s\n' "$ack_slot_lines"
     fi
-    echo 'For each sample, SCL is bit 4 and SDA is bit 5; SCL high with SDA low is an ACK at the GPU input.'
+    echo 'For each sample, SCL is bit 4 and SDA is bit 5; under the documented input interpretation, SCL high with SDA low is consistent with an ACK. External-pad semantics remain unvalidated.'
+fi
+
+echo '=== D014 init and drive/sense diagnostic ==='
+if [ "$d014_init_count" -eq 0 ]; then
+    echo 'No D014 init snapshot found; confirm --diag-d014-sense or --diag-ibuf was used.'
+else
+    printf '%s\n' "$d014_init_lines"
+fi
+printf 'D014 drive/sense samples: %s/32 maximum\n' "$d014_matrix_count"
+if [ "$d014_matrix_count" -eq 0 ]; then
+    echo 'No matrix samples found; confirm an internal I2C address-0x50 transfer used physical register 0xd014.'
+else
+    printf '%s\n' "$d014_matrix_lines"
+    echo 'Bits 4/5 are documented as SCL_IN/SDA_IN, but their external-pad semantics remain unvalidated.'
 fi
 
 echo '=== firmware EDID snapshot ==='

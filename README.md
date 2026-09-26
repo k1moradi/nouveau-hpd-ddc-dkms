@@ -16,6 +16,8 @@ generated DKMS staging data and are replaced during installation.
 | `patches/diagnostic/ibuf-state-snapshot.patch` | Optional read-only IBUF diagnostic |
 | `patches/diagnostic/dac-powered-ddc-probe.patch` | Optional DAC-powered DDC diagnostic |
 | `patches/diagnostic/ack-slot-sampler.patch` | Optional read-only PNVIO ACK-slot sampler |
+| `patches/diagnostic/d014-init-snapshot.patch` | Optional read-only PNVIO port-0 init snapshot |
+| `patches/diagnostic/pnvio-d014-sense-matrix.patch` | Optional bounded sampling after normal I2C line drives |
 | `docs/STATIC-ANALYSIS.md` | Current static-analysis conclusions and eliminated hypotheses |
 | `dkms/` | DKMS config, build script, and hooks |
 | `docs/BUG-REPORT.md` | Hardware and diagnostic evidence |
@@ -66,8 +68,9 @@ Ubuntu headers otherwise leave disabled. It then selects that path by staging
 initramfs. Normal builds do not enable the internal implementation.
 
 Keep the monitor connected for the diagnostic boot, then run
-`./verify-after-reboot.sh`. An SCL-high/SDA-low sample means an ACK reached the
-GPU input; SDA-high means no ACK was observed there. This connected-only
+`./verify-after-reboot.sh`. Under the documented input interpretation,
+SCL-high/SDA-low is consistent with an ACK and SDA-high with no ACK at the
+sampled input. The external-pad mapping is unvalidated. This connected-only
 capture cannot distinguish a monitor that does not pull SDA low from an
 intervening board-level buffer or signal-path issue. A missing sample is
 inconclusive; check the active `NvI2C=1` option and confirm that the
@@ -95,6 +98,31 @@ change live DDC behavior. `./verify-after-reboot.sh` displays these records
 alongside the ACK-slot samples. A valid analog block is evidence that firmware
 transferred an analog EDID; it is not by itself proof that the EDID belongs to
 the currently connected monitor.
+
+To inspect D014 input bits during ordinary Nouveau DDC probing, use:
+
+```bash
+pkexec ./install.sh --diag-d014-sense --diag-firmware-edid
+```
+
+This enables the internal I2C path and ACK-slot sampler, then captures at most
+32 line-drive transitions for address `0x50` on physical PNVIO register
+`0xd014`. It adds only read-only MMIO samples after line-drive operations
+Nouveau already performs, with a 1 μs settle delay per captured transition (at
+most 32 μs total). It adds no line-drive operation, DDC transfer, or separate
+DAC-powered DDC probe. When both output-release bits are set, it takes three
+consecutive reads.
+It also records the raw D014 value immediately before and after the existing
+`0x7` bus-init write. The `--diag-firmware-edid` flag captures the independent
+firmware base-block snapshot during the same boot. Neither flag adds a DDC
+transaction. Use `./verify-after-reboot.sh` to inspect these records.
+
+EnvyTools names bits 4 and 5 `SCL_IN` and `SDA_IN`, and Nouveau uses them as
+the sense results. The available static descriptions do not establish whether
+those samples represent the external pad level or a local loopback/status path.
+Treat this capture as evidence about register behavior; do not interpret a
+high SDA sample as proof that the monitor or board path failed to pull the
+physical line low without independent validation.
 
 The installer removes the known older DKMS revisions (0.1.0 through 0.1.5),
 copies this project's DKMS files and patches into the package staging directory,

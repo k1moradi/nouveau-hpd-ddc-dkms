@@ -92,7 +92,9 @@ now proceeds to DDC probing.
 
 - EDID address `0x50` returns `ENXIO` on all eight Nouveau PNVIO buses.
 - VBIOS routing maps the DVI-I analog/TMDS outputs to PNVIO bus 0. Bus 0 uses
-  bitbang mode; Nouveau drives and senses SCL/SDA, but sees no address ACK.
+  bitbang mode. Nouveau reads the documented SCL/SDA sense bits, but their
+  mapping to the external connector pins has not been independently validated;
+  the address ACK decision remains negative.
 - The same GPU, adapter, cable, and monitor work under Windows.
 - A previous full ROM dump was 184,320 bytes and includes a GPIO-31 sequence.
   The sysfs ROM read exposed only a 59,392-byte first image. GPIO 31's function
@@ -137,8 +139,20 @@ internal bit-bang algorithm at the address ACK slot for I2C address `0x50`.
 bit-bang implementation (disabled by this Ubuntu header config), and stages
 `config=NvI2C=1` for the diagnostic boot. On physical PNVIO register
 `0xd014`, it logs three raw reads; the first read remains the transaction's
-ACK/NACK decision. SCL input is bit 4 and SDA input is bit 5. SCL high with
-SDA low means an ACK reached the GPU input. SDA high means no ACK was observed
-there, but this connected-only experiment cannot distinguish the monitor from
-an intervening board-level signal path. The sampler adds no PNVIO writes. The
-verifier reports the active module option when readable and prints the samples.
+ACK/NACK decision. EnvyTools labels bit 4 `SCL_IN` and bit 5 `SDA_IN`, and
+Nouveau consumes them as sense results. The static sources do not establish
+whether these are external pad samples or local loopback/status bits, so the
+log reports what Nouveau reads rather than directly measuring the VGA
+connector.
+
+The opt-in `--diag-d014-sense` sampler runs on ordinary internal I2C transfers
+to address `0x50` for physical PNVIO register `0xd014`. It records up to 32
+existing line-drive transitions and samples the register after each drive,
+adding a 1 μs settle delay per captured transition (at most 32 μs total). When
+both output bits are released, it reads the register three times. It adds no
+line-drive operation, DDC transfer, or separate DAC-powered DDC probe. A
+separate read-only init snapshot records D014 immediately before and after
+Nouveau's existing `0x7` write.
+These captures can show whether sense bits change with Nouveau's own
+drive/release commands, but a connected-only run cannot distinguish pad
+loopback from an isolated external path.

@@ -1,0 +1,21 @@
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/busgf119.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/busgf119.c
+@@ -82,6 +82,18 @@
+ {
+ 	struct gf119_i2c_bus *bus = gf119_i2c_bus(base);
+ 	struct nvkm_device *device = bus->base.pad->i2c->subdev.device;
++	u32 before, after;
++
++	if (bus->addr == 0x00d014) {
++		before = nvkm_rd32(device, bus->addr);
++		nvkm_wr32(device, bus->addr, 0x00000007);
++		after = nvkm_rd32(device, bus->addr);
++		nvkm_info(&bus->base.pad->i2c->subdev,
++			  "DDC_DIAG: D014_INIT port=0 reg=d014 before=%08x after=%08x\n",
++			  before, after);
++		return;
++	}
++
+ 	nvkm_wr32(device, bus->addr, 0x00000007);
+ }
+ 

@@ -37,7 +37,7 @@ i2c_result: i2c-0 n=2 ret=-6
 
 All eight available Nouveau PNVIO buses were probed at `0x50` and returned ENXIO. Both generic `i2c-algo-bit` and Nouveau internal bitbang (`NvI2C=1`) fail. This makes a wrong DCB bus index or a generic bitbang algorithm defect unlikely.
 
-For GK104/GF119 PNVIO bus 0 the bitbang register is `0x00d014`. Sampling during EDID traffic showed values `0x04`, `0x15`, `0x26`, and `0x37`, demonstrating that the GPU can drive, release, and observe the line-status bits. During the address ACK slot SDA remains high: the GPU sends the address and releases SDA, but no external device pulls it low.
+For GF119/GK104 PNVIO bus 0 the bitbang register is `0x00d014`. Sampling during EDID traffic showed values `0x04`, `0x15`, `0x26`, and `0x37`, which vary with the commanded state. At each captured address ACK slot Nouveau read `0x37` (bits 4/5 both high). EnvyTools names these bits `SCL_IN` and `SDA_IN`, and Nouveau uses them as sense inputs, but neither source says whether they reflect the external pad level or a local loopback/status path. The observed high SDA therefore describes Nouveau's register read; it does not independently prove the physical connector's SDA level.
 
 ## VBIOS / connector facts
 
@@ -149,6 +149,55 @@ The diagnostic readback `IBUF_ENABLE_0=ffffffff` must not be interpreted as “a
 
 Result: “Nouveau failed to replay the K4200 VBIOS's target-bus IBUF write” is **very low confidence**. A different undocumented I2C0 input-buffer state remains **low confidence** only because the register read semantics are unresolved.
 
+## Static target 4: GF119 PNVIO D014 input semantics and initialization write
+
+The DCB-selected physical bus-0 bitbang register is `0x00d014`. EnvyTools
+documents bits 0/1 as `SCL_OUT`/`SDA_OUT`, bits 2/3 as the mode field, and bits
+4/5 as `SCL_IN`/`SDA_IN` on GF119 and later. Nouveau reads bits 4/5 from this
+register in its `sense_scl` and `sense_sda` callbacks.
+
+This is a long-standing driver model, not a new v7.0 interpretation. Linux
+[v4.2 `gf110.c`](https://github.com/torvalds/linux/blob/v4.2/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/gf110.c)
+already read bits 4 and 5 for SCL/SDA sense and initialized the port with state
+`0x7`; the 2015 refactor moved the same behavior into
+[`busgf119.c`](https://github.com/torvalds/linux/commit/2aa5eac5163f).
+The current [EnvyTools PNVIO description](https://github.com/envytools/envytools/blob/master/rnndb/io/pnvio.xml)
+uses the same `*_IN` names. These sources establish that Nouveau has treated
+the bits as inputs for years, but they do not establish whether GK104 samples
+the external pad, a local output loopback, or another internal status point.
+
+The init value `0x7` sets the two output-release bits and selects bitbang mode
+through bit 2. The documented bit 3 is the upper mode bit and is cleared; bits
+4/5 are named inputs. The register description leaves higher bits unnamed, so
+an undocumented writable field cannot be excluded, but neither Nouveau
+history nor EnvyTools documents a DDC-routing function cleared by this write.
+`0xd018` is a separate undocumented per-port register and is not touched by
+`0xd014 = 0x7`.
+
+The previous opt-in IBUF snapshot logs the full `0xd014` value immediately
+before and after the existing init write. A narrower `--diag-d014-sense`
+capture now does the same without reading `0xe1b8`, then samples after up to 32
+ordinary DDC line-drive transitions for address `0x50` on physical register
+`0xd014`. Each captured transition adds a 1 μs settle delay, up to 32 μs total;
+the sampler adds no line-drive operations or DDC transactions. When both output
+bits are released, it performs two additional immediate reads, giving three
+samples for that released state. Only the first 32 transitions are logged for
+the lifetime of the bus.
+
+This capture can establish whether the reported sense bits change with
+Nouveau's own drive/release commands and whether repeated reads are stable. A
+perfect match would strengthen local-loopback or isolated-path possibilities;
+different input values would show the sampled state can diverge from the
+commanded output, but would not prove the exact point in the electrical path
+being sensed. No persistent register change is justified by the current
+evidence.
+
+The full 184,320-byte ROM referenced in earlier notes is not present in the
+canonical repository or the currently available Downloads directory. The
+VBIOS conclusions above therefore remain limited to the previously recorded
+DCB, encoder-script, GPIO31, and `e1b8` decodes; a fresh neighborhood-wide
+register-write audit requires that ROM or a complete EnvyTools decode.
+
 ### Standard DDC-routing GPIOs
 
 EnvyTools defines explicit VBIOS GPIO functions including `I2C_OR_DDC`, `I2C_SCL_KEEPER_CIRCUIT_ENABLE`, and `DVI_DAC_SWITCH`. The decoded K4200 GPIO/mux evidence has not exposed an active matching control for this DVI-I path. This further weakens a conventional missing GPIO mux/enable theory, though it cannot rule out a vendor-private board net.
@@ -157,22 +206,25 @@ EnvyTools defines explicit VBIOS GPIO functions including `I2C_OR_DDC`, `I2C_SCL
 
 1. HPD-low detect logic bug — **confirmed and fixed**.
 2. DDC address-phase no-ACK at `0x50` — **confirmed remaining symptom**.
-3. DAC non-normal/load-detect state or active load-sense state changes the electrical DDC environment — **medium-high as a focused, testable mechanism; not proven**.
-4. Undocumented board-level level-shifter/rail/reset dependency — **low-medium, but near the static-analysis ceiling**.
-5. Undocumented target-bus IBUF state — **low**.
-6. GPIO31 direct DDC enable — **very low**.
-7. Known `e1b8` VBIOS sequence initializes target I2C0 — **very low**.
-8. Exclusive `pad_x` missing the known hybrid `.mode` programming — **very low**.
-9. Wrong DCB bus index — **very unlikely**.
-10. Generic bitbang implementation defect — **very unlikely**.
-11. Missing analog encoder script — **very unlikely**.
+3. D014 input-bit electrical mapping or undocumented init side effect — **unresolved, worth read-only capture; no write justified**.
+4. DAC non-normal/load-detect state or active load-sense state changes the electrical DDC environment — **medium-high as a focused, testable mechanism; not proven**.
+5. Undocumented board-level level-shifter/rail/reset dependency — **low-medium, but near the static-analysis ceiling**.
+6. Undocumented target-bus IBUF state — **low**.
+7. GPIO31 direct DDC enable — **very low**.
+8. Known `e1b8` VBIOS sequence initializes target I2C0 — **very low**.
+9. Exclusive `pad_x` missing the known hybrid `.mode` programming — **very low**.
+10. Wrong DCB bus index — **very unlikely**.
+11. Generic bitbang implementation defect — **very unlikely**.
+12. Missing analog encoder script — **very unlikely**.
 
 ## Static-analysis ceiling
 
 The remaining uncertainty is increasingly about undocumented electrical behavior inside the GPU/board rather than an identifiable missing Nouveau software step. Static analysis cannot determine the PCB destination of GPIO31 or the exact electrical side effects of the DAC load-detect registers on this board.
 
 The two-phase DAC/load-detect DDC diagnostic is available as an opt-in probe.
-The next software-only discriminator is the ACK-slot sampler described below.
+The ACK-slot sampler has captured the register's input bits, but their external
+pad semantics remain unvalidated. `--diag-d014-sense` is the next
+software-only discriminator.
 Do not invent a permanent register write before observing those results.
 
 ## Experiment safety
@@ -205,11 +257,13 @@ register address, not Nouveau's encoded bus ID.
 The diagnostic build defines `CONFIG_NOUVEAU_I2C_INTERNAL`, which Ubuntu's
 headers otherwise leave unset and which gates compilation of this existing
 implementation. The diagnostic boot sets `config=NvI2C=1` so that algorithm
-runs. On the captured GPU-side input, SCL bit 4 high with SDA bit 5 low means an ACK
-reached the GPU; SDA bit 5 high means no ACK was observed there. Because this
-test keeps the monitor connected, it cannot distinguish a monitor response
-from a board-level buffer or path failure. Missing samples are inconclusive
-until the active module configuration confirms `NvI2C=1`.
+runs. Under the documented input interpretation, SCL bit 4 high with SDA bit
+5 low is consistent with an ACK, while SDA bit 5 high is consistent with no
+ACK at the sampled input. The input-to-pad mapping remains unvalidated. Because
+this test keeps the monitor connected, even a confirmed external pad sample
+could not distinguish a monitor response from an intervening board-level
+buffer or path failure. Missing samples are inconclusive until the active
+module configuration confirms `NvI2C=1`.
 
 ## Firmware EDID snapshot
 

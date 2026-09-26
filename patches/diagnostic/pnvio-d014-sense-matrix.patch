@@ -1,0 +1,129 @@
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/bus.h
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/bus.h
+@@ -11,6 +11,7 @@
+ 	int (*sense_sda)(struct nvkm_i2c_bus *);
+ 	int (*xfer)(struct nvkm_i2c_bus *, struct i2c_msg *, int num);
+ 	int (*sample_ack)(struct nvkm_i2c_bus *, u32 samples[3]);
++	void (*diag_matrix)(struct nvkm_i2c_bus *, bool active);
+ };
+ 
+ int nvkm_i2c_bus_ctor(const struct nvkm_i2c_bus_func *, struct nvkm_i2c_pad *,
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/busgf119.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/busgf119.c
+@@ -21,13 +21,63 @@
+  *
+  * Authors: Ben Skeggs <bskeggs@redhat.com>
+  */
++#include <linux/delay.h>
++
+ #define gf119_i2c_bus(p) container_of((p), struct gf119_i2c_bus, base)
+ #include "bus.h"
+ 
+ struct gf119_i2c_bus {
+ 	struct nvkm_i2c_bus base;
+ 	u32 addr;
++	u8 diag_matrix_samples;
++	bool diag_matrix_active;
+ };
++
++static void
++gf119_i2c_bus_diag_sample(struct gf119_i2c_bus *bus, const char *line, int state)
++{
++	struct nvkm_device *device = bus->base.pad->i2c->subdev.device;
++	u32 raw0, raw1, raw2;
++	u8 n;
++
++	if (!bus->diag_matrix_active || bus->addr != 0x00d014 ||
++	    bus->diag_matrix_samples >= 32)
++		return;
++
++	/* Let the normal line transition settle before taking the read-only sample. */
++	udelay(1);
++	raw0 = nvkm_rd32(device, bus->addr);
++	n = ++bus->diag_matrix_samples;
++	if ((raw0 & 0x00000003) == 0x00000003) {
++		raw1 = nvkm_rd32(device, bus->addr);
++		raw2 = nvkm_rd32(device, bus->addr);
++		nvkm_info(&bus->base.pad->i2c->subdev,
++			  "DDC_DIAG: D014_MATRIX port=0 reg=d014 addr=50 "
++			  "n=%u op=%s drive=%s reads=3 "
++			  "raw=%08x,%08x,%08x scl=%d,%d,%d sda=%d,%d,%d\n",
++			  n, line, state ? "release" : "low", raw0, raw1, raw2,
++			  !!(raw0 & 0x00000010), !!(raw1 & 0x00000010),
++			  !!(raw2 & 0x00000010), !!(raw0 & 0x00000020),
++			  !!(raw1 & 0x00000020), !!(raw2 & 0x00000020));
++	} else {
++		nvkm_info(&bus->base.pad->i2c->subdev,
++			  "DDC_DIAG: D014_MATRIX port=0 reg=d014 addr=50 "
++			  "n=%u op=%s drive=%s reads=1 "
++			  "raw=%08x scl=%d sda=%d out=%d,%d\n",
++			  n, line, state ? "release" : "low", raw0,
++			  !!(raw0 & 0x00000010), !!(raw0 & 0x00000020),
++			  !!(raw0 & 0x00000001), !!(raw0 & 0x00000002));
++	}
++}
++
++static void
++gf119_i2c_bus_diag_matrix(struct nvkm_i2c_bus *base, bool active)
++{
++	struct gf119_i2c_bus *bus = gf119_i2c_bus(base);
++
++	if (bus->addr == 0x00d014)
++		bus->diag_matrix_active = active;
++}
+ 
+ static void
+ gf119_i2c_bus_drive_scl(struct nvkm_i2c_bus *base, int state)
+@@ -35,6 +85,7 @@
+ 	struct gf119_i2c_bus *bus = gf119_i2c_bus(base);
+ 	struct nvkm_device *device = bus->base.pad->i2c->subdev.device;
+ 	nvkm_mask(device, bus->addr, 0x00000001, state ? 0x00000001 : 0);
++	gf119_i2c_bus_diag_sample(bus, "SCL", state);
+ }
+ 
+ static void
+@@ -43,6 +94,7 @@
+ 	struct gf119_i2c_bus *bus = gf119_i2c_bus(base);
+ 	struct nvkm_device *device = bus->base.pad->i2c->subdev.device;
+ 	nvkm_mask(device, bus->addr, 0x00000002, state ? 0x00000002 : 0);
++	gf119_i2c_bus_diag_sample(bus, "SDA", state);
+ }
+ 
+ static int
+@@ -94,6 +146,7 @@
+ 	.sense_sda = gf119_i2c_bus_sense_sda,
+ 	.xfer = nvkm_i2c_bit_xfer,
+ 	.sample_ack = gf119_i2c_bus_sample_ack,
++	.diag_matrix = gf119_i2c_bus_diag_matrix,
+ };
+ 
+ int
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/bit.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/bit.c
+@@ -205,6 +205,17 @@
+ {
+ 	struct i2c_msg *msg = msgs;
+ 	int ret = 0, mcnt = num;
++	bool diag_matrix = false;
++	int i;
++
++	for (i = 0; i < num; i++) {
++		if (msgs[i].addr == 0x50) {
++			diag_matrix = true;
++			break;
++		}
++	}
++	if (bus->func->diag_matrix)
++		bus->func->diag_matrix(bus, diag_matrix);
+ 
+ 	while (!ret && mcnt--) {
+ 		u8 remaining = msg->len;
+@@ -226,6 +237,8 @@
+ 	}
+ 
+ 	i2c_stop(bus);
++	if (bus->func->diag_matrix)
++		bus->func->diag_matrix(bus, false);
+ 	return (ret < 0) ? ret : num;
+ }
+ #else
