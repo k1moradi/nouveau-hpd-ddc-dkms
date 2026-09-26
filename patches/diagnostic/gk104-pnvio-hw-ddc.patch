@@ -284,7 +284,7 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..06a9851545be373e183ad83bd6b3c5b9
  struct gf119_i2c_bus {
  	struct nvkm_i2c_bus base;
  	u32 addr;
-@@ -69,6 +74,157 @@ gf119_i2c_bus_init(struct nvkm_i2c_bus *base)
+@@ -69,6 +74,169 @@ gf119_i2c_bus_init(struct nvkm_i2c_bus *base)
  	nvkm_wr32(device, bus->addr, 0x00000007);
  }
  
@@ -348,11 +348,18 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..06a9851545be373e183ad83bd6b3c5b9
 +	const u32 d010 = bus->addr - 0x04;
 +	const u32 length = msgs[1].len;
 +	u32 saved_d014 = nvkm_rd32(device, bus->addr);
-+	u32 status = 0;
++	u32 d000_before;
++	u32 pre_idle_status = 0;
++	u32 command_status = 0;
++	u32 final_status = 0;
 +	u32 accumulator = 1;
 +	u32 bytes = 0;
 +	u32 chunks = 0;
++	u32 command = 0;
 +	bool started = false;
++	const char *failure_stage = "none";
++	int pre_idle_ret;
++	int final_wait_ret = 0;
 +	int ret = 0;
 +
 +	/*
@@ -367,9 +374,12 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..06a9851545be373e183ad83bd6b3c5b9
 +		return -EOPNOTSUPP;
 +	}
 +
++	d000_before = nvkm_rd32(device, d000);
++
 +	nvkm_info(subdev,
-+		  "DDC_DIAG: PNVIO_HW_DDC phase=start bus=d014 selector=%u address=50 offset=00 length=%u d014=%08x d008=%08x\n",
-+		  base->speed_sel, length, saved_d014, nvkm_rd32(device, d008));
++		  "DDC_DIAG: PNVIO_HW_DDC phase=start bus=d014 selector=%u address=50 offset=00 length=%u d014=%08x d008=%08x d000_before=%08x\n",
++		  base->speed_sel, length, saved_d014, nvkm_rd32(device, d008),
++		  d000_before);
 +
 +	/* GOP controller initialization for a non-hybrid GK104 PNVIO bus. */
 +	nvkm_wr32(device, d010, 0x000f4240);
@@ -379,9 +389,12 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..06a9851545be373e183ad83bd6b3c5b9
 +	/* Selector 3 maps to 400 kHz in this K4200 GOP. */
 +	nvkm_mask(device, d008, 0x00000fbc, 0x00000043);
 +
-+	ret = gf119_i2c_hw_wait(device, d000, &status);
-+	if (ret)
-+		goto done;
++	/*
++	 * The GOP calls its waiter here but ignores the return value. Preserve
++	 * that behavior: this poll observes prior status; it does not
++	 * reject the new request.
++	 */
++	pre_idle_ret = gf119_i2c_hw_wait(device, d000, &pre_idle_status);
 +
 +	/* D004 = (wire address 0xa0 >> 1) with block-0 offset field zero. */
 +	nvkm_wr32(device, d004, 0x00000050);
@@ -389,7 +402,6 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..06a9851545be373e183ad83bd6b3c5b9
 +
 +	while (bytes < length) {
 +		u32 count = min_t(u32, 4, length - bytes);
-+		u32 command;
 +
 +		command = ((count << 6) ^ accumulator) & 0x003fffc0;
 +		accumulator ^= command;
@@ -398,9 +410,11 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..06a9851545be373e183ad83bd6b3c5b9
 +			command |= 0x10000002;
 +
 +		nvkm_wr32(device, d000, command);
-+		ret = gf119_i2c_hw_wait(device, d000, &status);
-+		if (ret)
++		ret = gf119_i2c_hw_wait(device, d000, &command_status);
++		if (ret) {
++			failure_stage = "read-command";
 +			break;
++		}
 +
 +		{
 +			u32 word = nvkm_rd32(device, d00c);
@@ -414,16 +428,12 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..06a9851545be373e183ad83bd6b3c5b9
 +		chunks++;
 +	}
 +
-+	/* Match the GOP's final completion poll and controller stop command. */
++	/* The GOP ignores the return from this final status wait. */
 +	if (started) {
-+		int wait_ret = gf119_i2c_hw_wait(device, d000, &status);
-+
-+		if (!ret)
-+			ret = wait_ret;
++		final_wait_ret = gf119_i2c_hw_wait(device, d000, &final_status);
 +		nvkm_wr32(device, d000, 0x8000000c);
 +	}
 +
-+done:
 +	/*
 +	 * Return PNVIO to the saved line-control state so subsequent generic
 +	 * bitbang transfers see the same low control bits as before this probe.
@@ -434,8 +444,10 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..06a9851545be373e183ad83bd6b3c5b9
 +		ret = num;
 +
 +	nvkm_info(subdev,
-+		  "DDC_DIAG: PNVIO_HW_DDC phase=result ret=%d bytes=%u chunks=%u status=%08x d014_restored=%08x\n",
-+		  ret, bytes, chunks, status, nvkm_rd32(device, bus->addr));
++		  "DDC_DIAG: PNVIO_HW_DDC phase=result ret=%d bytes=%u chunks=%u failure_stage=%s d000_before=%08x pre_idle_ret=%d pre_idle_status=%08x d004=%08x command=%08x command_status=%08x final_wait_ret=%d final_status=%08x d014_restored=%08x\n",
++		  ret, bytes, chunks, failure_stage, d000_before, pre_idle_ret,
++		  pre_idle_status, 0x00000050, command, command_status,
++		  final_wait_ret, final_status, nvkm_rd32(device, bus->addr));
 +	return ret;
 +}
 +

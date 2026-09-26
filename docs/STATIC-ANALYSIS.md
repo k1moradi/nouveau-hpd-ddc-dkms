@@ -369,14 +369,32 @@ empty.
 The result's controller status field is `(0x30000050 >> 29) & 3 == 1`; the
 current Nouveau diagnostic maps any nonzero completed status to `-EIO`. The
 K4200 GOP transcript identifies status 0 as success but does not assign a
-portable meaning to nonzero status values. Therefore this is evidence that
-the hardware transfer path ran and completed with an error status, but it is
-not yet proof of an EDID address NACK. The logged `0xd014` value shows that
-the original low control bits were restored after each attempt.
+portable meaning to nonzero status values. These records prove the hardware
+backend was entered, but they do not show whether the D004 write or D000 read
+command occurred. The logged `0xd014` value shows that the original low
+control bits were restored after each attempt.
 
-Next, determine which GOP poll produced status 1 and whether the GOP assigns
-that status a specific meaning before changing the controller sequence. The
-current result log only exposes the final status value, not whether the
-pre-command idle poll or the read-command completion poll failed. Keep the
-diagnostic opt-in and do not retry the failed transaction through bitbang:
-the controller may already have started it.
+The start records also show the first attempt began with `D008=0001010e`,
+while subsequent attempts began with `D008=010a0043`; each attempt ended with
+`D014=00000037` restored. This is consistent with the GOP-derived D008 setup
+persisting across attempts and the line-control bits being restored. It does
+not establish that the first implementation issued a D000 read command.
+
+The ROM audit resolves the wait-call ordering. In GOP helper RVA 0x110cc, the
+status waiter at 0x10d78 is called from 0x11127 after checking that the
+destination and length are nonzero. Its return is ignored; the helper then
+writes D004 at 0x11158 and issues the D000 read command at 0x111b6. The next
+wait at 0x111bc is checked at 0x111c1, and failure skips reading D00C. A final
+wait at 0x11211 precedes the STOP command and is ignored. The 40 earlier
+records therefore remain ambiguous, but they may all reflect the pre-command
+wait that the first Linux implementation incorrectly treated as fatal.
+
+The diagnostic follow-up now records D000 before controller setup, the
+pre-command wait result, D004, the last D000 command, command-completion
+status, final-wait result, and `failure_stage`. It follows the GOP by
+continuing after a nonzero pre-command wait, checking the per-command wait,
+and recording but ignoring the final-wait return. D008 programming, command
+values, fallback behavior, and the no-replay rule are unchanged. A new boot is
+required to determine whether `0x90000057` itself returns status 1; that
+result would still not identify a physical EDID NACK without further status
+decoding.

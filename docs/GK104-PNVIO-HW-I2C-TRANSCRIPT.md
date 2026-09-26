@@ -14,6 +14,15 @@ is compressed. The decompressed image was 133,536 bytes and had SHA-256:
 
     ba478d3458e8323d20ac18de1034885aaf099a3d2c35edb0485a4c52599d8684
 
+The extraction was reproduced with
+[UEFIRomExtract](https://github.com/ccharon/UEFIRomExtract); the output size
+and hash matched the analyzed image. The relevant code was disassembled with
+GNU objdump using the PE image's RVA addresses, for example:
+
+    objdump -d -Mintel --start-address=0x110cc --stop-address=0x11254 gop.efi
+
+The original ROM and extracted EFI image remain outside the repository.
+
 The function locations below are RVAs in that decompressed PE image. The
 .text section's raw file offset and RVA are both 0x260, matching the
 disassembly addresses.
@@ -54,7 +63,7 @@ for the one-byte probe.
 | --- | --- | --- |
 | 0x10d78 | Controller status wait | Reads the per-port D000 register, waits while bit 31 is set, compares elapsed timer units with 0x9c4 (2500), and decodes status as (D000 >> 29) & 3. Status 0 is the success result used by the callers. There is no fixed poll count or sleep in the loop. |
 | 0x10eb4 | Enter hardware mode | Writes literal 0x00000003 to 0xd014 + port*0x20 and clears the GOP software-mode flag. |
-| 0x110cc | Hardware read | Packs D004 from `((wire_address >> 1) & 0x3ff) OR (mode_field << 11)`. The requested length controls the remaining-byte loop; each iteration puts `min(4, remaining)` in the D000 count field, polls completion, reads one 32-bit word from D00C, and copies the requested low-order bytes first. |
+| 0x110cc | Hardware read | Calls the status waiter once before programming D004 when the destination and length are nonzero; that return value is ignored. It then packs D004 from `((wire_address >> 1) & 0x3ff) OR (mode_field << 11)`. The requested length controls the remaining-byte loop; each iteration puts `min(4, remaining)` in the D000 count field, issues the command, polls completion, reads one 32-bit word from D00C on success, and copies the requested low-order bytes first. |
 | 0x11254 | Speed programming | For 400 kHz, writes `(old_D008 & 0xfffff043) OR 0x43`. Other recognized GOP values are 300 kHz `(... OR 0x50)` and 100/60 kHz `(... OR 0x10e)`; this diagnostic enables only selector 3 / 400 kHz. |
 | 0x11330 | Controller initialization | Writes 0x000f4240 to D010, enters hardware mode, and programs D008 with `(old_D008 & 0xff0a7fff) OR 0x010a0000`. It performs E50C/E500 hybrid-pad changes only when its hybrid-mode flag is set; this DVI-I port-0 path does not use that branch. |
 | 0x11903 | Hardware write | Uses the same D004 address packing and four-byte FIFO chunking, writes data to D00C, and issues D000 write commands. This write operation is documented but is not used by the diagnostic. |
@@ -63,6 +72,26 @@ for the one-byte probe.
 
 The GOP uses per-port registers at a 0x20 stride. For physical port 0 the
 registers are D000, D004, D008, D00C, D010, and D014.
+
+### Status-wait call sites in the hardware-read helper
+
+The call-site order was checked in the extracted 133,536-byte EFI image whose
+SHA-256 is recorded above. Disassembly of RVA 0x110cc shows:
+
+- At 0x11112 and 0x1111b, the helper checks for a non-null destination and a
+  nonzero length. When both are true, it calls the status waiter at 0x10d78
+  from 0x11127.
+- The return from that pre-command waiter is not tested. The helper continues
+  and writes D004 at 0x11158, then emits the D000 read command at 0x111b6.
+- It calls the waiter again at 0x111bc immediately after issuing the command.
+  The return is tested at 0x111c1; a nonzero result skips the D00C data read.
+- After the chunk loop, it calls the waiter at 0x11211 before issuing the
+  D000 cleanup command at 0x11224. This final wait's return is also ignored.
+
+Therefore, the pre-command status is observational/drain behavior, not a gate
+that cancels the read. A nonzero status there must be recorded but must not
+prevent the D004 write and first D000 read command if the Linux path is to
+match this GOP helper. The per-command waiter is the failure-producing check.
 
 ## Controller command details
 
@@ -83,10 +112,12 @@ iteration:
     read command before final marker = 0x80000014 | 0x41 = 0x80000055
     final read command = 0x80000055 | 0x10000002 = 0x90000057
 
-The helper polls D000 once, reads D00C once, and copies its low byte. There is
-no intermediate chunk or continuation. This establishes that the one-byte
-probe is a defined instance of the same recovered hardware-read operation as
-the 128-byte request.
+For a one-byte request, the helper calls the waiter before D004 once (ignoring
+its return), issues one final read command, calls the waiter after that command
+and checks its return, reads D00C once on success, then calls the waiter once
+more before STOP (ignoring that return). There is no intermediate chunk or
+continuation. This establishes that the one-byte probe is a defined instance
+of the same recovered hardware-read operation as the 128-byte request.
 
 For a read chunk of n bytes, the GOP updates an accumulator that begins at 1:
 
@@ -145,11 +176,15 @@ the NVKM bus lock. The log shape makes the rejected transaction visible while
 keeping message data bounded.
 
 Before entry the code requires D014's low control bits to be 0x7. It then
-writes the GOP controller initialization values, reads the base-block data
-through D000/D00C, issues the GOP D000 cleanup command, and restores the
-saved D014 low three control bits with Nouveau's existing masked-register
-access pattern. D008, D010, and D004 remain at the GOP-programmed values, as
-they do in the GOP flow.
+snapshots D000 before any controller write, writes the GOP controller
+initialization values, and runs the pre-command status waiter. As established
+by the call-site audit above, a nonzero return from that waiter is recorded
+but ignored. The code then writes D004, reads the base-block data through
+D000/D00C, records the checked per-command status and unchecked final-wait
+result, issues the GOP D000 cleanup command, and restores the saved D014 low
+three control bits with Nouveau's existing masked-register access pattern.
+D008, D010, and D004 remain at the GOP-programmed values, as they do in the
+GOP flow.
 
 The patch is applied only when the DKMS source contains
 diagnostic-pnvio-hw-ddc.enabled, created by
