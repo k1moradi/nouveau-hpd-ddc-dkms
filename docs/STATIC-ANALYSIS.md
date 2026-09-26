@@ -101,7 +101,28 @@ This makes the two-phase diagnostic especially discriminating:
 
 - immediate success after `normal=false` power programming, before the load-sense write: implicates the non-normal DAC control state;
 - immediate ENXIO but settled/load-sense success: implicates active load-sense state or settling time;
-- ENXIO in both powered phases: substantially weakens the entire DAC/load-detect-state family.
+- failure in both phases: weakens the entire DAC/load-detect-state family.
+
+### Follow-up result: both DAC phases fail
+
+The 2026-09-26 connected-monitor run used `--diag-dac-ddc --diag-d014-sense`.
+Repeated `DAC_POWERED_DDC` records failed both immediately after entering the
+non-normal DAC state and after the load-sense delay: `i2c_transfer()` returned
+`-5` (`-EIO`) with `edid0=ff`. This is a different errno from the earlier
+`-ENXIO` probes, but neither phase completed the two-message transfer. The
+same boot recorded 72 ACK-slot samples, all `0xd014=0x37` with `ack=0`.
+
+The verifier reported `PRE_LOAD_DDC: NO TRACE SAMPLE`, meaning it did not find
+the complete baseline I2C trace sequence it expects before the first DAC
+diagnostic. This does not negate the phase results or ACK-slot samples, but the
+run has no parsed baseline trace for a direct before/after comparison. No
+firmware-EDID snapshot was requested in this run; a prior enabled snapshot was
+all zeroes and invalid.
+
+Result: neither the non-normal DAC state nor active load sense after the
+settling interval was sufficient to make the sampled `0x50` transfer succeed.
+The DAC/load-sense-state family is now **low confidence**. This does not prove
+the physical connector voltage or exclude every DAC-related side effect.
 
 ## Static target 3: GPIO31 / `0x00d68c`, `0x00d604`, and `0x00e1b8`
 
@@ -184,13 +205,13 @@ bits are released, it performs two additional immediate reads, giving three
 samples for that released state. Only the first 32 transitions are logged for
 the lifetime of the bus.
 
-This capture can establish whether the reported sense bits change with
-Nouveau's own drive/release commands and whether repeated reads are stable. A
-perfect match would strengthen local-loopback or isolated-path possibilities;
-different input values would show the sampled state can diverge from the
-commanded output, but would not prove the exact point in the electrical path
-being sensed. No persistent register change is justified by the current
-evidence.
+The connected-monitor capture logged 32/32 allowed transitions. The sampled
+bits 4/5 tracked the commanded low/release states in these records; repeated
+reads while both lines were released were stable at `0x37`. At all 72 captured
+address ACK slots, the three reads were also `0x37` and Nouveau reported
+`ack=0`. This confirms the register responds to the observed transitions, but
+does not distinguish external-pad sensing from local loopback or an isolated
+path. No persistent register change is justified by the current evidence.
 
 The full 184,320-byte ROM referenced in earlier notes is not present in the
 canonical repository or the currently available Downloads directory. The
@@ -202,13 +223,13 @@ register-write audit requires that ROM or a complete EnvyTools decode.
 
 EnvyTools defines explicit VBIOS GPIO functions including `I2C_OR_DDC`, `I2C_SCL_KEEPER_CIRCUIT_ENABLE`, and `DVI_DAC_SWITCH`. The decoded K4200 GPIO/mux evidence has not exposed an active matching control for this DVI-I path. This further weakens a conventional missing GPIO mux/enable theory, though it cannot rule out a vendor-private board net.
 
-## Current candidate ranking after static analysis
+## Current candidate ranking after static analysis and diagnostics
 
 1. HPD-low detect logic bug — **confirmed and fixed**.
 2. DDC address-phase no-ACK at `0x50` — **confirmed remaining symptom**.
-3. D014 input-bit electrical mapping or undocumented init side effect — **unresolved, worth read-only capture; no write justified**.
-4. DAC non-normal/load-detect state or active load-sense state changes the electrical DDC environment — **medium-high as a focused, testable mechanism; not proven**.
-5. Undocumented board-level level-shifter/rail/reset dependency — **low-medium, but near the static-analysis ceiling**.
+3. Undocumented board-level level-shifter/rail/reset dependency — **low-medium, and the strongest remaining board-specific family**.
+4. D014 input-bit external-pad semantics — **unresolved after read-only capture; no write justified**.
+5. DAC non-normal/load-detect state or active load-sense state changes the electrical DDC environment — **low after repeated failure in both diagnostic phases**.
 6. Undocumented target-bus IBUF state — **low**.
 7. GPIO31 direct DDC enable — **very low**.
 8. Known `e1b8` VBIOS sequence initializes target I2C0 — **very low**.
@@ -219,13 +240,18 @@ EnvyTools defines explicit VBIOS GPIO functions including `I2C_OR_DDC`, `I2C_SCL
 
 ## Static-analysis ceiling
 
-The remaining uncertainty is increasingly about undocumented electrical behavior inside the GPU/board rather than an identifiable missing Nouveau software step. Static analysis cannot determine the PCB destination of GPIO31 or the exact electrical side effects of the DAC load-detect registers on this board.
+The remaining uncertainty is increasingly about undocumented electrical
+behavior inside the GPU/board rather than an identifiable missing Nouveau
+software step. Static analysis cannot determine the PCB destination of GPIO31,
+the D014 input bits' electrical sampling point, or the function of a private
+board-level DDC control.
 
-The two-phase DAC/load-detect DDC diagnostic is available as an opt-in probe.
-The ACK-slot sampler has captured the register's input bits, but their external
-pad semantics remain unvalidated. `--diag-d014-sense` is the next
-software-only discriminator.
-Do not invent a permanent register write before observing those results.
+The DAC/load-detect probe has now failed in both phases, and the D014
+drive/sense capture is complete. The next software-only discriminator is a
+neighborhood-wide audit of the full K4200 VBIOS. Its 184,320-byte image is not
+in the canonical repository or available Downloads directory; capture the
+already-loaded `vbios.rom` from debugfs before attempting a board-specific
+change. Do not invent a permanent register write before that audit.
 
 ## Experiment safety
 
@@ -265,15 +291,16 @@ could not distinguish a monitor response from an intervening board-level
 buffer or path failure. Missing samples are inconclusive until the active
 module configuration confirms `NvI2C=1`.
 
-The 2026-09-26 combined diagnostic boot produced no ACK-slot or matrix samples.
-Root inspection showed the loaded module's `config` parameter was `(null)`, and
-the generated dracut initramfs contained the DKMS module but not
+An initial 2026-09-26 attempt produced no ACK-slot or matrix samples. Root
+inspection showed the loaded module's `config` parameter was `(null)`, and the
+generated dracut initramfs contained the DKMS module but not
 `/etc/modprobe.d/99-nouveau-i2c-test.conf`. The option had only been staged on
 the root filesystem, after Nouveau was loaded from the initramfs. The installer
 now adds that modprobe file to dracut's `install_items` before refreshing the
-image. The D014 init snapshots (`0x33 -> 0x37`, then `0x37 -> 0x37`) and the
-firmware EDID snapshot (all zeroes, invalid header) remain useful independent
-observations; the missing samplers from that boot are inconclusive.
+image. Subsequent boots confirmed the internal I2C path and captured the
+samples described in Static target 4. An enabled firmware snapshot from an
+earlier boot contained all zeroes and an invalid header; it was not enabled for
+the later DAC-phase run.
 
 ## Firmware EDID snapshot
 
