@@ -211,6 +211,19 @@ else
     echo "nouveau-hpd-ddc: firmware EDID snapshot diagnostic is disabled"
 fi
 
+# Optional GK104/K4200 hardware PNVIO DDC path. The installer creates this
+# marker only for --diag-pnvio-hw-ddc; no NvI2C=1 setting or internal bitbang
+# compile option is needed.
+if [ -f "$PWD/diagnostic-pnvio-hw-ddc.enabled" ]; then
+    echo "nouveau-hpd-ddc: applying GK104 PNVIO hardware DDC diagnostic"
+    if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/diagnostic/gk104-pnvio-hw-ddc.patch"; then
+        echo "ERROR: GK104 PNVIO hardware DDC patch did not apply cleanly; refusing to guess." >&2
+        exit 2
+    fi
+else
+    echo "nouveau-hpd-ddc: GK104 PNVIO hardware DDC diagnostic is disabled"
+fi
+
 # Force the GNU C compiler even on systems where Clang is the interactive
 # default.  Remove inherited LLVM/Kbuild tool-selection variables first so a
 # shell/profile setting such as LLVM=1 cannot silently switch this DKMS build

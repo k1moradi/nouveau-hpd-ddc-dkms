@@ -2,11 +2,15 @@
 set -u
 
 NAME=nouveau-hpd-ddc
-VER=0.1.6
+VER=0.1.7
 k=$(uname -r)
 dac_ddc_diag_enabled=0
 if [ -f "/usr/src/$NAME-$VER/diagnostic-dac-ddc.enabled" ]; then
     dac_ddc_diag_enabled=1
+fi
+pnvio_hw_ddc_diag_enabled=0
+if [ -f "/usr/src/$NAME-$VER/diagnostic-pnvio-hw-ddc.enabled" ]; then
+    pnvio_hw_ddc_diag_enabled=1
 fi
 
 read_boot_log() {
@@ -162,9 +166,6 @@ nouveau_config=""
 nouveau_config_readable=0
 if nouveau_config=$(cat /sys/module/nouveau/parameters/config 2>/dev/null); then
     nouveau_config_readable=1
-elif command -v sudo >/dev/null 2>&1 && \
-     nouveau_config=$(sudo -n cat /sys/module/nouveau/parameters/config 2>/dev/null); then
-    nouveau_config_readable=1
 fi
 ack_slot_lines=$(printf '%s\n' "$boot_log" |
     grep -F 'DDC_DIAG: ACK_SLOT ' |
@@ -183,6 +184,22 @@ d014_matrix_lines=$(printf '%s\n' "$boot_log" |
     grep -F 'DDC_DIAG: D014_MATRIX ' || true)
 d014_matrix_count=$(printf '%s\n' "$d014_matrix_lines" |
     awk 'NF { count++ } END { print count + 0 }')
+pnvio_hw_ddc_lines=$(printf '%s\n' "$boot_log" |
+    grep -F 'DDC_DIAG: PNVIO_HW_DDC ' || true)
+pnvio_hw_ddc_start_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -c 'phase=start ' || true)
+pnvio_hw_ddc_result_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -c 'phase=result ' || true)
+pnvio_hw_ddc_probe_start_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -Ec 'phase=start .*length=1 ' || true)
+pnvio_hw_ddc_probe_success_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -Ec 'phase=result ret=2 bytes=1 chunks=1 ' || true)
+pnvio_hw_ddc_success_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -Ec 'phase=result ret=2 bytes=128 chunks=32 ' || true)
+pnvio_hw_ddc_unsupported_lines=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -F 'path=bitbang reason=unsupported-shape ' || true)
+pnvio_hw_ddc_transfer_lines=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -Fv 'path=bitbang reason=unsupported-shape ' || true)
 
 module_path=$(modinfo -n nouveau 2>/dev/null || true)
 module_vermagic=$(modinfo -F vermagic nouveau 2>/dev/null || true)
@@ -231,7 +248,7 @@ echo '=== ACK-slot diagnostic ==='
 if [ "$nouveau_config_readable" -eq 1 ]; then
     printf 'active nouveau config: %s\n' "$nouveau_config"
 else
-    echo 'active nouveau config: UNAVAILABLE (the sysfs parameter is root-readable only)'
+    echo 'active nouveau config: UNAVAILABLE (not readable by this user; kernel logs may confirm options)'
 fi
 case "$nouveau_config" in
     *NvI2C=1*) echo 'internal Nouveau I2C path: ACTIVE' ;;
@@ -265,6 +282,46 @@ else
     echo 'For each sample, SCL is bit 4 and SDA is bit 5; under the documented input interpretation, SCL high with SDA low is consistent with an ACK. External-pad semantics remain unvalidated.'
 fi
 
+echo '=== GK104 PNVIO hardware DDC diagnostic ==='
+if [ "$nouveau_config_readable" -eq 1 ]; then
+    case "$nouveau_config" in
+        *NvI2CHw=1*) echo 'active NvI2CHw option: ACTIVE' ;;
+        *) echo 'active NvI2CHw option: NOT ACTIVE (expected config=NvI2CHw=1)' ;;
+    esac
+else
+    if [ -n "$pnvio_hw_ddc_lines" ]; then
+        echo 'active NvI2CHw option: CONFIRMED by PNVIO_HW_DDC dispatcher logs'
+    else
+        echo 'active NvI2CHw option: UNAVAILABLE (sysfs config is unreadable and no dispatcher logs were found)'
+    fi
+fi
+printf 'diagnostic DKMS marker: %s\n' "$pnvio_hw_ddc_diag_enabled"
+printf 'hardware transfer starts: %s\n' "$pnvio_hw_ddc_start_count"
+printf 'hardware transfer results: %s\n' "$pnvio_hw_ddc_result_count"
+printf 'one-byte probe starts: %s\n' "$pnvio_hw_ddc_probe_start_count"
+printf 'one-byte probe successes: %s\n' "$pnvio_hw_ddc_probe_success_count"
+printf 'complete 128-byte GOP reads: %s\n' "$pnvio_hw_ddc_success_count"
+if [ "$pnvio_hw_ddc_diag_enabled" -eq 0 ]; then
+    echo 'The GK104 hardware DDC diagnostic was not enabled in the installed DKMS source.'
+elif [ "$pnvio_hw_ddc_lines" ]; then
+    echo 'Showing the latest 80 controller/fallback records:'
+    printf '%s\n' "$pnvio_hw_ddc_transfer_lines" | tail -n 80
+    if [ "$pnvio_hw_ddc_unsupported_lines" ]; then
+        echo 'First unsupported two-message shape (bounded details):'
+        printf '%s\n' "$pnvio_hw_ddc_unsupported_lines" | head -n 1
+    fi
+    if [ "$pnvio_hw_ddc_success_count" -gt 0 ]; then
+        echo 'The controller returned both EDID block-0 messages and all 128 bytes.'
+    elif [ "$pnvio_hw_ddc_start_count" -eq 0 ]; then
+        echo 'No hardware transfer started; any path=bitbang records show why a transfer used Linux bitbang.'
+    else
+        echo 'The hardware transfer did not complete as a full 128-byte read; use the result and status above.'
+    fi
+else
+    echo 'No PNVIO hardware samples found; result is inconclusive.'
+    echo 'Confirm NvI2CHw=1 was active and that GK104 bus 0 used DCB selector 3.'
+fi
+
 echo '=== D014 init and drive/sense diagnostic ==='
 if [ "$d014_init_count" -eq 0 ]; then
     echo 'No D014 init snapshot found; confirm --diag-d014-sense or --diag-ibuf was used.'
@@ -293,6 +350,8 @@ for e in /sys/class/drm/card*-DVI-I-*/edid; do
     found_edid=1
     printf '%s: ' "$e"
     stat -c '%s bytes' "$e"
+    printf '  header:'
+    od -An -tx1 -N16 "$e" 2>/dev/null || true
 done
 if [ "$found_edid" -eq 0 ]; then
     echo 'no DVI-I EDID sysfs file found'

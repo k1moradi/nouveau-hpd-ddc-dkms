@@ -18,6 +18,8 @@ generated DKMS staging data and are replaced during installation.
 | `patches/diagnostic/ack-slot-sampler.patch` | Optional read-only PNVIO ACK-slot sampler |
 | `patches/diagnostic/d014-init-snapshot.patch` | Optional read-only PNVIO port-0 init snapshot |
 | `patches/diagnostic/pnvio-d014-sense-matrix.patch` | Optional bounded sampling after normal I2C line drives |
+| patches/diagnostic/gk104-pnvio-hw-ddc.patch | Opt-in GK104/K4200 GOP-derived hardware DDC diagnostic |
+| docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md | Permanent K4200 GOP register and command transcript |
 | `docs/STATIC-ANALYSIS.md` | Current static-analysis conclusions and eliminated hypotheses |
 | `dkms/` | DKMS config, build script, and hooks |
 | `docs/BUG-REPORT.md` | Hardware and diagnostic evidence |
@@ -83,6 +85,55 @@ After saving the output, run a normal `pkexec ./install.sh` to rebuild without
 diagnostics and remove the temporary `NvI2C=1` module option for the next boot.
 `pkexec ./uninstall.sh` also removes that option.
 
+## GK104 GOP-backed hardware DDC diagnostic
+
+To test the K4200's GOP-derived PNVIO hardware controller with the monitor
+connected, install this diagnostic by itself:
+
+    pkexec ./install.sh --diag-pnvio-hw-ddc
+
+The canonical transcript at
+[docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md](docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md)
+records the GOP routines, register values, command/status fields, four-byte
+chunking, final STOP command, timeout, and retry behavior. The ROM binary stays
+outside Git.
+
+This first diagnostic is restricted to GK104, physical PNVIO port 0
+(register 0xd014), DCB selector 3, and exactly the two DRM EDID block-0
+shapes: msg0 address 0x50, flags 0, one-byte offset 0; msg1 address 0x50,
+flags I2C_M_RD, length 1 or 128. The one-byte read is DRM's DDC-presence
+probe. Selector 3 maps to 400 kHz in this K4200 GOP only. Other buses,
+selectors, and message forms stay on Linux i2c-algo-bit.
+
+The dispatcher chooses the path before acquiring the NVKM bus lock. The
+hardware transfer acquires the NVKM bus/pad once. Unsupported transactions
+call Linux i2c-algo-bit directly, so its existing callbacks acquire/release
+the bus without a nested lock. Once a hardware transaction may have started,
+an error is returned without replaying the request through bitbang.
+
+For this diagnostic boot the installer stages config=NvI2CHw=1 in the
+modprobe config and initramfs. It does not force NvI2C=1. Keep the monitor
+connected, reboot once, and run:
+
+    ./verify-after-reboot.sh
+
+Run the verifier as your normal user; it does not need sudo. It reads the
+current boot's kernel journal and public module/DKMS metadata, and reports when
+the active Nouveau sysfs config is not readable. In restricted shells where
+`NoNewPrivs` is set, `sudo` may refuse before starting the script.
+
+The verifier reports the active option, DKMS/module match, selector and
+message shape from the kernel log, controller result, EDID size, and header.
+A successful presence probe is ret=2, bytes=1, chunks=1. DRM should then
+request the full base block; success is ret=2, bytes=128, chunks=32. Check
+the EDID header and preserve the full log if the bytes are invalid or either
+transfer fails. No samples means the run is inconclusive.
+This is diagnostic work, not a resolution fix.
+
+Run a normal pkexec ./install.sh after saving the result. That rebuilds without
+the optional patch and removes NvI2CHw=1 from the next initramfs. Uninstall
+also removes the temporary module option.
+
 To capture the firmware-transferred EDID base block alongside the ACK-slot
 samples in the same diagnostic boot, install both opt-in diagnostics:
 
@@ -125,7 +176,7 @@ Treat this capture as evidence about register behavior; do not interpret a
 high SDA sample as proof that the monitor or board path failed to pull the
 physical line low without independent validation.
 
-The installer removes the known older DKMS revisions (0.1.0 through 0.1.5),
+The installer removes the known older DKMS revisions (0.1.0 through 0.1.6),
 copies this project's DKMS files and patches into the package staging directory,
 builds Nouveau for the running kernel, installs it, and updates the initramfs.
 It also cleans only this project's temporary build/test directories under
@@ -157,9 +208,9 @@ headers. A patch that no longer applies stops the build for review. The build
 uses GCC and all online logical CPUs by default; set `NOUVEAU_DKMS_JOBS=<N>` to
 limit parallelism or `NOUVEAU_DKMS_TMPDIR=/path` to choose a build location.
 
-The optional diagnostics are enabled only by their `install.sh` flags. A normal
+The optional diagnostics are enabled only by their install.sh flags. A normal
 install replaces the staged source and removes all diagnostic markers and the
-temporary `NvI2C=1` module option.
+temporary NvI2C=1 or NvI2CHw=1 module option.
 
 To create the Debian package from this same canonical source tree, run:
 
@@ -175,7 +226,7 @@ The generated package and staging tree live under ignored `build/` output.
 pkexec ./uninstall.sh
 ```
 
-This removes all known DKMS revisions from 0.1.0 through 0.1.6, their source
+This removes all known DKMS revisions from 0.1.0 through 0.1.7, their source
 staging directories, and project temporary trees, then refreshes module
 dependencies and initramfs files. Nouveau uses the distribution module after
 reboot.
@@ -186,8 +237,10 @@ The hardware setup and captured evidence are in [docs/BUG-REPORT.md](docs/BUG-RE
 The IBUF experiment remains diagnostic: the K4200 VBIOS setting bit 17 does not
 prove that bit 16 should be enabled, so the patch does not modify `0xe1b8`.
 
-Version 0.1.6 organizes the canonical patches, retires earlier DKMS revisions
-during installation, and fixes executable hook invocation. Versions 0.1.1 to
+Version 0.1.7 adds the opt-in GK104 GOP-backed PNVIO hardware DDC diagnostic
+and permanent GOP transcript. Version 0.1.6 organizes the canonical patches,
+retires earlier DKMS revisions during installation, and fixes executable hook
+invocation. Versions 0.1.1 to
 0.1.5 added Ubuntu kernel build compatibility, exact source retrieval, GCC
 selection, and bounded temporary-build cleanup.
 

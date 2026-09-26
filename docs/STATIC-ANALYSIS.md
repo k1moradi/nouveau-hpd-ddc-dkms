@@ -246,12 +246,15 @@ software step. Static analysis cannot determine the PCB destination of GPIO31,
 the D014 input bits' electrical sampling point, or the function of a private
 board-level DDC control.
 
-The DAC/load-detect probe has now failed in both phases, and the D014
-drive/sense capture is complete. The next software-only discriminator is a
-neighborhood-wide audit of the full K4200 VBIOS. Its 184,320-byte image is not
-in the canonical repository or available Downloads directory; capture the
-already-loaded `vbios.rom` from debugfs before attempting a board-specific
-change. Do not invent a permanent register write before that audit.
+The DAC/load-detect probe failed in both phases, and the D014 drive/sense
+capture is complete. The full 184,320-byte K4200 VBIOS was subsequently
+captured through Nouveau's read-only debugfs vbios.rom file and analyzed
+without BAR access. The ROM binary remains outside Git. Its GOP controller
+transcript is preserved in
+[GK104-PNVIO-HW-I2C-TRANSCRIPT.md](GK104-PNVIO-HW-I2C-TRANSCRIPT.md).
+That transcript now gates a narrowly scoped GK104 hardware-DDC diagnostic;
+the remaining uncertainty is whether that controller can retrieve block 0
+from this connected monitor.
 
 ## Experiment safety
 
@@ -319,3 +322,61 @@ validity test covers only the base block because this firmware handoff retains
 shows that firmware transferred an analog EDID, but does not alone prove that
 it belongs to the currently connected monitor. The flag can be combined with
 `--diag-ack-slot` so firmware and live DDC evidence are captured in one boot.
+
+## GK104 GOP-backed hardware DDC diagnostic
+
+The opt-in patches/diagnostic/gk104-pnvio-hw-ddc.patch is enabled only by
+install.sh --diag-pnvio-hw-ddc. It preserves the high DCB nibble as speed_sel
+and registers a dispatcher only when all of these are true: chipset GK104,
+physical register 0xd014, and selector 3. For this K4200 GOP, selector 3 maps
+to 400 kHz.
+
+The first hardware transactions are limited to the exact Linux DRM EDID
+block-0 shapes: msg0 address 0x50, flags 0, one-byte offset 0; msg1 address
+0x50, flags I2C_M_RD, length 1 or 128. The one-byte DDC-presence probe uses
+the same GOP read helper. Its length argument controls the remaining-byte
+loop; for length 1, the helper emits one final D000 read command (`0x90000057`)
+and reads one byte from D00C. The transcript records this derivation along
+with D004 address packing, D008/D010 setup, completion status, 128-byte
+four-byte continuation, final stop marker, timeout, and cleanup. The ROM is
+not stored in the repository.
+
+The custom dispatcher chooses the backend before acquiring the bus. Hardware
+takes NVKM bus/pad once. Unsupported shapes call exported i2c_bit_algo directly
+and let its pre_xfer/post_xfer callbacks acquire/release. Adapter functionality
+comes from the same Linux algorithm. Hardware errors after controller setup
+are returned without replay; only a read-only preflight rejection can fall
+back after releasing the NVKM lock.
+
+The diagnostic stages config=NvI2CHw=1, not NvI2C=1. Unsupported-shape
+records include bounded details for both messages, including flags, lengths,
+and the first write byte. The verifier reports the active option, one-byte
+probe and full-read counts, transfer selector and shape, controller result,
+module/DKMS match, and EDID header. The earlier boot reached no hardware
+transfer because the dispatcher admitted only length 128; it is inconclusive
+about the controller itself.
+
+### First hardware-backed boot
+
+The 2026-09-26 verifier output confirms the DKMS module path and loaded
+`srcversion` match, and `NvI2CHw=1` is confirmed by the dispatcher's kernel
+records. The backend started and returned from 40 exact one-byte DRM DDC
+presence probes. Every result was `ret=-5`, `bytes=0`, `chunks=0`,
+`status=30000050`, with `d014_restored=00000037`. No 128-byte read followed
+because the one-byte presence probe failed; the DVI-I EDID sysfs file remained
+empty.
+
+The result's controller status field is `(0x30000050 >> 29) & 3 == 1`; the
+current Nouveau diagnostic maps any nonzero completed status to `-EIO`. The
+K4200 GOP transcript identifies status 0 as success but does not assign a
+portable meaning to nonzero status values. Therefore this is evidence that
+the hardware transfer path ran and completed with an error status, but it is
+not yet proof of an EDID address NACK. The logged `0xd014` value shows that
+the original low control bits were restored after each attempt.
+
+Next, determine which GOP poll produced status 1 and whether the GOP assigns
+that status a specific meaning before changing the controller sequence. The
+current result log only exposes the final status value, not whether the
+pre-command idle poll or the read-command completion poll failed. Keep the
+diagnostic opt-in and do not retry the failed transaction through bitbang:
+the controller may already have started it.
