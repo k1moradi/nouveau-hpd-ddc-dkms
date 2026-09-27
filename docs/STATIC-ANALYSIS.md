@@ -344,9 +344,11 @@ not stored in the repository.
 The custom dispatcher chooses the backend before acquiring the bus. Hardware
 takes NVKM bus/pad once. Unsupported shapes call exported i2c_bit_algo directly
 and let its pre_xfer/post_xfer callbacks acquire/release. Adapter functionality
-comes from the same Linux algorithm. Hardware errors after controller setup
-are returned without replay; only a read-only preflight rejection can fall
-back after releasing the NVKM lock.
+comes from the same Linux algorithm. Hardware errors are never replayed through
+bitbang. The exact read-only EDID probe/base-block forms may receive the GOP's
+single 400-to-100 kHz hardware retry after bounded D014 line recovery; a
+read-only preflight rejection can instead fall back after releasing the NVKM
+lock.
 
 The diagnostic stages config=NvI2CHw=1, not NvI2C=1. Unsupported-shape
 records include bounded details for both messages, including flags, lengths,
@@ -440,9 +442,31 @@ diagnostic's generic `status != 0` mapping must not be generalized into a
 production implementation.
 
 The GOP EDID reader also has a success-gated method call at vtable offset
-`0x70` before its read method at offset `0x68`. Its implementation is still
-unresolved. Trace that caller-side gate and determine whether it performs a
-DDC readiness or initialization step before changing the controller
-protocol. The later `nve4_fuc084*` firmware-load failures in the verifier
-occurred minutes after these DDC attempts and concern video-decode firmware;
-this log does not connect them to the DDC status.
+`0x70` before its read method at offset `0x68`. Its implementation remains
+unresolved and could affect a later comparison with the Linux path. The 100 kHz
+diagnostic now reproduces the separately recovered request-dispatcher retry;
+it does not establish what this caller-side gate does. The later
+`nve4_fuc084*` firmware-load failures in the verifier occurred minutes after
+these DDC attempts and concern video-decode firmware; this log does not
+connect them to the DDC status.
+
+### GOP-derived 100 kHz retry audit
+
+The local K4200 GOP transcript now covers the 0x11c60 fallback and its
+0x11dc0 recovery callback. A completed nonzero read-helper result at 400 kHz
+selects 100 kHz, programs D008 with `(old & 0xfffff10e) | 0x10e`, performs
+the ignored status wait and STOP command, then invokes the bus recovery
+callback. If SDA is observed high during its bounded recovery, the dispatcher
+recurses through the same hardware-read helper. The Linux diagnostic mirrors
+only this 400-to-100 hardware retry for the already-admitted offset-zero EDID
+probe and base-block read. It does not add the GOP's later 60 kHz path or
+replay through bitbang.
+
+The recovery callback puts D014 into software line mode, waits 10 microseconds,
+then performs at most 16 cycles of SCL low/high and SDA sampling. Each cycle
+also invokes the GOP's 0x11588 line sequence, which waits up to six 1-microsecond
+polls for SCL to rise. The Linux diagnostic uses Nouveau's existing D014
+drive/sense callbacks for those lines, restores the saved low three D014 bits
+at transfer exit, and retains 100 kHz for subsequent diagnostic EDID requests.
+The hardware behavior still requires the next monitor-connected diagnostic
+boot; static agreement with the GOP transcript is not a runtime success.

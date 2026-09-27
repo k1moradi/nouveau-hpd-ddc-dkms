@@ -64,10 +64,11 @@ for the one-byte probe.
 | 0x10d78 | Controller status wait | Reads the per-port D000 register, waits while bit 31 is set, compares elapsed timer units with 0x9c4 (2500), and decodes status as (D000 >> 29) & 3. Status 1 returns the internal result 2 on the normal path. Status 2/3 branch on an object flag at offset 0x30; status 0/1 also consult that flag on the timeout path. There is no fixed poll count or sleep in the loop. |
 | 0x10eb4 | Enter hardware mode | Writes literal 0x00000003 to 0xd014 + port*0x20 and clears the GOP software-mode flag. |
 | 0x110cc | Hardware read | Calls the status waiter once before programming D004 when the destination and length are nonzero; that return value is ignored. It then packs D004 from `((wire_address >> 1) & 0x3ff) OR (mode_field << 11)`. The requested length controls the remaining-byte loop; each iteration puts `min(4, remaining)` in the D000 count field, issues the command, polls completion, reads one 32-bit word from D00C on success, and copies the requested low-order bytes first. |
-| 0x11254 | Speed programming | For 400 kHz, writes `(old_D008 & 0xfffff043) OR 0x43`. Other recognized GOP values are 300 kHz `(... OR 0x50)` and 100/60 kHz `(... OR 0x10e)`; this diagnostic enables only selector 3 / 400 kHz. |
+| 0x11254 | Speed programming | For 400 kHz, writes `(old_D008 & 0xfffff043) OR 0x43`. For 100 kHz, writes `(old_D008 & 0xfffff10e) OR 0x10e`. The checked dispatcher retries a failed 400/300 kHz read at 100 kHz. |
 | 0x11330 | Controller initialization | Writes 0x000f4240 to D010, enters hardware mode, and programs D008 with `(old_D008 & 0xff0a7fff) OR 0x010a0000`. It performs E50C/E500 hybrid-pad changes only when its hybrid-mode flag is set; this DVI-I port-0 path does not use that branch. |
 | 0x11903 | Hardware write | Uses the same D004 address packing and four-byte FIFO chunking, writes data to D00C, and issues D000 write commands. This write operation is documented but is not used by the diagnostic. |
-| 0x11c60 | GOP request dispatcher | Uses the hardware path at speeds of at least 100 kHz. It treats a zero result from the hardware-read helper as success and any nonzero result as failure; it does not distinguish status 1 from other helper errors at this point. Its lower-speed and retry paths can switch to software I²C. On hardware failure it retries 400/300 kHz at 100 kHz, then can retry 100 kHz at 60 kHz. The diagnostic intentionally does not copy those retries. |
+| 0x11c60 | GOP request dispatcher | Uses the hardware path at speeds of at least 100 kHz. It treats a zero result from the hardware-read helper as success and any nonzero result as failure; it does not distinguish status 1 from other helper errors here. A 400/300 kHz failure changes the rate to 100 kHz, calls vtable slot +0x70, and recursively retries only if that method succeeds. A later 100 kHz failure can proceed to 60 kHz; this diagnostic omits that fallback. |
+| 0x11dc0 | Retry line recovery | The bus vtable at RVA 0x1120 has the transfer method 0x11c60 at slot +0x68 and this recovery method at +0x70. It enters software line mode, then performs at most 16 SCL recovery cycles and returns success when SDA reads high. Each cycle also calls the line sequence at 0x11588. |
 | 0x1aec0 | EDID reader | Reads target wire address 0xa0, segment address 0x60, block index 0, and length 0x80. For block 0 there is no segment-pointer preamble; extension blocks use a separate path. |
 
 The GOP uses per-port registers at a 0x20 stride. For physical port 0 the
@@ -113,6 +114,45 @@ electrical condition. The Linux diagnostic currently maps every nonzero
 status field to `-EIO`; that agrees with the GOP's success/failure outcome for
 status 1, but should not be generalized to status fields 2 and 3, whose GOP
 handling depends on the unresolved object flag.
+
+### GOP 400-to-100 kHz retry
+
+The dispatcher call sites at RVA 0x11c60 were audited through the recursive
+retry. After the hardware-read helper returns, zero is marked successful at
+0x11ce1; any nonzero result reaches the rate fallback. A current rate of
+400000 or 300000 selects 100000 at 0x11d6c. The dispatcher calls the speed
+setter at 0x11254, then calls its own vtable slot +0x70 at 0x11d7c. The
+constructor at 0xccaa installs the vtable at 0x1120; that table entry points
+slot +0x70 to recovery routine 0x11dc0. Only a true return recurses into the
+same dispatcher at 0x11da7. The separate 100000-to-60000 transition is not
+enabled by this diagnostic.
+
+For the 100 kHz speed setter, 0x11254 writes
+`(old_D008 & 0xfffff10e) OR 0x10e`, waits on D000, ignores the wait result,
+and writes the D000 STOP command `0x8000000c` before the line-recovery call.
+It does not call controller initialization 0x11330 or rewrite D010. The
+recovery method 0x11dc0 switches to software line mode by copying D014 sense
+bits 4/5 into output bits 0/1. The bus constructor initializes the recovery
+period at object offset 0x24 to 1; the 400-to-100 dispatcher path calls
+0x11254 directly and does not change that period.
+
+The recovery method delays 10 units, drives SCL low, then performs at most 16
+cycles. Each cycle drives SCL high, delays 10 units, samples SDA after a
+one-period delay, and invokes 0x11588 even when SDA is already high. That
+sequence drives SDA low, cycles SCL low/high, waits for SCL high for at most
+six one-period polls, then (if SCL rose) drives SDA high, delays two periods,
+and returns SDA/SCL low. The caller ignores the sequence's return and reports
+recovery success if any sampled SDA value was high.
+
+On successful recovery, the recursive call enters the same 0x110cc read
+helper. Because recovery left the object in software mode, the helper invokes
+0x10eb4 at 0x1110d to write D014=3, then rewrites D004 and issues the same
+length-derived read command. Thus the retry changes D008, performs the
+bounded D014 line recovery, re-enters hardware mode, and repeats the same
+read; it does not rerun D010/controller initialization. The Linux diagnostic
+mirrors this one read-only retry for its exact offset-zero EDID probe/base
+block shapes and retains the 100 kHz rate for later transfers. It does not
+replay other I²C messages and does not add the GOP's 60 kHz fallback.
 
 ### EDID-reader caller gate
 

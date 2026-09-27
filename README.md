@@ -109,7 +109,10 @@ The dispatcher chooses the path before acquiring the NVKM bus lock. The
 hardware transfer acquires the NVKM bus/pad once. Unsupported transactions
 call Linux i2c-algo-bit directly, so its existing callbacks acquire/release
 the bus without a nested lock. Once a hardware transaction may have started,
-an error is returned without replaying the request through bitbang.
+an error is never replayed through bitbang. For the exact offset-zero EDID
+probe/base-block shapes only, a failed 400 kHz read gets the GOP-derived
+100 kHz hardware retry after its bounded D014 line-recovery sequence. There is
+no 60 kHz fallback, and the 100 kHz rate is retained for later EDID reads.
 
 For this diagnostic boot the installer stages config=NvI2CHw=1 in the
 modprobe config and initramfs. It does not force NvI2C=1. Keep the monitor
@@ -176,7 +179,7 @@ Treat this capture as evidence about register behavior; do not interpret a
 high SDA sample as proof that the monitor or board path failed to pull the
 physical line low without independent validation.
 
-The installer removes the known older DKMS revisions (0.1.0 through 0.1.6),
+The installer removes the known older DKMS revisions (0.1.0 through 0.1.7),
 copies this project's DKMS files and patches into the package staging directory,
 builds Nouveau for the running kernel, installs it, and updates the initramfs.
 It also cleans only this project's temporary build/test directories under
@@ -226,7 +229,7 @@ The generated package and staging tree live under ignored `build/` output.
 pkexec ./uninstall.sh
 ```
 
-This removes all known DKMS revisions from 0.1.0 through 0.1.7, their source
+This removes all known DKMS revisions from 0.1.0 through 0.1.8, their source
 staging directories, and project temporary trees, then refreshes module
 dependencies and initramfs files. Nouveau uses the distribution module after
 reboot.
@@ -237,8 +240,10 @@ The hardware setup and captured evidence are in [docs/BUG-REPORT.md](docs/BUG-RE
 The IBUF experiment remains diagnostic: the K4200 VBIOS setting bit 17 does not
 prove that bit 16 should be enabled, so the patch does not modify `0xe1b8`.
 
-Version 0.1.7 adds the opt-in GK104 GOP-backed PNVIO hardware DDC diagnostic
-and permanent GOP transcript. Version 0.1.6 organizes the canonical patches,
+Version 0.1.8 adds the GOP-derived 400-to-100 kHz hardware retry and bounded
+D014 line recovery to the opt-in GK104 diagnostic. Version 0.1.7 introduced
+the hardware DDC diagnostic and permanent GOP transcript. Version 0.1.6
+organizes the canonical patches,
 retires earlier DKMS revisions during installation, and fixes executable hook
 invocation. Versions 0.1.1 to
 0.1.5 added Ubuntu kernel build compatibility, exact source retrieval, GCC
