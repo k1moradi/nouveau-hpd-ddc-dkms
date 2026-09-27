@@ -2,7 +2,7 @@
 set -u
 
 NAME=nouveau-hpd-ddc
-VER=0.1.10
+VER=0.1.11
 k=$(uname -r)
 dac_ddc_diag_enabled=0
 if [ -f "/usr/src/$NAME-$VER/diagnostic-dac-ddc.enabled" ]; then
@@ -11,6 +11,10 @@ fi
 pnvio_hw_ddc_diag_enabled=0
 if [ -f "/usr/src/$NAME-$VER/diagnostic-pnvio-hw-ddc.enabled" ]; then
     pnvio_hw_ddc_diag_enabled=1
+fi
+board_pad_post_diag_enabled=0
+if [ -f "/usr/src/$NAME-$VER/diagnostic-board-pad-post.enabled" ]; then
+    board_pad_post_diag_enabled=1
 fi
 
 read_boot_log() {
@@ -184,6 +188,22 @@ d014_matrix_lines=$(printf '%s\n' "$boot_log" |
     grep -F 'DDC_DIAG: D014_MATRIX ' || true)
 d014_matrix_count=$(printf '%s\n' "$d014_matrix_lines" |
     awk 'NF { count++ } END { print count + 0 }')
+board_pad_post_lines=$(printf '%s\n' "$boot_log" |
+    grep -F 'DDC_DIAG: BOARD_PAD ' || true)
+board_pad_post_decision_count=$(printf '%s\n' "$board_pad_post_lines" |
+    grep -c 'phase=devinit-post-decision ' || true)
+board_pad_post_raw_true_count=$(printf '%s\n' "$board_pad_post_lines" |
+    grep -c 'phase=devinit-post-decision .*raw_post=1' || true)
+board_pad_post_call_count=$(printf '%s\n' "$board_pad_post_lines" |
+    grep -c 'phase=devinit-post-call ' || true)
+board_pad_post_execute_count=$(printf '%s\n' "$board_pad_post_lines" |
+    grep -c 'phase=devinit-post-call execute=1' || true)
+board_pad_gpio_count=$(printf '%s\n' "$board_pad_post_lines" |
+    grep -c 'phase=gpio31-script ' || true)
+board_pad_gpio_execute_count=$(printf '%s\n' "$board_pad_post_lines" |
+    grep -c 'phase=gpio31-script .*execute=1' || true)
+board_pad_gpio_skip_count=$(printf '%s\n' "$board_pad_post_lines" |
+    grep -c 'phase=gpio31-script .*execute=0' || true)
 pnvio_hw_ddc_lines=$(printf '%s\n' "$boot_log" |
     grep -F 'DDC_DIAG: PNVIO_HW_DDC ' || true)
 pnvio_hw_ddc_start_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
@@ -405,6 +425,24 @@ if [ "$firmware_edid_count" -eq 0 ]; then
     echo 'No firmware EDID snapshot records found; confirm --diag-firmware-edid was used and DVI-I detection reached the analog fallback.'
 else
     printf '%s\n' "$firmware_edid_lines"
+fi
+
+echo '=== GK104 POST / GPIO31 read-only trace ==='
+printf 'diagnostic DKMS marker: %s\n' "$board_pad_post_diag_enabled"
+printf 'POST decision snapshots: %s (raw_post=1: %s)\n' \
+    "$board_pad_post_decision_count" "$board_pad_post_raw_true_count"
+printf 'effective nvbios_post calls: %s (execute=1: %s)\n' \
+    "$board_pad_post_call_count" "$board_pad_post_execute_count"
+printf 'GPIO31 interpreter operations: %s (execute=1: %s, execute=0: %s)\n' \
+    "$board_pad_gpio_count" "$board_pad_gpio_execute_count" "$board_pad_gpio_skip_count"
+if [ "$board_pad_post_diag_enabled" -eq 0 ] && [ -z "$board_pad_post_lines" ]; then
+    echo 'The GK104 POST/GPIO31 trace was not enabled in the installed DKMS source.'
+elif [ -z "$board_pad_post_lines" ]; then
+    echo 'No trace records found; result is inconclusive. Confirm the DKMS module loaded and the GPU is GK104.'
+else
+    printf '%s\n' "$board_pad_post_lines" | head -n 80
+    echo 'raw_post records the 0x2240c decision before overrides; devinit-post-call records the effective execute argument passed to nvbios_post().'
+    echo 'A GPIO31 execute=1 record means the existing interpreter write passes its execution guard; execute=0 means that reached opcode was skipped by script conditions. No GPIO record alone does not prove the conditional script path was absent.'
 fi
 
 echo '=== EDID ==='

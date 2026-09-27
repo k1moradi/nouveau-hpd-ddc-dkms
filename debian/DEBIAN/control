@@ -1,5 +1,5 @@
 Package: nouveau-hpd-ddc-dkms
-Version: 0.1.10
+Version: 0.1.11
 Section: kernel
 Priority: optional
 Architecture: all
@@ -8,4 +8,5 @@ Maintainer: Local Administrator <root@localhost>
 Description: DKMS rebuild of Ubuntu Nouveau with HPD/DDC fix and diagnostics
  Builds Nouveau from matching Ubuntu kernel sources and applies the maintained
  HPD-low/DDC patch. Optional read-only PNVIO diagnostics, DAC load-detect
- probing, and the opt-in GK104 K4200 hardware DDC diagnostic are available.
+ probing, the opt-in GK104 K4200 hardware DDC diagnostic, and the read-only
+ GK104 POST/GPIO31 interpreter trace are available.

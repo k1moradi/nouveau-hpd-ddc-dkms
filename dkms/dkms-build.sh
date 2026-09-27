@@ -224,6 +224,18 @@ else
     echo "nouveau-hpd-ddc: GK104 PNVIO hardware DDC diagnostic is disabled"
 fi
 
+# Optional read-only POST decision and GPIO31 interpreter trace. This marker is
+# created only by --diag-board-pad-post; it adds no module option or DDC probe.
+if [ -f "$PWD/diagnostic-board-pad-post.enabled" ]; then
+    echo "nouveau-hpd-ddc: applying read-only GK104 POST/GPIO31 trace"
+    if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/diagnostic/gk104-post-gpio31-trace.patch"; then
+        echo "ERROR: GK104 POST/GPIO31 trace patch did not apply cleanly; refusing to guess." >&2
+        exit 2
+    fi
+else
+    echo "nouveau-hpd-ddc: GK104 POST/GPIO31 trace is disabled"
+fi
+
 # Force the GNU C compiler even on systems where Clang is the interactive
 # default.  Remove inherited LLVM/Kbuild tool-selection variables first so a
 # shell/profile setting such as LLVM=1 cannot silently switch this DKMS build

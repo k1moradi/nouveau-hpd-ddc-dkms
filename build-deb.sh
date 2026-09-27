@@ -24,7 +24,9 @@ cp -a "$ROOT/patches/diagnostic/d014-init-snapshot.patch" "$SRC/patches/diagnost
 cp -a "$ROOT/patches/diagnostic/pnvio-d014-sense-matrix.patch" "$SRC/patches/diagnostic/"
 cp -a "$ROOT/patches/diagnostic/firmware-edid-snapshot.patch" "$SRC/patches/diagnostic/"
 cp -a "$ROOT/patches/diagnostic/gk104-pnvio-hw-ddc.patch" "$SRC/patches/diagnostic/"
+cp -a "$ROOT/patches/diagnostic/gk104-post-gpio31-trace.patch" "$SRC/patches/diagnostic/"
 cp -a "$ROOT/docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md" "$SRC/docs/"
+cp -a "$ROOT/docs/BOARD-PAD-POST-DIAGNOSTIC.md" "$SRC/docs/"
 cp -a "$ROOT/debian/DEBIAN/." "$STAGE/DEBIAN/"
 
 chmod 0755 \

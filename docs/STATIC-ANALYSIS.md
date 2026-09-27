@@ -564,3 +564,24 @@ clock variants are not justified by this evidence. Distinguishing those last
 classes requires observation on the physical DDC path (for example, SDA/SCL
 at the VGA connector and, if accessible, across any board buffer) or new
 board-specific evidence identifying the relevant enable state.
+
+### 0.1.11 read-only POST/GPIO31 trace (boot result pending)
+
+The separate board/pad review branch adds an opt-in, GK104-only trace for the
+remaining POST-flow question. It reuses the existing `0x02240c` read to report
+the raw POST decision, logs the effective `execute` argument immediately
+before the existing `nvbios_post()` call, and records reached interpreter
+operations for register `0x00d68c` with values `0x00002000` or `0x00001000`.
+Each GPIO record includes the interpreter cursor and whether the existing
+execution guard permits the corresponding write. The patch adds no register
+write, GPIO operation, DDC transfer, or module option. No hardware result has
+been captured for this diagnostic yet.
+
+The records answer different questions. The raw POST bit can differ from the
+effective callback argument after option overrides; an enabled POST callback
+does not prove conditional script flow reached GPIO31. A GPIO operation with
+`execute=1` shows that the normal interpreter reached the operation and will
+perform its existing write; `execute=0` shows it was reached but skipped.
+Absence of either GPIO record by itself does not prove that the pulse was
+absent from all VBIOS paths. Neither result identifies GPIO31's board
+function. Do not manually toggle it based on this trace.

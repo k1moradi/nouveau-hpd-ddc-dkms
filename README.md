@@ -18,8 +18,10 @@ generated DKMS staging data and are replaced during installation.
 | `patches/diagnostic/ack-slot-sampler.patch` | Optional read-only PNVIO ACK-slot sampler |
 | `patches/diagnostic/d014-init-snapshot.patch` | Optional read-only PNVIO port-0 init snapshot |
 | `patches/diagnostic/pnvio-d014-sense-matrix.patch` | Optional bounded sampling after normal I2C line drives |
-| patches/diagnostic/gk104-pnvio-hw-ddc.patch | Opt-in GK104/K4200 GOP-derived hardware DDC diagnostic |
-| docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md | Permanent K4200 GOP register and command transcript |
+| `patches/diagnostic/gk104-pnvio-hw-ddc.patch` | Opt-in GK104/K4200 GOP-derived hardware DDC diagnostic |
+| `patches/diagnostic/gk104-post-gpio31-trace.patch` | Opt-in read-only GK104 POST decision and GPIO31 interpreter trace |
+| `docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md` | Permanent K4200 GOP register and command transcript |
+| `docs/BOARD-PAD-POST-DIAGNOSTIC.md` | POST/GPIO31 trace scope and interpretation |
 | `docs/STATIC-ANALYSIS.md` | Current static-analysis conclusions and eliminated hypotheses |
 | `dkms/` | DKMS config, build script, and hooks |
 | `docs/BUG-REPORT.md` | Hardware and diagnostic evidence |
@@ -182,7 +184,32 @@ Treat this capture as evidence about register behavior; do not interpret a
 high SDA sample as proof that the monitor or board path failed to pull the
 physical line low without independent validation.
 
-The installer removes the known older DKMS revisions (0.1.0 through 0.1.8),
+## GK104 POST and GPIO31 trace
+
+To record the hardware-derived POST decision, the effective `nvbios_post()`
+argument, and whether the normal VBIOS interpreter reaches the GPIO31 assert
+and release writes, use:
+
+```bash
+pkexec ./install.sh --diag-board-pad-post
+```
+
+This diagnostic is GK104-only and read-only. It adds no register write, GPIO
+toggle, DDC transaction, `NvI2C`/`NvI2CHw` option, or manual POST action. The
+verifier prints the raw `0x2240c` decision, the effective POST callback
+argument after overrides, and each reached `0xd68c` write with its
+interpreter cursor and `execute` state. `execute=1` on a GPIO record means the
+existing opcode passes the interpreter's execution guard; a POST call with
+`execute=1` does not prove that conditional VBIOS flow reaches the GPIO
+subroutine. A missing GPIO record is therefore inconclusive by itself.
+Full interpretation and commands are in
+[docs/BOARD-PAD-POST-DIAGNOSTIC.md](docs/BOARD-PAD-POST-DIAGNOSTIC.md).
+
+Keep the monitor connected for one reboot, then run
+`./verify-after-reboot.sh` as the normal user. After saving the trace, run a
+normal `pkexec ./install.sh` to rebuild without the optional patch.
+
+The installer removes the known older DKMS revisions (0.1.0 through 0.1.10),
 copies this project's DKMS files and patches into the package staging directory,
 builds Nouveau for the running kernel, installs it, and updates the initramfs.
 It also cleans only this project's temporary build/test directories under
@@ -232,7 +259,7 @@ The generated package and staging tree live under ignored `build/` output.
 pkexec ./uninstall.sh
 ```
 
-This removes all known DKMS revisions from 0.1.0 through 0.1.10, their source
+This removes all known DKMS revisions from 0.1.0 through 0.1.11, their source
 staging directories, and project temporary trees, then refreshes module
 dependencies and initramfs files. Nouveau uses the distribution module after
 reboot.
@@ -243,7 +270,9 @@ The hardware setup and captured evidence are in [docs/BUG-REPORT.md](docs/BUG-RE
 The IBUF experiment remains diagnostic: the K4200 VBIOS setting bit 17 does not
 prove that bit 16 should be enabled, so the patch does not modify `0xe1b8`.
 
-Version 0.1.10 corrects the GOP software-line recovery and adds the
+Version 0.1.11 adds the read-only GK104 POST-decision, effective POST-call,
+and conditional GPIO31 interpreter trace. Version 0.1.10 corrects the GOP
+software-line recovery and adds the
 ROM-derived 100-to-60 software EDID path after the 400/100 kHz hardware
 attempts fail. It logs each segment/address stage and captures returned EDID
 bytes. Version 0.1.9 added the GOP caller's ordered initialization waits,

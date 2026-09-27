@@ -1,0 +1,36 @@
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/devinit/gf100.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/devinit/gf100.c
+@@ -95,0 +96 @@
++	u32 r2240c = nvkm_rd32(device, 0x2240c);
+@@ -101 +102,6 @@
+-	base->post = ((nvkm_rd32(device, 0x2240c) & BIT(1)) == 0);
++	base->post = ((r2240c & BIT(1)) == 0);
++	if (device->chipset == 0xe4)
++		nvkm_info(subdev,
++			 "DDC_DIAG: BOARD_PAD phase=devinit-post-decision "
++			 "r2240c=%08x raw_post=%u\n", r2240c,
++			 (unsigned int)base->post);
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/devinit/nv04.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/devinit/nv04.c
+@@ -395,0 +396,4 @@
++	if (init->subdev.device->chipset == 0xe4)
++		nvkm_info(&init->subdev,
++			 "DDC_DIAG: BOARD_PAD phase=devinit-post-call execute=%u\n",
++			 (unsigned int)execute);
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/bios/init.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/bios/init.c
+@@ -194,0 +195,2 @@
++	bool execute;
++
+@@ -196 +198,10 @@
+-	if (reg != ~0 && init_exec(init))
++	if (reg == ~0)
++		return;
++	execute = init_exec(init);
++	if (device->chipset == 0xe4 && reg == 0x00d68c &&
++	    (val == 0x00002000 || val == 0x00001000))
++		nvkm_info(init->subdev,
++			 "DDC_DIAG: BOARD_PAD phase=gpio31-script "
++			 "vbios_offset=%06x reg=%08x value=%08x execute=%u\n",
++			 init->offset, reg, val, (unsigned int)execute);
++	if (execute)

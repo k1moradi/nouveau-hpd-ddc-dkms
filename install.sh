@@ -1,7 +1,7 @@
 #!/bin/bash
 set -Eeuo pipefail
 NAME=nouveau-hpd-ddc
-VER=0.1.10
+VER=0.1.11
 SRC_DIR="/usr/src/$NAME-$VER"
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 diag_ibuf=0
@@ -10,6 +10,7 @@ diag_ack_slot=0
 diag_firmware_edid=0
 diag_d014_sense=0
 diag_pnvio_hw_ddc=0
+diag_board_pad_post=0
 
 for arg in "$@"; do
     case "$arg" in
@@ -19,8 +20,9 @@ for arg in "$@"; do
         --diag-firmware-edid) diag_firmware_edid=1 ;;
         --diag-d014-sense) diag_d014_sense=1; diag_ack_slot=1 ;;
         --diag-pnvio-hw-ddc) diag_pnvio_hw_ddc=1 ;;
+        --diag-board-pad-post) diag_board_pad_post=1 ;;
         *)
-            echo "Usage: $0 [--diag-ibuf] [--diag-dac-ddc] [--diag-ack-slot] [--diag-firmware-edid] [--diag-d014-sense] [--diag-pnvio-hw-ddc]" >&2
+            echo "Usage: $0 [--diag-ibuf] [--diag-dac-ddc] [--diag-ack-slot] [--diag-firmware-edid] [--diag-d014-sense] [--diag-pnvio-hw-ddc] [--diag-board-pad-post]" >&2
             exit 2
             ;;
     esac
@@ -29,6 +31,12 @@ done
 if [ "$diag_pnvio_hw_ddc" -eq 1 ] &&
    [ "$((diag_ibuf + diag_dac_ddc + diag_ack_slot + diag_firmware_edid + diag_d014_sense))" -ne 0 ]; then
     echo "ERROR: --diag-pnvio-hw-ddc must run alone so the GOP-backed transfer has an unambiguous result." >&2
+    exit 2
+fi
+
+if [ "$diag_board_pad_post" -eq 1 ] &&
+   [ "$((diag_ibuf + diag_dac_ddc + diag_ack_slot + diag_firmware_edid + diag_d014_sense + diag_pnvio_hw_ddc))" -ne 0 ]; then
+    echo "ERROR: --diag-board-pad-post must run alone so the POST/GPIO trace stays observational and unambiguous." >&2
     exit 2
 fi
 
@@ -47,7 +55,9 @@ for source_file in \
     patches/diagnostic/pnvio-d014-sense-matrix.patch \
     patches/diagnostic/firmware-edid-snapshot.patch \
     patches/diagnostic/gk104-pnvio-hw-ddc.patch \
-    docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md; do
+    patches/diagnostic/gk104-post-gpio31-trace.patch \
+    docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md \
+    docs/BOARD-PAD-POST-DIAGNOSTIC.md; do
     if [ ! -f "$HERE/$source_file" ]; then
         echo "ERROR: canonical project source is missing: $HERE/$source_file" >&2
         exit 2
@@ -85,7 +95,7 @@ apt-get install -y \
     "linux-source-$base"
 
 # Clean up failed/older test revisions before installing this revision.
-for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8 0.1.9; do
+for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8 0.1.9 0.1.10; do
     if dkms status -m "$NAME" -v "$oldver" 2>/dev/null | grep -q .; then
         echo "Removing older DKMS revision $NAME/$oldver"
         dkms remove -m "$NAME" -v "$oldver" --all
@@ -94,7 +104,7 @@ for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8 0.1.9; do
     rm -rf "/var/lib/dkms/$NAME/$oldver"
 done
 
-for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8 0.1.9; do
+for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8 0.1.9 0.1.10; do
     if dkms status -m "$NAME" -v "$oldver" 2>/dev/null | grep -q . \
         || [ -e "/usr/src/$NAME-$oldver" ] \
         || [ -e "/var/lib/dkms/$NAME/$oldver" ]; then
@@ -120,8 +130,10 @@ cp -a "$HERE/patches/diagnostic/d014-init-snapshot.patch" "$SRC_DIR/patches/diag
 cp -a "$HERE/patches/diagnostic/pnvio-d014-sense-matrix.patch" "$SRC_DIR/patches/diagnostic/"
 cp -a "$HERE/patches/diagnostic/firmware-edid-snapshot.patch" "$SRC_DIR/patches/diagnostic/"
 cp -a "$HERE/patches/diagnostic/gk104-pnvio-hw-ddc.patch" "$SRC_DIR/patches/diagnostic/"
+cp -a "$HERE/patches/diagnostic/gk104-post-gpio31-trace.patch" "$SRC_DIR/patches/diagnostic/"
 mkdir -p "$SRC_DIR/docs"
 cp -a "$HERE/docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md" "$SRC_DIR/docs/"
+cp -a "$HERE/docs/BOARD-PAD-POST-DIAGNOSTIC.md" "$SRC_DIR/docs/"
 if [ "$diag_ibuf" -eq 1 ]; then
     touch "$SRC_DIR/diagnostic-ibuf.enabled"
     echo "Enabling read-only IBUF state diagnostics for this DKMS build."
@@ -145,6 +157,10 @@ fi
 if [ "$diag_pnvio_hw_ddc" -eq 1 ]; then
     touch "$SRC_DIR/diagnostic-pnvio-hw-ddc.enabled"
     echo "Enabling the GK104 PNVIO hardware DDC diagnostic."
+fi
+if [ "$diag_board_pad_post" -eq 1 ]; then
+    touch "$SRC_DIR/diagnostic-board-pad-post.enabled"
+    echo "Enabling read-only GK104 devinit/GPIO31 interpreter tracing."
 fi
 
 dkms add -m "$NAME" -v "$VER"
@@ -194,6 +210,10 @@ if [ "$diag_pnvio_hw_ddc" -eq 1 ]; then
     echo "Keep the monitor connected for one diagnostic reboot, then run ./verify-after-reboot.sh."
     echo "This stages NvI2CHw=1 only; it does not force NvI2C=1."
     echo "After saving the result, run install.sh without diagnostic flags to remove the temporary option."
+elif [ "$diag_board_pad_post" -eq 1 ]; then
+    echo "Keep the monitor connected for one diagnostic reboot, then run ./verify-after-reboot.sh."
+    echo "This trace adds no register writes, GPIO toggles, DDC transactions, or module options."
+    echo "After saving the result, run install.sh without diagnostic flags to rebuild without the trace."
 elif [ "$diag_ack_slot" -eq 1 ]; then
     echo "Keep the monitor connected for the diagnostic reboot, then run ./verify-after-reboot.sh."
     echo "After saving the samples, run install.sh without diagnostic flags to remove NvI2C=1."

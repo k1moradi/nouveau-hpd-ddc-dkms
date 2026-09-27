@@ -217,12 +217,15 @@ first Linux boot. The available 0.1.10 verifier/journal records do not include
 a validated `0x02240c` sample or a devinit POST execution trace. Consequently
 this audit does not claim that Linux did or did not execute the GPIO31 pulse.
 
-The next bounded software-only discriminator is a read-only log of the
-`0x02240c` value and computed POST decision in the GK104 devinit path, plus a
-record of whether `nvbios_post()` was called with execution enabled. This
-would establish whether Nouveau replayed the sequence without adding a
-register write or I2C transaction. Any result would still leave GPIO31's
-electrical board function unknown.
+The opt-in 0.1.11 diagnostic in
+[`gk104-post-gpio31-trace.patch`](../patches/diagnostic/gk104-post-gpio31-trace.patch)
+records the `0x02240c` value and computed POST decision, the effective
+`execute` argument passed to `nvbios_post()`, and any reached interpreter
+operation writing `0x00d68c` with value `0x2000` or `0x1000`. It adds no
+register write or I2C transaction. No boot result for this trace is recorded
+yet. The records must be interpreted separately: POST enabled does not prove
+the conditional script reached the GPIO31 operations, and even an executed
+pulse would not identify GPIO31's electrical board function.
 
 ## Relation to the GOP transport result
 
@@ -247,8 +250,8 @@ to separate board-path failure from GPU pad/input-sense behavior.
   this documentation checkpoint.
 - Do not add a GPIO31 toggle, `0xe600` write, `0xe1b8` write, or D014 upper-bit
   modification based on this audit.
-- If continuing in software first, add only the read-only devinit POST
-  decision log described above. Treat GPIO31 as an unknown board signal until
-  separate evidence maps its net or behavior.
+- If continuing in software first, use the 0.1.11 read-only POST/GPIO31 trace
+  and preserve each level of evidence separately. Treat GPIO31 as an unknown
+  board signal until separate evidence maps its net or behavior.
 - Otherwise continue with physical SDA/SCL observation; software-side ACK
   logs alone cannot distinguish the two remaining electrical explanations.
