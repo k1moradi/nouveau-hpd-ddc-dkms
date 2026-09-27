@@ -64,12 +64,12 @@ for the one-byte probe.
 | 0x10d78 | Controller status wait | Reads the per-port D000 register, waits while bit 31 is set, compares elapsed timer units with 0x9c4 (2500), and decodes status as (D000 >> 29) & 3. Status 1 returns the internal result 2 on the normal path. Status 2/3 branch on an object flag at offset 0x30; status 0/1 also consult that flag on the timeout path. There is no fixed poll count or sleep in the loop. |
 | 0x10eb4 | Enter hardware mode | Writes literal 0x00000003 to 0xd014 + port*0x20 and clears the GOP software-mode flag. |
 | 0x110cc | Hardware read | Calls the status waiter once before programming D004 when the destination and length are nonzero; that return value is ignored. It then packs D004 from `((wire_address >> 1) & 0x3ff) OR (mode_field << 11)`. The requested length controls the remaining-byte loop; each iteration puts `min(4, remaining)` in the D000 count field, issues the command, polls completion, reads one 32-bit word from D00C on success, and copies the requested low-order bytes first. |
-| 0x11254 | Speed programming | For 400 kHz, writes `(old_D008 & 0xfffff043) OR 0x43`. For 100 kHz, writes `(old_D008 & 0xfffff10e) OR 0x10e`. The checked dispatcher retries a failed 400/300 kHz read at 100 kHz. |
-| 0x11330 | Controller initialization | Writes 0x000f4240 to D010, enters hardware mode, and programs D008 with `(old_D008 & 0xff0a7fff) OR 0x010a0000`. It performs E50C/E500 hybrid-pad changes only when its hybrid-mode flag is set; this DVI-I port-0 path does not use that branch. |
+| 0x11254 | Speed programming | For 400 kHz, writes `(old_D008 & 0xfffff043) OR 0x43`. For 100 and 60 kHz, writes `(old_D008 & 0xfffff10e) OR 0x10e`. It then calls the D000 waiter, ignores its return, and writes STOP `0x8000000c`. |
+| 0x11330 | Controller initialization | Calls the D000 waiter and ignores its return; writes `0x000f4240` to D010; enters hardware mode; invokes the speed setter for rates of at least 100 kHz (including its wait and STOP); then programs D008 with `(old_D008 & 0xff0a7fff) OR 0x010a0000`. It performs E50C/E500 hybrid-pad changes only when its hybrid-mode flag is set; this DVI-I port-0 path does not use that branch. |
 | 0x11903 | Hardware write | Uses the same D004 address packing and four-byte FIFO chunking, writes data to D00C, and issues D000 write commands. This write operation is documented but is not used by the diagnostic. |
-| 0x11c60 | GOP request dispatcher | Uses the hardware path at speeds of at least 100 kHz. It treats a zero result from the hardware-read helper as success and any nonzero result as failure; it does not distinguish status 1 from other helper errors here. A 400/300 kHz failure changes the rate to 100 kHz, calls vtable slot +0x70, and recursively retries only if that method succeeds. A later 100 kHz failure can proceed to 60 kHz; this diagnostic omits that fallback. |
+| 0x11c60 | GOP request dispatcher | Uses hardware at speeds of at least 100 kHz and the software transfer at 0x11b34 below 100 kHz. A failed 400/300 kHz read changes to 100 kHz, calls vtable slot +0x70, and retries if recovery succeeds. A failed 100 kHz read changes to 60 kHz, calls the same recovery method, and recurses into software transfer. It does not distinguish status 1 from other helper errors. |
 | 0x11dc0 | Retry line recovery | The bus vtable at RVA 0x1120 has the transfer method 0x11c60 at slot +0x68 and this recovery method at +0x70. It enters software line mode, then performs at most 16 SCL recovery cycles and returns success when SDA reads high. Each cycle also calls the line sequence at 0x11588. |
-| 0x1aec0 | EDID reader | Reads target wire address 0xa0, segment address 0x60, block index 0, and length 0x80. For block 0 there is no segment-pointer preamble; extension blocks use a separate path. |
+| 0x1aec0 | EDID reader | Gets its bus object from `[this+8]`, calls vtable slots +0x10 (initialize) and +0x70 (line recovery), and calls +0x68 (transfer) only if recovery succeeds. The block-0 transfer arguments are segment-address byte 0x60, segment/block value 0, target wire address 0xa0, and length 0x80. The hardware read helper ignores the segment-address parameter; the software fallback consumes it. |
 
 The GOP uses per-port registers at a 0x20 stride. For physical port 0 the
 registers are D000, D004, D008, D00C, D010, and D014.
@@ -122,8 +122,8 @@ retry. After the hardware-read helper returns, zero is marked successful at
 0x11ce1; any nonzero result reaches the rate fallback. A current rate of
 400000 or 300000 selects 100000 at 0x11d6c. The dispatcher calls the speed
 setter at 0x11254, then calls its own vtable slot +0x70 at 0x11d7c. The
-constructor at 0xccaa installs the vtable at 0x1120; that table entry points
-slot +0x70 to recovery routine 0x11dc0. Only a true return recurses into the
+constructor at 0xcc60 installs the vtable at 0x1120 at instruction 0xccaa;
+that table entry points slot +0x70 to recovery routine 0x11dc0. Only a true return recurses into the
 same dispatcher at 0x11da7. The separate 100000-to-60000 transition is not
 enabled by this diagnostic.
 
@@ -154,24 +154,78 @@ mirrors this one read-only retry for its exact offset-zero EDID probe/base
 block shapes and retains the 100 kHz rate for later transfers. It does not
 replay other I²C messages and does not add the GOP's 60 kHz fallback.
 
-### EDID-reader caller gate
+### EDID-reader bus object and caller sequence
 
-At RVA 0x1aec0, the GOP EDID reader calls an object method at vtable offset
-0x10 from 0x1aee6, then calls offset 0x70 from 0x1aef0. It proceeds only when
-the latter returns true; otherwise it skips the transfer. It then calls the
-read method at offset 0x68 from 0x1af1a with target wire address 0xa0, segment
-parameter 0x60, block index 0, and length 0x80, and validates the returned
-block checksum. The implementation and effects of the success-gated
-offset-0x70 method are not identified by this transcript. This is a remaining
-caller-side initialization/readiness question; its existence does not
-establish that it programs DDC hardware.
+At RVA 0x1aec0, the function loads the bus receiver from `[this+8]` and calls
+its vtable slots +0x10, +0x70, and +0x68. The bus vtable at RVA 0x1120 maps
++0x10 to controller initialization 0x11330, +0x68 to dispatcher 0x11c60, and
++0x70 to recovery 0x11dc0. Constructor 0x0cc60 installs this vtable at
+instruction 0x0ccaa. The caller ignores the initialization return, requires
+recovery to return true, and only then invokes the transfer method. The
+caller-side methods are
+therefore identified; they are not an unknown method that can be assigned an
+undocumented effect.
+
+For this non-hybrid K4200 path, initialization calls the status waiter (its
+return is ignored), writes D010=`0x000f4240`, enters hardware mode with
+D014=`3`, calls the current speed setter, then applies the D008 initialization
+mask. The speed setter writes its D008 field, calls the waiter (also ignored),
+and writes STOP `0x8000000c`. The EDID caller then invokes line recovery
+0x11dc0 before the first transfer. That recovery enters software line mode,
+performs its bounded SCL/SDA sequence, and gates the read on a true return.
+
+The Linux diagnostic writes D010, D014, and the D008 init/speed fields itself.
+It does not reproduce the initializer's speed-setter wait+STOP before the init
+D008 write, or the EDID caller's initial recovery before the first 400 kHz
+command. Its 400 kHz result therefore is not yet an exact comparison with the
+GOP's initial transfer sequence. The later 400-to-100 retry does perform a
+wait+STOP and line recovery, but in a different position after the failed
+400 kHz command.
+
+### GOP 100-to-60 kHz software fallback
+
+After a failed 100 kHz hardware transfer, dispatcher 0x11c60 sets the rate
+field to 60 kHz with speed setter 0x11254, then calls vtable slot +0x70
+(recovery 0x11dc0) and recurses. At 60 kHz the dispatcher selects software
+transfer routine 0x11b34. The 60 and 100 kHz setter cases use the same D008
+mask/value `(old & 0xfffff10e) | 0x10e`; the 60 kHz branch changes the rate
+field, emits the setter's wait+STOP, and then switches to software line mode
+through recovery. The bitbang line delay uses the bus object's `+0x24` period.
+The separate helper 0x11e58 can recalculate that period, but this fallback
+calls 0x11254 directly and does not call 0x11e58. The requested 60 kHz rate is
+therefore established, while the exact software clock period for this fallback
+is not.
+
+For the block-0 arguments supplied by 0x1aec0, software routine 0x11b34 emits
+this transaction (wire bytes shown):
+
+```text
+START
+  0x60  segment-pointer address (7-bit 0x30, write)
+  0x00  segment number
+REPEATED START
+  0xa0  EDID address (7-bit 0x50, write)
+  0x00  EDID byte offset
+REPEATED START
+  0xa1  EDID address (7-bit 0x50, read)
+  read block bytes, ACK each byte except the last; NACK the last
+STOP
+```
+
+This has an additional segment-pointer write (`0x60, 0x00`) compared with
+Linux's tested two-message block-0 transfer (`0xa0, 0x00`, repeated-start,
+`0xa1`, read). The earlier Nouveau bitbang tests therefore did not exercise
+the full GOP software fallback transaction shape. The added pre-read recovery
+and this segment-pointer preamble are material sequence differences; they
+justify a bounded diagnostic follow-up, but do not predict that it will ACK.
 
 ## Controller command details
 
-D004 for the block-0 read is 0x00000050: wire address 0xa0 shifted right
-by one, with mode/block field zero. The GOP's native block-0 operation is the
-basis for translating Linux's offset-zero EDID request. No general register
-subaddress or arbitrary write-read transaction support is claimed.
+For the hardware-read helper, D004 for block 0 is 0x00000050: wire address
+0xa0 shifted right by one, with mode/block field zero. This hardware operation
+does not emit the software path's segment-pointer or offset bytes. No general
+register subaddress or arbitrary write-read support is claimed for the
+hardware helper.
 
 The recovered helper keeps the address/mode in D004; the requested data
 length controls the loop and the byte count encoded into each D000 command.

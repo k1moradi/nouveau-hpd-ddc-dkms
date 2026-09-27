@@ -441,14 +441,14 @@ status fields 2 and 3 through the separate object-flag check at offset
 diagnostic's generic `status != 0` mapping must not be generalized into a
 production implementation.
 
-The GOP EDID reader also has a success-gated method call at vtable offset
-`0x70` before its read method at offset `0x68`. Its implementation remains
-unresolved and could affect a later comparison with the Linux path. The 100 kHz
-diagnostic now reproduces the separately recovered request-dispatcher retry;
-it does not establish what this caller-side gate does. The later
-`nve4_fuc084*` firmware-load failures in the verifier occurred minutes after
-these DDC attempts and concern video-decode firmware; this log does not
-connect them to the DDC status.
+The GOP EDID reader's success-gated method calls were resolved by the later
+caller/vtable audit below. The 100 kHz diagnostic reproduces the dispatcher's
+400-to-100 retry, but its first 400 kHz attempt omitted the caller's initial
+line recovery and the speed setter's wait-plus-STOP sequence. The hardware
+status therefore is not yet an exact comparison with the GOP's initial read
+sequence. The later `nve4_fuc084*` firmware-load failures in the verifier
+occurred minutes after these DDC attempts and concern video-decode firmware;
+the log does not connect them to the DDC status.
 
 ### GOP-derived 100 kHz retry audit
 
@@ -468,5 +468,80 @@ also invokes the GOP's 0x11588 line sequence, which waits up to six 1-microsecon
 polls for SCL to rise. The Linux diagnostic uses Nouveau's existing D014
 drive/sense callbacks for those lines, restores the saved low three D014 bits
 at transfer exit, and retains 100 kHz for subsequent diagnostic EDID requests.
-The hardware behavior still requires the next monitor-connected diagnostic
-boot; static agreement with the GOP transcript is not a runtime success.
+The hardware behavior still requires monitor-connected verification; static
+agreement with the GOP transcript is not a runtime success.
+
+### EDID caller vtable and 100-to-60 software fallback audit
+
+The full K4200 ROM (`k4200-vbios.rom`, SHA-256 recorded in the transcript) was
+re-extracted and the decompressed EFI image hash matched the permanent
+transcript. At RVA `0x1aec0`, the EDID reader loads its bus object from
+`[this+8]`, then calls vtable slots `+0x10`, `+0x70`, and `+0x68`. The vtable
+at RVA `0x1120`, installed by the constructor at `0xcc60` (instruction
+`0xccaa`), maps those slots to controller initialization `0x11330`, line
+recovery `0x11dc0`, and request dispatcher `0x11c60`. The caller ignores the
+initializer's return value, skips the transfer unless recovery returns true,
+and then calls the dispatcher. Thus the pre-read methods are specifically
+the same K4200 bus methods used by the later hardware transfer.
+
+That caller order identifies two steps absent from the first Linux hardware
+diagnostic attempt:
+
+- GOP initialization `0x11330` calls the status waiter, writes D010=`0xf4240`,
+  enters hardware mode, invokes speed setter `0x11254`, then applies the D008
+  initialization mask. The speed setter itself writes the rate field, calls
+  the waiter and ignores its result, then writes D000 STOP=`0x8000000c`.
+  Linux currently writes D010, D014, and D008 init/speed fields directly; it
+  does not issue that initialization wait-plus-STOP.
+- The EDID caller invokes recovery `0x11dc0` after initialization and before
+  the first transfer. Linux currently recovers only after a failed 400 kHz
+  attempt, as part of the 100 kHz retry.
+
+The command failures at 400 and 100 kHz therefore weaken a clock-only theory,
+but do not rule out a missing pre-read sequence. The next controller
+comparison should reproduce these exact caller-side steps before treating the
+first hardware attempt as GOP-equivalent.
+
+The same dispatcher has a further path after a failed 100 kHz command: it sets
+the rate field to 60 kHz, invokes the speed setter (including its wait and
+STOP), calls line recovery again, then recurses into software transfer
+`0x11b34`. The 60 and 100 kHz cases use the same D008 mask/value. The
+dispatcher changes the rate field, but the software bit timing uses the bus
+`+0x24` delay period. Helper `0x11e58` can recalculate that period; this
+100-to-60 transition calls `0x11254` directly and does not call `0x11e58`, so
+the exact line clock is not established as 60 kHz from this path alone.
+
+The 60 kHz software transaction is materially different from the Linux
+two-message EDID request. For base block 0, routine `0x11b34` uses the
+arguments from the EDID reader to issue:
+
+```text
+START, 0x60 0x00, REPEATED START,
+0xa0 0x00, REPEATED START, 0xa1,
+read bytes (ACK except final NACK), STOP
+```
+
+Here `0x60` is the segment-pointer wire address (7-bit `0x30`), followed by
+segment zero. Linux's tested sequence begins at `0xa0 0x00` and then repeated
+starts at `0xa1`; the extra segment-pointer write has not been exercised by
+the prior Nouveau bitbang runs. This makes the GOP's final software fallback
+a distinct, bounded diagnostic candidate after the caller-side initialization
+and initial recovery sequence are reproduced.
+
+### Third hardware-backed boot
+
+The 0.1.8 verifier reports a matching loaded DKMS module and active
+`NvI2CHw=1`: 38 starts/results, one 400 kHz attempt, 38 100 kHz attempts, one
+successful recovery cycle, zero successful one-byte probes, and no 128-byte
+reads. The first attempt returned `0x30000050` after command `0x90000057` at
+400 kHz. The 100 kHz retry changed D008 from `0x010a0043` to `0x010a010e`,
+completed one recovery cycle, then returned the same command status with zero
+bytes. Subsequent direct 100 kHz attempts returned the same status. Status
+field 1 remains an unnamed GOP transfer failure, not a proven address NACK.
+
+On direct 100 kHz attempts, the `phase=attempt rate_khz=100 ret=-5` record is
+the primary result. The final `attempt400_ret`/`attempt100_ret` fields are
+misleading for those transfers: they contain the primary result and the
+unused retry slot (`-EOPNOTSUPP`), not a fresh 400 kHz result and a 100 kHz
+retry result. Use the phase-specific attempt records when interpreting this
+boot.
