@@ -367,12 +367,11 @@ because the one-byte presence probe failed; the DVI-I EDID sysfs file remained
 empty.
 
 The result's controller status field is `(0x30000050 >> 29) & 3 == 1`; the
-current Nouveau diagnostic maps any nonzero completed status to `-EIO`. The
-K4200 GOP transcript identifies status 0 as success but does not assign a
-portable meaning to nonzero status values. These records prove the hardware
-backend was entered, but they do not show whether the D004 write or D000 read
-command occurred. The logged `0xd014` value shows that the original low
-control bits were restored after each attempt.
+Linux diagnostic maps any nonzero completed status to `-EIO`. At the time,
+the GOP waiter's status-1 return path had not yet been documented. These
+records prove the hardware backend was entered, but they do not show whether
+the D004 write or D000 read command occurred. The logged `0xd014` value shows
+that the original low control bits were restored after each attempt.
 
 The start records also show the first attempt began with `D008=0001010e`,
 while subsequent attempts began with `D008=010a0043`; each attempt ended with
@@ -394,7 +393,56 @@ pre-command wait result, D004, the last D000 command, command-completion
 status, final-wait result, and `failure_stage`. It follows the GOP by
 continuing after a nonzero pre-command wait, checking the per-command wait,
 and recording but ignoring the final-wait return. D008 programming, command
-values, fallback behavior, and the no-replay rule are unchanged. A new boot is
-required to determine whether `0x90000057` itself returns status 1; that
-result would still not identify a physical EDID NACK without further status
-decoding.
+values, fallback behavior, and the no-replay rule are unchanged. The next
+boot result is recorded below.
+
+### Second hardware-backed boot
+
+The verifier reports that the loaded module path and `srcversion` match the
+DKMS build, `NvI2CHw=1` is confirmed by dispatcher logs, and the diagnostic
+marker is present. It counted 36 hardware starts and results, all for the
+one-byte presence probe; there were no successful probes and no 128-byte
+reads. The ACK-slot sampler reported zero samples, as expected because this
+boot enabled `NvI2CHw=1`, not `NvI2C=1`.
+
+Every displayed attempt has the same result shape:
+
+```text
+failure_stage=read-command
+pre_idle_ret=0
+d004=00000050
+command=90000057
+command_status=30000050
+ret=-5 bytes=0 chunks=0
+final_wait_ret=-5 final_status=30000050
+d014_restored=00000037
+```
+
+The first attempt began with `d000_before=10000000` and
+`d008=0001010e`; subsequent attempts began with `d000_before=00000000` and
+`d008=010a0043`. Since every pre-command wait returned zero and every record
+shows `failure_stage=read-command`, the diagnostic did issue the GOP-derived
+read command. Bit 31 of `0x30000050` is clear, and its decoded status field is
+1. Thus this is a completed command with a non-success GOP result, not the
+pre-command failure from the earlier run and not a busy-bit timeout. The
+final wait sees the same status; the GOP ignores that final wait and proceeds
+to cleanup. The display driver never reaches the 128-byte request because
+the one-byte probe fails.
+
+The ROM audit shows that its status waiter returns internal value 2 for
+status field 1 on the ordinary completed path. The request dispatcher treats
+only a zero helper result as success and sends nonzero results into its
+failure/retry path. This confirms status 1 is a GOP-level transfer failure,
+but does not establish that it means an address NACK. The waiter routes
+status fields 2 and 3 through the separate object-flag check at offset
+`0x30`; it can return zero or `-1` depending on that flag. The Linux
+diagnostic's generic `status != 0` mapping must not be generalized into a
+production implementation.
+
+The GOP EDID reader also has a success-gated method call at vtable offset
+`0x70` before its read method at offset `0x68`. Its implementation is still
+unresolved. Trace that caller-side gate and determine whether it performs a
+DDC readiness or initialization step before changing the controller
+protocol. The later `nve4_fuc084*` firmware-load failures in the verifier
+occurred minutes after these DDC attempts and concern video-decode firmware;
+this log does not connect them to the DDC status.

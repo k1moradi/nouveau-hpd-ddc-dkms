@@ -61,13 +61,13 @@ for the one-byte probe.
 
 | RVA | Routine | Relevant behavior recovered from the instructions |
 | --- | --- | --- |
-| 0x10d78 | Controller status wait | Reads the per-port D000 register, waits while bit 31 is set, compares elapsed timer units with 0x9c4 (2500), and decodes status as (D000 >> 29) & 3. Status 0 is the success result used by the callers. There is no fixed poll count or sleep in the loop. |
+| 0x10d78 | Controller status wait | Reads the per-port D000 register, waits while bit 31 is set, compares elapsed timer units with 0x9c4 (2500), and decodes status as (D000 >> 29) & 3. Status 1 returns the internal result 2 on the normal path. Status 2/3 branch on an object flag at offset 0x30; status 0/1 also consult that flag on the timeout path. There is no fixed poll count or sleep in the loop. |
 | 0x10eb4 | Enter hardware mode | Writes literal 0x00000003 to 0xd014 + port*0x20 and clears the GOP software-mode flag. |
 | 0x110cc | Hardware read | Calls the status waiter once before programming D004 when the destination and length are nonzero; that return value is ignored. It then packs D004 from `((wire_address >> 1) & 0x3ff) OR (mode_field << 11)`. The requested length controls the remaining-byte loop; each iteration puts `min(4, remaining)` in the D000 count field, issues the command, polls completion, reads one 32-bit word from D00C on success, and copies the requested low-order bytes first. |
 | 0x11254 | Speed programming | For 400 kHz, writes `(old_D008 & 0xfffff043) OR 0x43`. Other recognized GOP values are 300 kHz `(... OR 0x50)` and 100/60 kHz `(... OR 0x10e)`; this diagnostic enables only selector 3 / 400 kHz. |
 | 0x11330 | Controller initialization | Writes 0x000f4240 to D010, enters hardware mode, and programs D008 with `(old_D008 & 0xff0a7fff) OR 0x010a0000`. It performs E50C/E500 hybrid-pad changes only when its hybrid-mode flag is set; this DVI-I port-0 path does not use that branch. |
 | 0x11903 | Hardware write | Uses the same D004 address packing and four-byte FIFO chunking, writes data to D00C, and issues D000 write commands. This write operation is documented but is not used by the diagnostic. |
-| 0x11c60 | GOP request dispatcher | Uses the hardware path at speeds of at least 100 kHz. Its lower-speed and retry paths can switch to software I²C. On hardware failure it retries 400/300 kHz at 100 kHz, then can retry 100 kHz at 60 kHz. The diagnostic intentionally does not copy those retries. |
+| 0x11c60 | GOP request dispatcher | Uses the hardware path at speeds of at least 100 kHz. It treats a zero result from the hardware-read helper as success and any nonzero result as failure; it does not distinguish status 1 from other helper errors at this point. Its lower-speed and retry paths can switch to software I²C. On hardware failure it retries 400/300 kHz at 100 kHz, then can retry 100 kHz at 60 kHz. The diagnostic intentionally does not copy those retries. |
 | 0x1aec0 | EDID reader | Reads target wire address 0xa0, segment address 0x60, block index 0, and length 0x80. For block 0 there is no segment-pointer preamble; extension blocks use a separate path. |
 
 The GOP uses per-port registers at a 0x20 stride. For physical port 0 the
@@ -92,6 +92,39 @@ Therefore, the pre-command status is observational/drain behavior, not a gate
 that cancels the read. A nonzero status there must be recorded but must not
 prevent the D004 write and first D000 read command if the Linux path is to
 match this GOP helper. The per-command waiter is the failure-producing check.
+
+### Meaning of completed status 1
+
+The waiter decodes `(D000 >> 29) & 3` after the busy loop. Status 1 reaches
+the comparison at 0x10e0c and selects internal return value 2, unless the
+special timeout branch returns -1 first. Status 2 and 3 branch to 0x10e01,
+which returns -1 when the byte at object offset 0x30 is zero and otherwise
+continues to the zero-return path. Status 0 returns zero unless the timeout
+branch and a zero object flag produce -1. The meaning of the object flag is
+not established here.
+
+At 0x11ce1, the request dispatcher tests the read-helper result and uses
+`sete` to mark success only when it is zero. It does not assign an
+address-NACK meaning to result 2 or branch on that value separately; any
+nonzero result enters its failure/retry path. Therefore the
+observed `D000=0x30000050` status field 1 is a completed GOP-level transfer
+failure, but the ROM does not identify it as an EDID NACK or another specific
+electrical condition. The Linux diagnostic currently maps every nonzero
+status field to `-EIO`; that agrees with the GOP's success/failure outcome for
+status 1, but should not be generalized to status fields 2 and 3, whose GOP
+handling depends on the unresolved object flag.
+
+### EDID-reader caller gate
+
+At RVA 0x1aec0, the GOP EDID reader calls an object method at vtable offset
+0x10 from 0x1aee6, then calls offset 0x70 from 0x1aef0. It proceeds only when
+the latter returns true; otherwise it skips the transfer. It then calls the
+read method at offset 0x68 from 0x1af1a with target wire address 0xa0, segment
+parameter 0x60, block index 0, and length 0x80, and validates the returned
+block checksum. The implementation and effects of the success-gated
+offset-0x70 method are not identified by this transcript. This is a remaining
+caller-side initialization/readiness question; its existence does not
+establish that it programs DDC hardware.
 
 ## Controller command details
 
@@ -141,10 +174,13 @@ These write commands are not emitted by this diagnostic.
 
 D000 bit 31 is the busy indicator. The GOP waits up to 0x9c4 timer units
 before interpreting status bits 30:29. The timer is used as a microsecond
-clock by the GOP, so the Linux implementation uses a 2500 μs bound. The GOP
-treats decoded status 0 as success. Other completed status values are not
-assigned a portable meaning here; Nouveau reports them as -EIO. A still-busy
-controller after the bound is reported as -ETIMEDOUT.
+clock by the GOP, so the Linux diagnostic uses a 2500 μs bound. The GOP
+waiter's return mapping and object-flag condition are detailed above; the
+raw status field is not a portable I²C error enum. The diagnostic currently
+maps every nonzero decoded status field to `-EIO`, which is known to match
+the GOP success/failure outcome for status 1 but is not established for
+status fields 2 and 3. A still-busy controller after the bound is reported
+as `-ETIMEDOUT` by the diagnostic.
 
 After the data operation, the GOP issues D000 command 0x8000000c to finish
 the controller operation. D00C is a data/FIFO register; the diagnostic never
