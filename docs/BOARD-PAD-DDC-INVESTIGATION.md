@@ -283,3 +283,98 @@ to separate board-path failure from GPU pad/input-sense behavior.
 - The remaining distinction is physical: observe SDA/SCL at the VGA connector
   and, if accessible, on both sides of any board-level buffer. Software-side
   ACK logs alone cannot distinguish the remaining electrical explanations.
+
+## Cross-ROM comparison: K4200 `80.04.FE.00.15`
+
+The candidate comparison image was extracted from
+`/home/keivan/Downloads/272453.rom.zip` to
+`/home/keivan/Downloads/272453.rom`. Its SHA-1
+(`cf5120d7328483b88d6af3592bdc6a0a8a2f3328`) and MD5
+(`12eace5948c367d31111550cc3d6cd56`) match the supplied listing values;
+SHA-256 is
+`c2c030d0acbeb2777bfcaa556052fd5242079da2a5bbcc7c41e6d278e93cd5cc`.
+EnvyTools identifies VBIOS `80.04.FE.00.15`, PCI device `10de:11b4`, and
+subsystem `10de:1096`; the image also contains the board string
+`GK104 P2004 SKU 0503 VGA BIOS (HWDIAG)`.
+
+The `.03` comparison input is the member of
+`/home/keivan/Downloads/k4200-vbios.rom.tar.xz`. Its SHA-1, MD5, and SHA-256
+match the already documented `/home/keivan/Downloads/k4200-vbios.rom` byte for
+byte. Neither ROM binary is part of this repository.
+
+### PCI option-ROM layout and legacy image
+
+| Image | Raw size | Prefix | Legacy PCI image | EFI PCI image | Decompressed GOP |
+|---|---:|---:|---:|---:|---:|
+| `.03` | 184,320 (`0x2d000`) | none | offset `0`, size `0xf400` | offset `0xf400`, size `0x10e00` | 133,536 bytes, SHA-256 `ba478d3458e8323d20ac18de1034885aaf099a3d2c35edb0485a4c52599d8684` |
+| `.15` | 221,696 (`0x36200`) | `NVGI`, `0x600` bytes | offset `0x600`, size `0xf400` | offset `0xfa00`, size `0x11200` | 135,776 bytes, SHA-256 `81f255ed9727ee6e3b426d6ea9b2ba647e85d1fb8f4a940dc4a067dda9f5fdbe` |
+
+The `.15` legacy image begins at file offset `0x600`; both legacy images are
+therefore aligned at their image starts before comparison. Their `0xf400`
+bytes differ at 135 byte positions. The differing relative ranges are
+`0x39`, `0x3b–0x3c`, `0xeb–0xec`, `0x25e`, `0x370`, `0xf231–0xf285`,
+`0xf287–0xf2b0`, and `0xf3ff`. The entire half-open range
+`[0x371, 0xf230)` is identical. The init-script table at `0x4f11`, main
+script 0 at `0x8696`, GPIO31 subroutine `[0x8e70, 0x8e98)`, and main script 4
+`[0xaba0, 0xac72)` are byte-identical. EnvyTools' decoded legacy output for
+the two aligned images is identical after removing its single VBIOS-version
+line; the same parser warnings appear for both.
+
+This directly checks the previously audited structures: the decoded DCB/I2C
+route and the legacy init scripts containing the `0xd68c`, `0xd604`,
+`0xe1b8`, `0xe600–0xe620`, and `0x1590` operations are unchanged between
+these revisions. The 135 differing bytes are outside the identical span;
+their exact purpose is not inferred here.
+
+### GOP DDC code comparison
+
+The `.03` EFI image was extracted from the complete `.03` ROM. For `.15`, the
+`0x600`-byte `NVGI` prefix was removed before passing the PCI option-ROM chain
+to UEFIRomExtract. The extractor source is pinned at
+[`a368a0fe0b757c7e234c1d28b1203fbb8f88d9c9`](https://github.com/ccharon/UEFIRomExtract/tree/a368a0fe0b757c7e234c1d28b1203fbb8f88d9c9).
+The `.03` GOP hash reproduces the image used for the earlier protocol
+transcript. The extracted PE `.text` section has matching RVA and raw-file
+offsets for the ranges below. Each listed `.03` range was compared against
+the corresponding `.15` range byte-for-byte:
+
+| Routine | `.03` RVA | `.15` RVA | Compared bytes | Result |
+|---|---:|---:|---:|---|
+| D000 status waiter | `0x10d78` | `0x11468` | `0xbc` | identical |
+| Enter software/D014 mode | `0x10e34` | `0x11524` | `0x80` | identical |
+| Enter hardware mode | `0x10eb4` | `0x115a4` | `0x38` | identical |
+| Sample SDA | `0x10eec` | `0x115dc` | `0x154` | identical |
+| Wait for SCL | `0x11040` | `0x11730` | `0x8c` | identical |
+| Hardware read | `0x110cc` | `0x117bc` | `0x188` | identical |
+| Speed programming | `0x11254` | `0x11944` | `0xdc` | identical |
+| Controller initialization | `0x11330` | `0x11a20` | `0x1d0` | identical |
+| STOP/START | `0x11500` | `0x11bf0` | `0x88` | identical |
+| Recovery | `0x11588` | `0x11c78` | `0x78` | identical |
+| Software byte writer | `0x11600` | `0x11cf0` | `0xf8` | identical |
+| Software byte reader | `0x116f8` | `0x11de8` | `0xeb` | identical |
+
+All listed `.15` entry points are relocated by `0x6f0` from `.03`. A raw
+search found the little-endian immediate for `0x0000d014` seven times in
+each extracted GOP. It found no corresponding 32-bit immediate byte pattern
+for `0xd018`, `0xe1b8`, `0xe600–0xe620`, `0x1590`, or `0xd68c`. This is a
+bounded byte-pattern check, not a claim that those values cannot be formed by
+other instruction sequences.
+
+### Assessment
+
+The later `.15` image does not provide evidence of a changed DVI-I board-init
+sequence, DCB/I2C route, GPIO31 pulse, or low-level GOP DDC protocol. Its
+standard PCI ROM chain includes a slightly larger GOP image, but the audited
+DDC routines above are byte-identical after relocation. This comparison does
+not identify a missing writable control and does not justify another GPIO,
+IBUF, D014, or undocumented-register experiment. It leaves the same boundary:
+the available ROM/GOP evidence does not distinguish a board-level DDC path
+problem from an internal pad/input-routing issue.
+
+Reproduction tools and inputs:
+
+```text
+EnvyTools nvbios source: f102b82381f3f11cee113d16374c87091db039d9
+UEFIRomExtract source:  a368a0fe0b757c7e234c1d28b1203fbb8f88d9c9
+.03 input SHA-256:      6c768eb2d34ab65bdde6137e66b5fbe750a750f9553aabff51e614e1168c4ed9
+.15 input SHA-256:      c2c030d0acbeb2777bfcaa556052fd5242079da2a5bbcc7c41e6d278e93cd5cc
+```

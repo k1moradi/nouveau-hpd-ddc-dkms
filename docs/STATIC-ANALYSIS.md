@@ -239,6 +239,19 @@ EnvyTools defines explicit VBIOS GPIO functions including `I2C_OR_DDC`, `I2C_SCL
 11. Generic bitbang implementation defect — **very unlikely**.
 12. Missing analog encoder script — **very unlikely**.
 
+## Later same-board VBIOS comparison
+
+The board/pad investigation now includes a hash-verified comparison against
+the Quadro K4200 `80.04.FE.00.15` ROM. Its standard PCI legacy image has the
+same init-script table, GPIO31 pulse, DCB/I2C route, and relevant DDC setup as
+the already analyzed `80.04.FE.00.03` image. The decompressed GOP is newer and
+larger, but the compared DDC hardware, software, recovery, and controller-init
+code ranges are byte-identical after relocation. This adds no evidence for a
+missing GPIO, IBUF, D014, or private PNVIO enable and does not change the
+candidate ranking above. Hashes, offsets, comparison method, and limitations
+are recorded in [BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md).
+Both ROM binaries remain outside Git.
+
 ## Static-analysis ceiling
 
 The remaining uncertainty is increasingly about undocumented electrical
