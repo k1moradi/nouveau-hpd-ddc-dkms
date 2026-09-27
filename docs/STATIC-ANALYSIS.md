@@ -545,3 +545,20 @@ misleading for those transfers: they contain the primary result and the
 unused retry slot (`-EOPNOTSUPP`), not a fresh 400 kHz result and a 100 kHz
 retry result. Use the phase-specific attempt records when interpreting this
 boot.
+
+### Caller-sequence diagnostic follow-up
+
+The 0.1.8 boot does not establish an exact GOP/Nouveau comparison. Static
+analysis found that the GOP caller performs an initial ignored D000 wait,
+programs the rate, performs the speed-setter's ignored wait and STOP, applies
+the initializer D008 mask, and runs recovery `0x11dc0` before the first read.
+The 0.1.8 Linux diagnostic lacked that ordering and recovery before its first
+400 kHz command.
+
+Version 0.1.9 adds those steps in the recovered order. It logs
+`phase=caller-init` with both wait results and D008 snapshots, then
+`phase=caller-recovery` with the recovery result, cycles, and D014 state. It
+issues no EDID command or 100 kHz retry if caller recovery fails. After a
+successful recovery it re-enters hardware mode and retains the existing
+400-to-100 retry behavior. This change is diagnostic code only; its hardware
+result remains pending until the next connected-monitor boot.

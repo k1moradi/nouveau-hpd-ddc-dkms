@@ -1,5 +1,5 @@
 Package: nouveau-hpd-ddc-dkms
-Version: 0.1.8
+Version: 0.1.9
 Section: kernel
 Priority: optional
 Architecture: all

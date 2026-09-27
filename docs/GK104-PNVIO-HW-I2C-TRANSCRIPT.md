@@ -305,16 +305,30 @@ The dispatcher then calls Linux `i2c_bit_algo.master_xfer()` without holding
 the NVKM bus lock. The log shape makes the rejected transaction visible while
 keeping message data bounded.
 
-Before entry the code requires D014's low control bits to be 0x7. It then
-snapshots D000 before any controller write, writes the GOP controller
-initialization values, and runs the pre-command status waiter. As established
-by the call-site audit above, a nonzero return from that waiter is recorded
-but ignored. The code then writes D004, reads the base-block data through
-D000/D00C, records the checked per-command status and unchecked final-wait
-result, issues the GOP D000 cleanup command, and restores the saved D014 low
-three control bits with Nouveau's existing masked-register access pattern.
-D008, D010, and D004 remain at the GOP-programmed values, as they do in the
-GOP flow.
+Before entry the code requires D014's low control bits to be 0x7, then
+snapshots D000 and records the initial D014/D008 state. It reproduces the GOP
+caller initialization in order: wait on D000 and ignore the result; write
+D010=0x000f4240; enter hardware mode with D014=3; program the selected D008
+rate; wait on D000 and ignore that result; write STOP `0x8000000c`; then apply
+the initializer D008 mask. The `phase=caller-init` record includes both wait
+results/statuses, the STOP marker, and D008 before/after each programming step.
+
+Next, it runs caller recovery `0x11dc0`. The `phase=caller-recovery` record
+reports its result, cycle count, and D014 state. A failed recovery prevents
+the EDID command and 400-to-100 retry. On success, the code re-enters hardware
+mode with D014=3 as the GOP read helper does; that helper then performs its own
+pre-read waiter (recorded and ignored), writes D004, reads the requested data
+through D000/D00C, records checked per-command status and the unchecked final
+wait result, and issues the GOP D000 cleanup command. The existing 400-to-100
+hardware retry remains unchanged after a failed primary command. Finally, the
+code restores the saved D014 low three control bits with Nouveau's existing
+masked-register access pattern. D008, D010, and D004 remain at their last
+GOP-programmed values, as they do in the GOP flow.
+
+The verifier counts caller initialization/recovery records and prints these
+phase records alongside the per-rate command attempts. The 0.1.8 boot remains
+historical evidence for the earlier sequence; it did not include this
+caller-equivalent setup and therefore is not the next exact GOP comparison.
 
 The patch is applied only when the DKMS source contains
 diagnostic-pnvio-hw-ddc.enabled, created by

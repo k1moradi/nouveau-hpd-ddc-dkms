@@ -2,7 +2,7 @@
 set -u
 
 NAME=nouveau-hpd-ddc
-VER=0.1.8
+VER=0.1.9
 k=$(uname -r)
 dac_ddc_diag_enabled=0
 if [ -f "/usr/src/$NAME-$VER/diagnostic-dac-ddc.enabled" ]; then
@@ -191,13 +191,19 @@ pnvio_hw_ddc_start_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
 pnvio_hw_ddc_result_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
     grep -c 'phase=result ' || true)
 pnvio_hw_ddc_400_attempt_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
-    grep -c 'phase=attempt rate_khz=400 ' || true)
+    grep -c 'phase=attempt attempt=primary rate_khz=400 ' || true)
 pnvio_hw_ddc_100_attempt_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
-    grep -c 'phase=attempt rate_khz=100 ' || true)
+    grep -Ec 'phase=attempt attempt=(primary|retry100) rate_khz=100 ' || true)
 pnvio_hw_ddc_recovery_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
     grep -c 'phase=recovery rate_khz=100 ' || true)
 pnvio_hw_ddc_recovery_success_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
     grep -Ec 'phase=recovery rate_khz=100 result=1 ' || true)
+pnvio_hw_ddc_caller_init_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -c 'phase=caller-init ' || true)
+pnvio_hw_ddc_caller_recovery_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -c 'phase=caller-recovery ' || true)
+pnvio_hw_ddc_caller_recovery_success_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -Ec 'phase=caller-recovery result=1 ' || true)
 pnvio_hw_ddc_probe_start_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
     grep -Ec 'phase=start .*length=1 ' || true)
 pnvio_hw_ddc_probe_success_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
@@ -310,6 +316,10 @@ printf '400 kHz hardware attempts: %s\n' "$pnvio_hw_ddc_400_attempt_count"
 printf '100 kHz hardware attempts: %s\n' "$pnvio_hw_ddc_100_attempt_count"
 printf '100 kHz recovery attempts/successes: %s/%s\n' \
     "$pnvio_hw_ddc_recovery_count" "$pnvio_hw_ddc_recovery_success_count"
+printf 'GOP caller init snapshots: %s\n' "$pnvio_hw_ddc_caller_init_count"
+printf 'GOP caller recovery attempts/successes: %s/%s\n' \
+    "$pnvio_hw_ddc_caller_recovery_count" \
+    "$pnvio_hw_ddc_caller_recovery_success_count"
 printf 'one-byte probe starts: %s\n' "$pnvio_hw_ddc_probe_start_count"
 printf 'one-byte probe successes: %s\n' "$pnvio_hw_ddc_probe_success_count"
 printf 'complete 128-byte GOP reads: %s\n' "$pnvio_hw_ddc_success_count"

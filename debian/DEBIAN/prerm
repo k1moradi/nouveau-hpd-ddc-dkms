@@ -3,7 +3,7 @@ set -e
 if [ "$1" = remove ] || [ "$1" = deconfigure ]; then
     rm -f /etc/modprobe.d/99-nouveau-i2c-test.conf
     rm -f /etc/dracut.conf.d/61-nouveau-i2c-test.conf
-    for ver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8; do
+    for ver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8 0.1.9; do
         if dkms status -m nouveau-hpd-ddc -v "$ver" 2>/dev/null | grep -q .; then
             dkms remove -m nouveau-hpd-ddc -v "$ver" --all || true
         fi

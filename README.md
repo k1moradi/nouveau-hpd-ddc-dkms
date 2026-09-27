@@ -179,7 +179,7 @@ Treat this capture as evidence about register behavior; do not interpret a
 high SDA sample as proof that the monitor or board path failed to pull the
 physical line low without independent validation.
 
-The installer removes the known older DKMS revisions (0.1.0 through 0.1.7),
+The installer removes the known older DKMS revisions (0.1.0 through 0.1.8),
 copies this project's DKMS files and patches into the package staging directory,
 builds Nouveau for the running kernel, installs it, and updates the initramfs.
 It also cleans only this project's temporary build/test directories under
@@ -229,7 +229,7 @@ The generated package and staging tree live under ignored `build/` output.
 pkexec ./uninstall.sh
 ```
 
-This removes all known DKMS revisions from 0.1.0 through 0.1.8, their source
+This removes all known DKMS revisions from 0.1.0 through 0.1.9, their source
 staging directories, and project temporary trees, then refreshes module
 dependencies and initramfs files. Nouveau uses the distribution module after
 reboot.
@@ -240,9 +240,11 @@ The hardware setup and captured evidence are in [docs/BUG-REPORT.md](docs/BUG-RE
 The IBUF experiment remains diagnostic: the K4200 VBIOS setting bit 17 does not
 prove that bit 16 should be enabled, so the patch does not modify `0xe1b8`.
 
-Version 0.1.8 adds the GOP-derived 400-to-100 kHz hardware retry and bounded
-D014 line recovery to the opt-in GK104 diagnostic. Version 0.1.7 introduced
-the hardware DDC diagnostic and permanent GOP transcript. Version 0.1.6
+Version 0.1.9 adds the GOP caller's ordered initialization waits, speed-setter
+STOP, initializer mask, and required pre-read line recovery to the opt-in
+GK104 diagnostic. It retains the 400-to-100 kHz hardware retry. Version 0.1.8
+added that retry and bounded D014 line recovery. Version 0.1.7 introduced the
+hardware DDC diagnostic and permanent GOP transcript. Version 0.1.6
 organizes the canonical patches,
 retires earlier DKMS revisions during installation, and fixes executable hook
 invocation. Versions 0.1.1 to
