@@ -257,8 +257,10 @@ distinctive software-line fallback returned no EDID data. The fresh board/pad
 audit found no decoded VBIOS write to D014/D018 and no assigned standard DDC
 GPIO, while identifying a conditional GPIO31 pulse whose purpose remains
 unknown. Nouveau's runtime decision to execute the main POST scripts also
-depends on a documented status bit that was not captured reliably in that
-boot. See [BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md).
+depends on a documented status bit. The 0.1.11 trace captured that decision
+and showed Nouveau skipped POST on the observed boot; it cannot establish
+whether pre-Linux firmware had already executed the conditional GPIO31 pulse.
+See [BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md).
 The remaining uncertainty is whether ACK is lost on the board path or reaches
 the GPU but is hidden by an undocumented pad/input-routing state.
 
@@ -565,7 +567,7 @@ classes requires observation on the physical DDC path (for example, SDA/SCL
 at the VGA connector and, if accessible, across any board buffer) or new
 board-specific evidence identifying the relevant enable state.
 
-### 0.1.11 read-only POST/GPIO31 trace (boot result pending)
+### 0.1.11 read-only POST/GPIO31 trace (boot result)
 
 The separate board/pad review branch adds an opt-in, GK104-only trace for the
 remaining POST-flow question. It reuses the existing `0x02240c` read to report
@@ -574,14 +576,36 @@ before the existing `nvbios_post()` call, and records reached interpreter
 operations for register `0x00d68c` with values `0x00002000` or `0x00001000`.
 Each GPIO record includes the interpreter cursor and whether the existing
 execution guard permits the corresponding write. The patch adds no register
-write, GPIO operation, DDC transfer, or module option. No hardware result has
-been captured for this diagnostic yet.
+write, GPIO operation, DDC transfer, or module option.
 
-The records answer different questions. The raw POST bit can differ from the
-effective callback argument after option overrides; an enabled POST callback
-does not prove conditional script flow reached GPIO31. A GPIO operation with
-`execute=1` shows that the normal interpreter reached the operation and will
-perform its existing write; `execute=0` shows it was reached but skipped.
-Absence of either GPIO record by itself does not prove that the pulse was
-absent from all VBIOS paths. Neither result identifies GPIO31's board
-function. Do not manually toggle it based on this trace.
+The verified boot loaded DKMS 0.1.11 (module path and `srcversion` matched).
+Raw and effective POST decisions agree, so no option override changed the
+decision. The trace recorded:
+
+```text
+r2240c=00000002 raw_post=0
+execute=0
+GPIO31 interpreter operations=0
+```
+
+Thus Nouveau called `nvbios_post()` with `execute=0`; the VBIOS init scripts
+and GPIO31 writes were not executed on this boot. The readout does not prove
+the GPIO31 pulse never occurred:
+`0x2240c[1]` was already set when Nouveau made its decision, so firmware may
+have initialized the GPU before Linux.
+
+The decoded K4200 main init table has seven entries. Script 0 (`0x8696`)
+contains a condition at `0x8d15` followed by `NOT` and a conditional call to
+GPIO31 subroutine `0x8e70`; condition `0x2c` tests whether `0xd68c` bit 14 is
+clear. Script 4 (`0xaba0`) ends by setting `0x2240c[1]` at `0xac71`. Under
+Linux v7.0 [init-interpreter semantics](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/bios/init.c),
+the GPIO31 call is on the false branch of condition `0x2c`. Therefore the set
+POST bit is consistent with the later script having run, but does not prove
+script 0 ran or that its GPIO31 condition selected the pulse. The proprietary
+pre-Linux script invocation path and unknown BIT tables prevent a stronger
+conclusion. The separate board/pad report records the complete static flow
+and ROM provenance.
+
+The evidence levels remain distinct: this proves Nouveau skipped POST on the
+observed boot; it does not establish whether firmware ran the pulse or what
+GPIO31 controls. Do not manually toggle it based on this trace.

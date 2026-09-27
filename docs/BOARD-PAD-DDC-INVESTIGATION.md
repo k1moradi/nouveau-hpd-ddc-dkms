@@ -31,9 +31,12 @@ state?
   the DCB-selected I2C0 path is exclusive and does not use that shared-pad
   mode callback.
 - Linux's GK104 devinit chooses whether to execute VBIOS POST from bit 1 of
-  `0x02240c`. The failing-boot capture does not contain a trustworthy value
-  or an execution trace for this decision, so it is not yet known whether
-  Linux replayed the main init sequence containing the GPIO31 pulse.
+  `0x02240c`. On the 0.1.11 boot, the read-only trace recorded
+  `0x02240c=0x2`, `raw_post=0`, and effective `execute=0`; it recorded no
+  GPIO31 interpreter writes. The raw and effective decisions agree, so no
+  override changed the result. Nouveau therefore did not replay the POST path
+  on that boot. This says nothing conclusive about whether pre-Linux firmware
+  had already run the pulse.
 
 No specific missing DDC enable has been identified. The evidence does not
 distinguish an open/disabled board path from an internal pad/input-routing
@@ -195,7 +198,7 @@ E: 0xe114, 0xe118, 0xe11c, 0xe120, 0xe500, 0xe550, 0xe5a0, 0xe5f0,
    0xe9c0, 0xe9c4, 0xe9c8, 0xe9cc, 0xe9e0, 0xe9e4, 0xe9f0, 0xe9f8
 ```
 
-## Whether Linux executes the GPIO31 sequence
+## POST state and the conditional GPIO31 sequence
 
 The presence of a VBIOS operation does not prove that Nouveau reruns it on a
 given boot. Linux v7.0 maps GK104 to `gf100_devinit_new()` in
@@ -211,21 +214,45 @@ when POST is requested. See Linux v7.0
 [`nv50.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/devinit/nv50.c), and
 [`nv04.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/devinit/nv04.c).
 
-The K4200's main init script 4 ends by setting bit 1 of `0x02240c`. Thus a
-firmware-completed POST can cause Nouveau to skip the main init table on its
-first Linux boot. The available 0.1.10 verifier/journal records do not include
-a validated `0x02240c` sample or a devinit POST execution trace. Consequently
-this audit does not claim that Linux did or did not execute the GPIO31 pulse.
+The K4200 init-script table at ROM offset `0x4f11` has seven entries. In the
+decoded table, script 0 is at `0x8696` and script 4 is at `0xaba0`. Script 4
+ends at `0xac71` by setting bit 1 of `0x02240c`. This makes a completed
+firmware initialization a plausible source of the bit that Nouveau later
+observed, but the ROM decode alone does not prove which scripts the pre-Linux
+firmware actually invoked.
+
+The GPIO31 call inside script 0 is conditional. At `0x8d15`, script 0 tests
+condition `0x2c`; the condition table defines it as
+`(R[0x00d68c] & 0x4000) == 0`. A following `NOT` at `0x8d24` inverts the
+execution state before the call to subroutine `0x8e70` at `0x8d32`. Under the
+Linux v7.0 [init-interpreter semantics](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/bios/init.c),
+the call is therefore taken on the false branch of condition `0x2c` (GPIO31
+input bit 14 was set when sampled). The subroutine contains the `0x2000`
+assert and `0x1000` release writes. The
+`CONDITION_TIME 0x2c` inside that subroutine is a different opcode from the
+script's condition test; it polls the same table condition and must not be
+read as evidence that the main-script branch was taken.
+
+This ordering and condition narrow the question but do not settle it. The
+observed `0x02240c=0x2` is consistent with firmware reaching script 4, yet
+does not establish that it also ran script 0, that the condition at `0x8d15`
+was false, or that the GPIO31 subroutine completed. Unknown BIT tables and
+the proprietary pre-Linux invocation path also limit what the decoded script
+table proves.
 
 The opt-in 0.1.11 diagnostic in
 [`gk104-post-gpio31-trace.patch`](../patches/diagnostic/gk104-post-gpio31-trace.patch)
 records the `0x02240c` value and computed POST decision, the effective
 `execute` argument passed to `nvbios_post()`, and any reached interpreter
 operation writing `0x00d68c` with value `0x2000` or `0x1000`. It adds no
-register write or I2C transaction. No boot result for this trace is recorded
-yet. The records must be interpreted separately: POST enabled does not prove
-the conditional script reached the GPIO31 operations, and even an executed
-pulse would not identify GPIO31's electrical board function.
+register write or I2C transaction. The captured 0.1.11 boot has one decision
+record (`r2240c=00000002 raw_post=0`), one callback record
+(`execute=0`), and zero GPIO31 interpreter records. The DKMS module path and
+`srcversion` matched the loaded module. The raw and effective POST decisions
+agree, so no option override changed the result. This establishes that
+Nouveau did not execute the POST scripts or these GPIO31 writes on the observed
+boot; it does not show whether pre-Linux firmware had executed them. Even a
+confirmed pulse would not identify GPIO31's electrical board function.
 
 ## Relation to the GOP transport result
 
@@ -250,8 +277,9 @@ to separate board-path failure from GPU pad/input-sense behavior.
   this documentation checkpoint.
 - Do not add a GPIO31 toggle, `0xe600` write, `0xe1b8` write, or D014 upper-bit
   modification based on this audit.
-- If continuing in software first, use the 0.1.11 read-only POST/GPIO31 trace
-  and preserve each level of evidence separately. Treat GPIO31 as an unknown
-  board signal until separate evidence maps its net or behavior.
-- Otherwise continue with physical SDA/SCL observation; software-side ACK
-  logs alone cannot distinguish the two remaining electrical explanations.
+- The 0.1.11 read-only POST/GPIO31 trace is complete; no further POST-decision
+  trace is needed. Treat GPIO31 as an unknown board signal until separate
+  evidence maps its net or behavior.
+- The remaining distinction is physical: observe SDA/SCL at the VGA connector
+  and, if accessible, on both sides of any board-level buffer. Software-side
+  ACK logs alone cannot distinguish the remaining electrical explanations.
