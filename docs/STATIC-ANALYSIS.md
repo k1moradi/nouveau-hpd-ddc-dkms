@@ -500,5 +500,61 @@ snapshot could issue another controller command.
 This patch remains diagnostic and opt-in. The patch applies to the Ubuntu
 Linux 7.0 source without offsets, and both diagnostic-enabled and
 diagnostic-disabled DKMS module builds passed for `7.0.0-34-generic`. Shell
-syntax and Debian package metadata checks also passed. No 0.1.10 hardware
-result exists yet; the diagnostic has not been installed or reboot-tested.
+syntax and Debian package metadata checks also passed.
+
+### 0.1.10 GOP transport boot result
+
+The 2026-09-27 verifier and kernel journal confirm that DKMS 0.1.10 is the
+loaded module (`srcversion` matches), `NvI2CHw=1` is active, and the diagnostic
+ran on the K4200. The user also installed the missing NVE4/VP5 firmware blobs
+and confirmed that the corresponding firmware-load and `msvld` initialization
+errors no longer appear in the post-boot kernel log. The module-signature
+taint is expected for this local DKMS build and is separate from the DDC
+result.
+
+The first complete transaction follows the recovered GOP sequence:
+
+```text
+caller initialization and recovery: success
+400 kHz hardware read:              D000=30000050, status field 1, -EIO, 0 bytes
+100 kHz hardware retry:             D000=30000050, status field 1, -EIO, 0 bytes
+software-mode recovery:             success
+GOP software path:                  no EDID data; returns -ENXIO
+```
+
+Both hardware commands were issued after successful pre-command waits and
+completed with the same nonzero GOP result. This is not a busy-bit timeout.
+Status field 1 remains an unnamed GOP transfer failure; the evidence does not
+justify labeling it an address NACK. No one-byte presence probe succeeded, so
+DRM did not request the 128-byte base block and the connector EDID remained
+empty.
+
+The software helper reported the following sequence: wire `0x60` (segment
+pointer address), segment byte `0x00`, wire `0xa0` (EDID write address), offset
+`0x00`, and wire `0xa1` (EDID read address). Each write-byte helper returned
+`2` (NACK); START/STOP helpers returned success. The transfer returned at the
+`0xa1` check without reading data. The first result record therefore says
+`first_nack=segment-address`, while `failure_stage=edid-address-read` names the
+terminal check at which the helper stopped. These fields answer different
+questions and this output is not a logging bug.
+
+The software helper deliberately continues across positive NACK results for
+the earlier segment/address write bytes, matching the recovered GOP caller;
+payload reading starts only if `0xa1` is acknowledged. Thus the later address
+records are part of the recovered transfer sequence, not an independent retry
+or an automatic Linux-bitbang replay. The verifier counted 36 diagnostic
+transfers, all with unsuccessful one-byte probes and no 128-byte reads; the
+first transfer included the 400-to-100 hardware retry, and later direct-60
+calls followed the dispatcher's retained speed state. The diagnostic restored
+D004, D008, D010, and D014 low control bits on exit (`d014_restored=0x37`).
+
+This boot substantially weakens missing GOP DDC sequencing, controller-vs-
+bitbang selection, and software-versus-hardware transport as explanations.
+The independently distinct recovered GOP routes still deliver no usable
+response to the GPU. The result does not by itself distinguish an open or
+disabled board-level DDC path from a GPU-side pad/input-routing prerequisite;
+both can present as high SDA during the ACK slot. Further software retries or
+clock variants are not justified by this evidence. Distinguishing those last
+classes requires observation on the physical DDC path (for example, SDA/SCL
+at the VGA connector and, if accessible, across any board buffer) or new
+board-specific evidence identifying the relevant enable state.
