@@ -213,11 +213,12 @@ address ACK slots, the three reads were also `0x37` and Nouveau reported
 does not distinguish external-pad sensing from local loopback or an isolated
 path. No persistent register change is justified by the current evidence.
 
-The full 184,320-byte ROM referenced in earlier notes is not present in the
-canonical repository or the currently available Downloads directory. The
-VBIOS conclusions above therefore remain limited to the previously recorded
-DCB, encoder-script, GPIO31, and `e1b8` decodes; a fresh neighborhood-wide
-register-write audit requires that ROM or a complete EnvyTools decode.
+The full ROM was later recovered at
+`/home/keivan/Downloads/k4200-vbios.rom` and audited with EnvyTools. Its exact
+size, hash, extraction commands, complete decoded PNVIO/GPIO-neighborhood
+inventory, parser limitations, and resulting board/pad assessment are recorded
+in [BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md). The ROM
+binary itself remains outside Git.
 
 ### Standard DDC-routing GPIOs
 
@@ -247,14 +248,19 @@ the D014 input bits' electrical sampling point, or the function of a private
 board-level DDC control.
 
 The DAC/load-detect probe failed in both phases, and the D014 drive/sense
-capture is complete. The full 184,320-byte K4200 VBIOS was subsequently
-captured through Nouveau's read-only debugfs vbios.rom file and analyzed
-without BAR access. The ROM binary remains outside Git. Its GOP controller
+capture is complete. The full ROM was read through Nouveau's read-only debugfs
+`vbios.rom` file, then analyzed without BAR access. Its GOP controller
 transcript is preserved in
-[GK104-PNVIO-HW-I2C-TRANSCRIPT.md](GK104-PNVIO-HW-I2C-TRANSCRIPT.md).
-That transcript now gates a narrowly scoped GK104 hardware-DDC diagnostic;
-the remaining uncertainty is whether that controller can retrieve block 0
-from this connected monitor.
+[GK104-PNVIO-HW-I2C-TRANSCRIPT.md](GK104-PNVIO-HW-I2C-TRANSCRIPT.md); the
+2026-09-27 boot result is recorded below. Both GOP hardware rates and its
+distinctive software-line fallback returned no EDID data. The fresh board/pad
+audit found no decoded VBIOS write to D014/D018 and no assigned standard DDC
+GPIO, while identifying a conditional GPIO31 pulse whose purpose remains
+unknown. Nouveau's runtime decision to execute the main POST scripts also
+depends on a documented status bit that was not captured reliably in that
+boot. See [BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md).
+The remaining uncertainty is whether ACK is lost on the board path or reaches
+the GPU but is hidden by an undocumented pad/input-routing state.
 
 ## Experiment safety
 
