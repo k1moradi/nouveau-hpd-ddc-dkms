@@ -62,6 +62,14 @@ for the one-byte probe.
 | RVA | Routine | Relevant behavior recovered from the instructions |
 | --- | --- | --- |
 | 0x10d78 | Controller status wait | Reads the per-port D000 register, waits while bit 31 is set, compares elapsed timer units with 0x9c4 (2500), and decodes status as (D000 >> 29) & 3. Status 1 returns the internal result 2 on the normal path. Status 2/3 branch on an object flag at offset 0x30; status 0/1 also consult that flag on the timeout path. There is no fixed poll count or sleep in the loop. |
+| 0x10e34 | Enter software line mode | Reads D014; sets bit 2, copies SCL_IN bit 4 to output bit 0 and SDA_IN bit 5 to output bit 1, preserving the other bits. The resulting low three bits are `0x4 | ((D014 >> 4) & 1) | (((D014 >> 5) & 1) << 1)`. |
+| 0x10eec | Sample SDA | Waits one current line period, reads D014, and returns SDA_IN bit 5. |
+| 0x11040 | Wait for SCL | Samples SCL_IN bit 4 six times, with one current-period delay before each sample. It succeeds if any sample is high; it does not stop polling early. |
+| 0x11500 | STOP then START line sequence | Enters software mode if necessary; drives SDA low, SCL low/high, waits for SCL, releases SDA, stalls two additional periods, drives SDA low, then SCL low. After recovery has left both outputs low, this emits STOP followed by START. |
+| 0x11588 | Recovery/STOP line sequence | Enters software mode if necessary; drives SDA low, SCL low/high, waits for SCL, then drives SDA high, SCL low, SDA low. It leaves both outputs low. |
+| 0x11600 | Software byte writer | Sends eight bits MSB-first, releases SDA and clocks the ACK slot. Return 1 means ACK, 2 means NACK, negative means SCL wait failure. The caller continues after positive NACK results. |
+| 0x116f8 | Software byte reader | Reads eight bits MSB-first and clocks ACK for non-final bytes or NACK for the final byte. |
+| 0x11e58 | Explicit speed/period helper | Calls the speed setter, then computes the line period from the selected rate. Initializer 0x11330 performs the same period calculation inline below 100 kHz; a direct 60 kHz initialization produces 2 us, while the 100-to-60 fallback does not recalculate the constructor's 1 us period. |
 | 0x10eb4 | Enter hardware mode | Writes literal 0x00000003 to 0xd014 + port*0x20 and clears the GOP software-mode flag. |
 | 0x110cc | Hardware read | Calls the status waiter once before programming D004 when the destination and length are nonzero; that return value is ignored. It then packs D004 from `((wire_address >> 1) & 0x3ff) OR (mode_field << 11)`. The requested length controls the remaining-byte loop; each iteration puts `min(4, remaining)` in the D000 count field, issues the command, polls completion, reads one 32-bit word from D00C on success, and copies the requested low-order bytes first. |
 | 0x11254 | Speed programming | For 400 kHz, writes `(old_D008 & 0xfffff043) OR 0x43`. For 100 and 60 kHz, writes `(old_D008 & 0xfffff10e) OR 0x10e`. It then calls the D000 waiter, ignores its return, and writes STOP `0x8000000c`. |
@@ -115,109 +123,129 @@ status field to `-EIO`; that agrees with the GOP's success/failure outcome for
 status 1, but should not be generalized to status fields 2 and 3, whose GOP
 handling depends on the unresolved object flag.
 
-### GOP 400-to-100 kHz retry
+### Caller initialization and pre-read recovery
 
-The dispatcher call sites at RVA 0x11c60 were audited through the recursive
-retry. After the hardware-read helper returns, zero is marked successful at
-0x11ce1; any nonzero result reaches the rate fallback. A current rate of
-400000 or 300000 selects 100000 at 0x11d6c. The dispatcher calls the speed
-setter at 0x11254, then calls its own vtable slot +0x70 at 0x11d7c. The
-constructor at 0xcc60 installs the vtable at 0x1120 at instruction 0xccaa;
-that table entry points slot +0x70 to recovery routine 0x11dc0. Only a true return recurses into the
-same dispatcher at 0x11da7. The separate 100000-to-60000 transition is not
-enabled by this diagnostic.
+At RVA 0x1aec0, the EDID reader loads its bus object from `[this+8]` and calls
+vtable slots +0x10 (initialize), +0x70 (recover), then +0x68 (transfer). The
+bus vtable maps these slots to 0x11330, 0x11dc0, and 0x11c60. The initializer
+return is ignored; transfer is gated on recovery returning true.
 
-For the 100 kHz speed setter, 0x11254 writes
-`(old_D008 & 0xfffff10e) OR 0x10e`, waits on D000, ignores the wait result,
-and writes the D000 STOP command `0x8000000c` before the line-recovery call.
-It does not call controller initialization 0x11330 or rewrite D010. The
-recovery method 0x11dc0 switches to software line mode by copying D014 sense
-bits 4/5 into output bits 0/1. The bus constructor initializes the recovery
-period at object offset 0x24 to 1; the 400-to-100 dispatcher path calls
-0x11254 directly and does not change that period.
+For this non-hybrid K4200 port, initializer 0x11330 performs the following
+ordered operations: wait on D000 and ignore its result; write D010=`0x000f4240`;
+write D014=`3` to enter hardware mode; run the speed setter; then apply the
+initializer's D008 mask/value `(old & 0xff0a7fff) | 0x010a0000`. The speed
+setter for 400 kHz applies `(old & 0xfffff043) | 0x43`, waits on D000 while
+ignoring that result, and writes STOP `0x8000000c`. The DVI-I port-0 path does
+not take the hybrid-pad E50C/E500 branch.
 
-The recovery method delays 10 units, drives SCL low, then performs at most 16
-cycles. Each cycle drives SCL high, delays 10 units, samples SDA after a
-one-period delay, and invokes 0x11588 even when SDA is already high. That
-sequence drives SDA low, cycles SCL low/high, waits for SCL high for at most
-six one-period polls, then (if SCL rose) drives SDA high, delays two periods,
-and returns SDA/SCL low. The caller ignores the sequence's return and reports
-recovery success if any sampled SDA value was high.
+Recovery 0x11dc0 enters software line mode through 0x10e34 if needed. That
+helper sets D014 bit 2 and copies sensed SCL/SDA from bits 4/5 into output bits
+0/1. Recovery waits 10 us, drives SCL low, then performs at most 16 cycles of
+SCL high, a 10 us delay, and SDA sampling after one current-period delay. It
+calls line sequence 0x11588 on every cycle, including the one that first sees
+SDA high. Recovery succeeds when a sampled SDA value is high; it ignores the
+line sequence's return.
 
-On successful recovery, the recursive call enters the same 0x110cc read
-helper. Because recovery left the object in software mode, the helper invokes
-0x10eb4 at 0x1110d to write D014=3, then rewrites D004 and issues the same
-length-derived read command. Thus the retry changes D008, performs the
-bounded D014 line recovery, re-enters hardware mode, and repeats the same
-read; it does not rerun D010/controller initialization. The Linux diagnostic
-mirrors this one read-only retry for its exact offset-zero EDID probe/base
-block shapes and retains the 100 kHz rate for later transfers. It does not
-replay other I²C messages and does not add the GOP's 60 kHz fallback.
+Line sequence 0x11588 drives SDA low, SCL low/high, polls SCL six times, then
+(if any poll was high) drives SDA high, SCL low, SDA low. Each line setter
+waits one current period before its D014 update. The sequence therefore emits
+a STOP edge and leaves both outputs low. The Linux diagnostic now reproduces
+D014 bit 2 and this operation order; version 0.1.9 did not set bit 2 and used
+a different STOP ordering, so its reported recovery success was not an exact
+GOP recovery comparison. The 0.1.9 hardware-command status records remain
+valid observations of commands actually issued, but the new diagnostic is the
+first one intended to match the caller's line-state transition.
 
-### EDID-reader bus object and caller sequence
+### GOP hardware retry and software fallback
 
-At RVA 0x1aec0, the function loads the bus receiver from `[this+8]` and calls
-its vtable slots +0x10, +0x70, and +0x68. The bus vtable at RVA 0x1120 maps
-+0x10 to controller initialization 0x11330, +0x68 to dispatcher 0x11c60, and
-+0x70 to recovery 0x11dc0. Constructor 0x0cc60 installs this vtable at
-instruction 0x0ccaa. The caller ignores the initialization return, requires
-recovery to return true, and only then invokes the transfer method. The
-caller-side methods are
-therefore identified; they are not an unknown method that can be assigned an
-undocumented effect.
+Dispatcher 0x11c60 uses the hardware engine at rates of at least 100 kHz. A
+nonzero hardware-read result at 400/300 kHz selects 100 kHz, calls speed setter
+0x11254, then calls recovery 0x11dc0 and retries only if recovery succeeds.
+The 100 kHz setter uses `(old & 0xfffff10e) | 0x10e`, ignores its D000 wait
+result, and writes STOP `0x8000000c`. This path does not rerun controller
+initialization or rewrite D010. The constructor's software period at object
+offset `+0x24` starts at 1 us and remains 1 us through this direct 400-to-100
+transition.
 
-For this non-hybrid K4200 path, initialization calls the status waiter (its
-return is ignored), writes D010=`0x000f4240`, enters hardware mode with
-D014=`3`, calls the current speed setter, then applies the D008 initialization
-mask. The speed setter writes its D008 field, calls the waiter (also ignored),
-and writes STOP `0x8000000c`. The EDID caller then invokes line recovery
-0x11dc0 before the first transfer. That recovery enters software line mode,
-performs its bounded SCL/SDA sequence, and gates the read on a true return.
+If the 100 kHz hardware read also fails, the dispatcher selects 60 kHz with
+the same D008 mask/value, performs the wait-plus-STOP, runs recovery again,
+and recurses into software transfer routine 0x11b34 only if recovery
+succeeds. This transition calls 0x11254 directly and does not call period
+helper 0x11e58, so it retains the constructor's 1 us line period. A later
+transfer initialized directly at 60 kHz can call 0x11e58 and calculate a 2 us
+period. The requested rate name alone therefore does not describe the line
+timing of the first fallback attempt.
 
-The Linux diagnostic writes D010, D014, and the D008 init/speed fields itself.
-It does not reproduce the initializer's speed-setter wait+STOP before the init
-D008 write, or the EDID caller's initial recovery before the first 400 kHz
-command. Its 400 kHz result therefore is not yet an exact comparison with the
-GOP's initial transfer sequence. The later 400-to-100 retry does perform a
-wait+STOP and line recovery, but in a different position after the failed
-400 kHz command.
-
-### GOP 100-to-60 kHz software fallback
-
-After a failed 100 kHz hardware transfer, dispatcher 0x11c60 sets the rate
-field to 60 kHz with speed setter 0x11254, then calls vtable slot +0x70
-(recovery 0x11dc0) and recurses. At 60 kHz the dispatcher selects software
-transfer routine 0x11b34. The 60 and 100 kHz setter cases use the same D008
-mask/value `(old & 0xfffff10e) | 0x10e`; the 60 kHz branch changes the rate
-field, emits the setter's wait+STOP, and then switches to software line mode
-through recovery. The bitbang line delay uses the bus object's `+0x24` period.
-The separate helper 0x11e58 can recalculate that period, but this fallback
-calls 0x11254 directly and does not call 0x11e58. The requested 60 kHz rate is
-therefore established, while the exact software clock period for this fallback
-is not.
-
-For the block-0 arguments supplied by 0x1aec0, software routine 0x11b34 emits
-this transaction (wire bytes shown):
+For block 0, 0x11b34 consumes segment-address `0x60`, segment number 0,
+EDID wire address `0xa0`, offset 0, and the requested length. It calls line
+sequence 0x11500 before the first byte and between the following write groups.
+That helper is not a repeated-START primitive: after recovery has left both
+outputs low, it drives SDA low, clocks SCL low/high, waits for SCL, releases
+SDA, stalls two periods, pulls SDA low while SCL is high, then lowers SCL. Each
+call emits STOP followed by START. The decoded line transaction is therefore:
 
 ```text
-START
+Initial recovery state: SDA low, SCL low
+0x11500: STOP, then START
   0x60  segment-pointer address (7-bit 0x30, write)
   0x00  segment number
-REPEATED START
+0x11500: STOP, then START
   0xa0  EDID address (7-bit 0x50, write)
   0x00  EDID byte offset
-REPEATED START
+0x11500: STOP, then START
   0xa1  EDID address (7-bit 0x50, read)
   read block bytes, ACK each byte except the last; NACK the last
-STOP
+0x11588: STOP and leave both outputs low
 ```
 
-This has an additional segment-pointer write (`0x60, 0x00`) compared with
-Linux's tested two-message block-0 transfer (`0xa0, 0x00`, repeated-start,
-`0xa1`, read). The earlier Nouveau bitbang tests therefore did not exercise
-the full GOP software fallback transaction shape. The added pre-read recovery
-and this segment-pointer preamble are material sequence differences; they
-justify a bounded diagnostic follow-up, but do not predict that it will ACK.
+This differs from Linux's tested two-message block-0 request both by the
+segment-pointer write and by the STOP/START boundaries. The earlier Nouveau
+bitbang runs did not exercise this complete GOP software transaction. For a
+one-byte DRM presence probe, the same software helper reads one byte and NACKs
+it; for the 128-byte request it ACKs the first 127 bytes and NACKs the last.
+The caller continues across positive NACK results for the segment/address
+write bytes and only starts reading data when the `0xa1` write returns ACK.
+
+The line helpers use a six-sample SCL wait, one current period before each
+sample. The byte writer and reader follow the recovered helper's polling and
+line-update ordering. Each command-stage log records the wire byte, helper
+result, and ACK/NACK interpretation. The helper returns after an SCL timeout;
+the transfer path still runs its final 0x11588 cleanup sequence.
+
+### Current Linux diagnostic boundary
+
+The GOP accesses MMIO through indirect device-vtable callbacks at slots
+`+0x18` (read) and `+0x20` (write). Their implementation is not recovered as
+part of the transaction protocol, so this diagnostic does not claim to
+reproduce any wrapper-specific synchronization. It uses Nouveau's normal
+`nvkm_rd32()`/`nvkm_wr32()`/`nvkm_mask()` accessors while holding the NVKM
+bus/pad lock.
+
+The diagnostic is opt-in and remains restricted to GK104 (`chipset == 0xe4`),
+physical port 0 (`bus->addr == 0xd014`), DCB selector 3, and the exact DRM
+block-0 forms: write address 0x50, flags 0, length 1, data 0; then read address
+0x50 with `I2C_M_RD`, length 1 or 128. Selector 3 maps to 400 kHz only for
+this K4200 GOP. Other chipsets, ports, selectors, and message forms retain
+Linux `i2c-algo-bit`.
+
+The dispatcher chooses a path before acquiring the NVKM lock. Eligible
+hardware operations acquire the bus/pad once and release it once. Unsupported
+shapes call exported `i2c_bit_algo.master_xfer()` without the NVKM lock, so its
+existing pre/post callbacks own the acquire/release and cannot deadlock through
+a nested acquisition. A read-only D014 preflight rejection may also delegate
+before any transaction begins. Hardware errors after a transaction starts are
+not replayed through generic bitbang.
+
+For admitted EDID shapes, the diagnostic follows the GOP order: caller init,
+caller recovery, hardware read at the current rate, 400-to-100 retry when
+applicable, then the GOP's 100-to-60 recovery and software transaction after a
+failed 100 kHz read. It does not expose generic software I2C or enable other
+GOP transaction forms. The diagnostic snapshots D004, D008, D010, and D014
+before its first write, then restores D004/D008/D010 and the D014 low control
+bits before logging its final result. D000 is a command/status register and is
+left at the final completed operation's status. The ROM is outside Git; this
+transcript and the code diff are the audit record for each experimental
+MMIO/line operation.
 
 ## Controller command details
 
@@ -321,14 +349,16 @@ pre-read waiter (recorded and ignored), writes D004, reads the requested data
 through D000/D00C, records checked per-command status and the unchecked final
 wait result, and issues the GOP D000 cleanup command. The existing 400-to-100
 hardware retry remains unchanged after a failed primary command. Finally, the
-code restores the saved D014 low three control bits with Nouveau's existing
-masked-register access pattern. D008, D010, and D004 remain at their last
-GOP-programmed values, as they do in the GOP flow.
+diagnostic restores the saved D004, D008, and D010 values, then restores the
+saved D014 low three control bits with Nouveau's masked-register access
+pattern. The final result record reports all four restored values. D000 is
+left as the last completed command/status value.
 
-The verifier counts caller initialization/recovery records and prints these
-phase records alongside the per-rate command attempts. The 0.1.8 boot remains
-historical evidence for the earlier sequence; it did not include this
-caller-equivalent setup and therefore is not the next exact GOP comparison.
+The verifier reports caller initialization/recovery, per-rate hardware
+attempts, software-fallback stage records, and the final returned byte count.
+The 0.1.8 and 0.1.9 boots remain historical evidence for the earlier
+sequences; neither included the corrected D014 software-mode bit and exact
+recovery line ordering.
 
 The patch is applied only when the DKMS source contains
 diagnostic-pnvio-hw-ddc.enabled, created by

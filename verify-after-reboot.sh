@@ -2,7 +2,7 @@
 set -u
 
 NAME=nouveau-hpd-ddc
-VER=0.1.9
+VER=0.1.10
 k=$(uname -r)
 dac_ddc_diag_enabled=0
 if [ -f "/usr/src/$NAME-$VER/diagnostic-dac-ddc.enabled" ]; then
@@ -210,6 +210,28 @@ pnvio_hw_ddc_probe_success_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
     grep -Ec 'phase=result ret=2 bytes=1 chunks=1 ' || true)
 pnvio_hw_ddc_success_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
     grep -Ec 'phase=result ret=2 bytes=128 chunks=32 ' || true)
+pnvio_hw_ddc_software_start_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -c 'phase=software-fallback path=' || true)
+pnvio_hw_ddc_software_result_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -c 'phase=software-fallback result ' || true)
+pnvio_hw_ddc_software_probe_success_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -Ec 'phase=software-fallback result ret=2 bytes=1 ' || true)
+pnvio_hw_ddc_software_edid_success_count=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -Ec 'phase=software-fallback result ret=2 bytes=128 ' || true)
+pnvio_hw_ddc_restore_line=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -E 'phase=result .*d004_restored=.*d008_restored=.*d010_restored=.*d014_restored=' |
+    tail -n 1 || true)
+pnvio_hw_ddc_first_start=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    grep -F 'phase=start bus=d014 ' | head -n 1 || true)
+pnvio_hw_ddc_selector=$(printf '%s\n' "$pnvio_hw_ddc_first_start" |
+    sed -n 's/.* selector=\([0-9][0-9]*\) .*/\1/p')
+pnvio_hw_ddc_first_sequence=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
+    awk '
+        !capture && index($0, "phase=start bus=d014 ") { capture = 1 }
+        capture { print; records++ }
+        capture && index($0, "phase=result ") { exit }
+        records >= 100 { exit }
+    ')
 pnvio_hw_ddc_unsupported_lines=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
     grep -F 'path=bitbang reason=unsupported-shape ' || true)
 pnvio_hw_ddc_transfer_lines=$(printf '%s\n' "$pnvio_hw_ddc_lines" |
@@ -323,17 +345,37 @@ printf 'GOP caller recovery attempts/successes: %s/%s\n' \
 printf 'one-byte probe starts: %s\n' "$pnvio_hw_ddc_probe_start_count"
 printf 'one-byte probe successes: %s\n' "$pnvio_hw_ddc_probe_success_count"
 printf 'complete 128-byte GOP reads: %s\n' "$pnvio_hw_ddc_success_count"
-if [ "$pnvio_hw_ddc_diag_enabled" -eq 0 ]; then
+printf 'software fallback starts/results: %s/%s\n' \
+    "$pnvio_hw_ddc_software_start_count" "$pnvio_hw_ddc_software_result_count"
+printf 'software one-byte probe successes: %s\n' \
+    "$pnvio_hw_ddc_software_probe_success_count"
+printf 'software 128-byte EDID reads: %s\n' \
+    "$pnvio_hw_ddc_software_edid_success_count"
+if [ -n "$pnvio_hw_ddc_restore_line" ]; then
+    printf 'last controller-register restore: %s\n' "$pnvio_hw_ddc_restore_line"
+else
+    echo 'last controller-register restore: NO SAMPLE'
+fi
+printf 'DCB selector in first transfer: %s\n' "${pnvio_hw_ddc_selector:-NO SAMPLE}"
+if [ "$pnvio_hw_ddc_diag_enabled" -eq 0 ] && [ -z "$pnvio_hw_ddc_lines" ]; then
     echo 'The GK104 hardware DDC diagnostic was not enabled in the installed DKMS source.'
 elif [ "$pnvio_hw_ddc_lines" ]; then
+    if [ -n "$pnvio_hw_ddc_first_sequence" ]; then
+        echo 'First complete controller sequence:'
+        printf '%s\n' "$pnvio_hw_ddc_first_sequence"
+    fi
     echo 'Showing the latest 80 controller/fallback records:'
     printf '%s\n' "$pnvio_hw_ddc_transfer_lines" | tail -n 80
     if [ "$pnvio_hw_ddc_unsupported_lines" ]; then
         echo 'First unsupported two-message shape (bounded details):'
         printf '%s\n' "$pnvio_hw_ddc_unsupported_lines" | head -n 1
     fi
-    if [ "$pnvio_hw_ddc_success_count" -gt 0 ]; then
-        echo 'The controller returned both EDID block-0 messages and all 128 bytes.'
+    if [ "$pnvio_hw_ddc_software_edid_success_count" -gt 0 ]; then
+        echo 'The GOP-derived software fallback returned all 128 base-block bytes; inspect checksum_valid and EDID below.'
+    elif [ "$pnvio_hw_ddc_software_probe_success_count" -gt 0 ]; then
+        echo 'The software fallback completed the one-byte presence probe; DRM should issue the 128-byte read next.'
+    elif [ "$pnvio_hw_ddc_success_count" -gt 0 ]; then
+        echo 'The hardware controller returned both EDID block-0 messages and all 128 bytes.'
     elif [ "$pnvio_hw_ddc_start_count" -eq 0 ]; then
         echo 'No hardware transfer started; any path=bitbang records show why a transfer used Linux bitbang.'
     else

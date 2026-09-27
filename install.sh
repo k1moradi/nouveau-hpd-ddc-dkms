@@ -1,7 +1,7 @@
 #!/bin/bash
 set -Eeuo pipefail
 NAME=nouveau-hpd-ddc
-VER=0.1.9
+VER=0.1.10
 SRC_DIR="/usr/src/$NAME-$VER"
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 diag_ibuf=0
@@ -85,7 +85,7 @@ apt-get install -y \
     "linux-source-$base"
 
 # Clean up failed/older test revisions before installing this revision.
-for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8; do
+for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8 0.1.9; do
     if dkms status -m "$NAME" -v "$oldver" 2>/dev/null | grep -q .; then
         echo "Removing older DKMS revision $NAME/$oldver"
         dkms remove -m "$NAME" -v "$oldver" --all
@@ -94,7 +94,7 @@ for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8; do
     rm -rf "/var/lib/dkms/$NAME/$oldver"
 done
 
-for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8; do
+for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8 0.1.9; do
     if dkms status -m "$NAME" -v "$oldver" 2>/dev/null | grep -q . \
         || [ -e "/usr/src/$NAME-$oldver" ] \
         || [ -e "/var/lib/dkms/$NAME/$oldver" ]; then

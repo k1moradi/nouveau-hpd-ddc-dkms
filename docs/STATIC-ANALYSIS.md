@@ -441,124 +441,64 @@ status fields 2 and 3 through the separate object-flag check at offset
 diagnostic's generic `status != 0` mapping must not be generalized into a
 production implementation.
 
-The GOP EDID reader's success-gated method calls were resolved by the later
-caller/vtable audit below. The 100 kHz diagnostic reproduces the dispatcher's
-400-to-100 retry, but its first 400 kHz attempt omitted the caller's initial
-line recovery and the speed setter's wait-plus-STOP sequence. The hardware
-status therefore is not yet an exact comparison with the GOP's initial read
-sequence. The later `nve4_fuc084*` firmware-load failures in the verifier
-occurred minutes after these DDC attempts and concern video-decode firmware;
-the log does not connect them to the DDC status.
+### 0.1.9 GOP caller-sequence result and correction
 
-### GOP-derived 100 kHz retry audit
+The attached 0.1.9 journal shows that the module loaded from DKMS and that the
+GK104 hardware diagnostic ran. Its first transfer executed the recovered
+400 kHz caller setup, reported caller recovery success, then issued D004=`0x50`
+and D000 command `0x90000057`. The command completed with D000=`0x30000050`,
+status field 1, zero bytes, and `-EIO`. The 400-to-100 retry likewise reported
+recovery success and the same status-1 result. The external-agent summary
+counted 36 transfers; the later saved `log.txt` contains 42 direct 100 kHz
+starts. Both captures show zero successful one-byte probes and no 128-byte
+reads. These are completed controller-command failures; status field 1
+remains an unnamed GOP transfer failure, not a proven address NACK.
 
-The local K4200 GOP transcript now covers the 0x11c60 fallback and its
-0x11dc0 recovery callback. A completed nonzero read-helper result at 400 kHz
-selects 100 kHz, programs D008 with `(old & 0xfffff10e) | 0x10e`, performs
-the ignored status wait and STOP command, then invokes the bus recovery
-callback. If SDA is observed high during its bounded recovery, the dispatcher
-recurses through the same hardware-read helper. The Linux diagnostic mirrors
-only this 400-to-100 hardware retry for the already-admitted offset-zero EDID
-probe and base-block read. It does not add the GOP's later 60 kHz path or
-replay through bitbang.
+A follow-up source/disassembly comparison found that 0.1.9's recovery was not
+fully GOP-equivalent despite its `result=1` records. GOP helper 0x10e34 sets
+D014 bit 2 while copying SCL/SDA sense bits into output bits 0/1; the earlier
+Linux code copied only the sense bits. Its recovery cleanup also must reproduce
+the 0x11588 order: SDA low, SCL low/high, six SCL polls, SDA high, SCL low,
+SDA low. Therefore the 0.1.9 recovery-success counter alone cannot rule out a
+line-mode difference. The hardware command/status observations remain useful
+because the command was issued after that recovery, but they are not an exact
+end-to-end GOP comparison.
 
-The recovery callback puts D014 into software line mode, waits 10 microseconds,
-then performs at most 16 cycles of SCL low/high and SDA sampling. Each cycle
-also invokes the GOP's 0x11588 line sequence, which waits up to six 1-microsecond
-polls for SCL to rise. The Linux diagnostic uses Nouveau's existing D014
-drive/sense callbacks for those lines, restores the saved low three D014 bits
-at transfer exit, and retains 100 kHz for subsequent diagnostic EDID requests.
-The hardware behavior still requires monitor-connected verification; static
-agreement with the GOP transcript is not a runtime success.
+### Final ROM-derived software-line diagnostic
 
-### EDID caller vtable and 100-to-60 software fallback audit
+The remaining bounded GOP path is software transfer 0x11b34 after failed
+100 kHz hardware and a successful second recovery. Its distinctive behavior
+is the segment-pointer write to wire address `0x60` followed by 0x11500 helper
+calls that each produce STOP then START. This is different from the Linux
+bitbang transaction previously exercised. It is not justified as a generic
+60 kHz or adapter fallback; it is a tightly scoped K4200/GK104 diagnostic for
+the same one-byte presence probe and 128-byte EDID block-0 read shapes.
 
-The full K4200 ROM (`k4200-vbios.rom`, SHA-256 recorded in the transcript) was
-re-extracted and the decompressed EFI image hash matched the permanent
-transcript. At RVA `0x1aec0`, the EDID reader loads its bus object from
-`[this+8]`, then calls vtable slots `+0x10`, `+0x70`, and `+0x68`. The vtable
-at RVA `0x1120`, installed by the constructor at `0xcc60` (instruction
-`0xccaa`), maps those slots to controller initialization `0x11330`, line
-recovery `0x11dc0`, and request dispatcher `0x11c60`. The caller ignores the
-initializer's return value, skips the transfer unless recovery returns true,
-and then calls the dispatcher. Thus the pre-read methods are specifically
-the same K4200 bus methods used by the later hardware transfer.
+The 0.1.10 implementation corrects the D014 software-mode/recovery sequence,
+then logs each software stage (`0x60`, segment 0, `0xa0`, offset 0, `0xa1`),
+per-byte ACK/NACK outcome, timeout stage, read byte count, and checksum. It
+retains the GOP's 400-to-100 hardware retry, and only enters the line-transfer
+path after the 100 kHz read fails and its following recovery succeeds. It does
+not replay an arbitrary transaction through Linux bitbang after hardware has
+started. Unsupported messages continue to use Linux `i2c_bit_algo` through the
+existing acquire/release callbacks.
 
-That caller order identifies two steps absent from the first Linux hardware
-diagnostic attempt:
+The software START helper's exact pattern is STOP followed by START, not a
+repeated START: initial recovery leaves both output lines low; helper 0x11500
+clocks SCL, releases SDA, waits, pulls SDA low while SCL is high, then lowers
+SCL. The diagnostic must preserve this detail. On a one-byte probe, it reads
+one byte and sends the final NACK; on a 128-byte read it ACKs the first 127
+bytes and NACKs the last. Positive NACK results from preceding write bytes do
+not stop the GOP caller; only failure to ACK `0xa1` prevents payload reading.
 
-- GOP initialization `0x11330` calls the status waiter, writes D010=`0xf4240`,
-  enters hardware mode, invokes speed setter `0x11254`, then applies the D008
-  initialization mask. The speed setter itself writes the rate field, calls
-  the waiter and ignores its result, then writes D000 STOP=`0x8000000c`.
-  Linux currently writes D010, D014, and D008 init/speed fields directly; it
-  does not issue that initialization wait-plus-STOP.
-- The EDID caller invokes recovery `0x11dc0` after initialization and before
-  the first transfer. Linux currently recovers only after a failed 400 kHz
-  attempt, as part of the 100 kHz retry.
+Before the diagnostic's first write it snapshots D004, D008, and D010 along
+with D014. Every post-preflight exit restores D004/D008/D010 and D014's low
+control bits; the final `phase=result` record reports those restored values.
+D000 remains the final command/status value because writing it to restore a
+snapshot could issue another controller command.
 
-The command failures at 400 and 100 kHz therefore weaken a clock-only theory,
-but do not rule out a missing pre-read sequence. The next controller
-comparison should reproduce these exact caller-side steps before treating the
-first hardware attempt as GOP-equivalent.
-
-The same dispatcher has a further path after a failed 100 kHz command: it sets
-the rate field to 60 kHz, invokes the speed setter (including its wait and
-STOP), calls line recovery again, then recurses into software transfer
-`0x11b34`. The 60 and 100 kHz cases use the same D008 mask/value. The
-dispatcher changes the rate field, but the software bit timing uses the bus
-`+0x24` delay period. Helper `0x11e58` can recalculate that period; this
-100-to-60 transition calls `0x11254` directly and does not call `0x11e58`, so
-the exact line clock is not established as 60 kHz from this path alone.
-
-The 60 kHz software transaction is materially different from the Linux
-two-message EDID request. For base block 0, routine `0x11b34` uses the
-arguments from the EDID reader to issue:
-
-```text
-START, 0x60 0x00, REPEATED START,
-0xa0 0x00, REPEATED START, 0xa1,
-read bytes (ACK except final NACK), STOP
-```
-
-Here `0x60` is the segment-pointer wire address (7-bit `0x30`), followed by
-segment zero. Linux's tested sequence begins at `0xa0 0x00` and then repeated
-starts at `0xa1`; the extra segment-pointer write has not been exercised by
-the prior Nouveau bitbang runs. This makes the GOP's final software fallback
-a distinct, bounded diagnostic candidate after the caller-side initialization
-and initial recovery sequence are reproduced.
-
-### Third hardware-backed boot
-
-The 0.1.8 verifier reports a matching loaded DKMS module and active
-`NvI2CHw=1`: 38 starts/results, one 400 kHz attempt, 38 100 kHz attempts, one
-successful recovery cycle, zero successful one-byte probes, and no 128-byte
-reads. The first attempt returned `0x30000050` after command `0x90000057` at
-400 kHz. The 100 kHz retry changed D008 from `0x010a0043` to `0x010a010e`,
-completed one recovery cycle, then returned the same command status with zero
-bytes. Subsequent direct 100 kHz attempts returned the same status. Status
-field 1 remains an unnamed GOP transfer failure, not a proven address NACK.
-
-On direct 100 kHz attempts, the `phase=attempt rate_khz=100 ret=-5` record is
-the primary result. The final `attempt400_ret`/`attempt100_ret` fields are
-misleading for those transfers: they contain the primary result and the
-unused retry slot (`-EOPNOTSUPP`), not a fresh 400 kHz result and a 100 kHz
-retry result. Use the phase-specific attempt records when interpreting this
-boot.
-
-### Caller-sequence diagnostic follow-up
-
-The 0.1.8 boot does not establish an exact GOP/Nouveau comparison. Static
-analysis found that the GOP caller performs an initial ignored D000 wait,
-programs the rate, performs the speed-setter's ignored wait and STOP, applies
-the initializer D008 mask, and runs recovery `0x11dc0` before the first read.
-The 0.1.8 Linux diagnostic lacked that ordering and recovery before its first
-400 kHz command.
-
-Version 0.1.9 adds those steps in the recovered order. It logs
-`phase=caller-init` with both wait results and D008 snapshots, then
-`phase=caller-recovery` with the recovery result, cycles, and D014 state. It
-issues no EDID command or 100 kHz retry if caller recovery fails. After a
-successful recovery it re-enters hardware mode and retains the existing
-400-to-100 retry behavior. This change is diagnostic code only; its hardware
-result remains pending until the next connected-monitor boot.
+This patch remains diagnostic and opt-in. The patch applies to the Ubuntu
+Linux 7.0 source without offsets, and both diagnostic-enabled and
+diagnostic-disabled DKMS module builds passed for `7.0.0-34-generic`. Shell
+syntax and Debian package metadata checks also passed. No 0.1.10 hardware
+result exists yet; the diagnostic has not been installed or reboot-tested.

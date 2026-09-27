@@ -35,5 +35,5 @@ chmod 0755 \
     "$SRC/dkms-post-install.sh" \
     "$SRC/dkms-post-remove.sh"
 
-dpkg-deb --build "$STAGE" "$OUT"
+dpkg-deb --root-owner-group --build "$STAGE" "$OUT"
 echo "Built $OUT"

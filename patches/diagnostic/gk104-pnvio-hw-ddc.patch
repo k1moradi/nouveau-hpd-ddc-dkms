@@ -281,11 +281,12 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..eab6ebe815f6d5c462bb4325a5c8ecf3
 +#include <asm/processor.h>
 +
 +struct gf119_i2c_bus {
-@@ -29,2 +35,3 @@
+@@ -29,2 +35,4 @@
  	u32 addr;
 +	u32 hw_speed;
++	u32 sw_period_us;
  };
-@@ -69,6 +76,393 @@
+@@ -69,6 +77,790 @@
  	nvkm_wr32(device, bus->addr, 0x00000007);
  }
  
@@ -419,15 +420,15 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..eab6ebe815f6d5c462bb4325a5c8ecf3
 +static void
 +gf119_i2c_hw_recovery_drive_scl(struct gf119_i2c_bus *bus, int state)
 +{
-+	/* GOP line setters delay one period before each D014 update. */
-+	udelay(1);
++	/* GOP line setters delay one current period before each D014 update. */
++	udelay(bus->sw_period_us);
 +	bus->base.func->drive_scl(&bus->base, state);
 +}
 +
 +static void
 +gf119_i2c_hw_recovery_drive_sda(struct gf119_i2c_bus *bus, int state)
 +{
-+	udelay(1);
++	udelay(bus->sw_period_us);
 +	bus->base.func->drive_sda(&bus->base, state);
 +}
 +
@@ -435,25 +436,25 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..eab6ebe815f6d5c462bb4325a5c8ecf3
 +gf119_i2c_hw_recovery_sequence(struct gf119_i2c_bus *bus)
 +{
 +	int i;
++	bool scl_high = false;
 +
-+	/* GOP routine at RVA 0x11588. */
++	/* GOP routine at RVA 0x11588: STOP edge, then leave both lines low. */
 +	gf119_i2c_hw_recovery_drive_sda(bus, 0);
 +	gf119_i2c_hw_recovery_drive_scl(bus, 0);
 +	gf119_i2c_hw_recovery_drive_scl(bus, 1);
 +
-+	/* RVA 0x11040 polls SCL at most six times, one period per poll. */
++	/* RVA 0x11040 polls SCL exactly six times, one period per poll. */
 +	for (i = 0; i < 6; i++) {
-+		udelay(1);
++		udelay(bus->sw_period_us);
 +		if (bus->base.func->sense_scl(&bus->base))
-+			break;
++			scl_high = true;
 +	}
-+	if (i == 6)
-+		return -ETIMEDOUT;
++	if (!scl_high)
++		return -1;
 +
 +	gf119_i2c_hw_recovery_drive_sda(bus, 1);
-+	udelay(2);
-+	gf119_i2c_hw_recovery_drive_sda(bus, 0);
 +	gf119_i2c_hw_recovery_drive_scl(bus, 0);
++	gf119_i2c_hw_recovery_drive_sda(bus, 0);
 +	return 0;
 +}
 +
@@ -466,11 +467,11 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..eab6ebe815f6d5c462bb4325a5c8ecf3
 +	int i;
 +
 +	/*
-+	 * GOP method 0x11dc0 enters software line mode by copying the sensed
-+	 * SCL/SDA levels into D014 output bits 0/1, preserving other bits.
++	 * GOP helper 0x10e34 enters software mode: D014 bit 2 is set, and
++	 * sensed SCL/SDA bits 4/5 are copied to output bits 0/1.
 +	 */
-+	lines = ((d014 >> 4) & 0x1) | (((d014 >> 5) & 0x1) << 1);
-+	nvkm_mask(device, bus->addr, 0x00000003, lines);
++	lines = 0x4 | ((d014 >> 4) & 0x1) | (((d014 >> 5) & 0x1) << 1);
++	nvkm_mask(device, bus->addr, 0x00000007, lines);
 +
 +	/* The dispatcher waits 10 us, then begins its bounded SCL recovery. */
 +	udelay(10);
@@ -483,7 +484,7 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..eab6ebe815f6d5c462bb4325a5c8ecf3
 +		udelay(10);
 +
 +		/* GOP sense helper waits one period before reading SDA_IN. */
-+		udelay(1);
++		udelay(bus->sw_period_us);
 +		sda = bus->base.func->sense_sda(&bus->base);
 +
 +		/*
@@ -500,6 +501,306 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..eab6ebe815f6d5c462bb4325a5c8ecf3
 +}
 +
 +static int
++gf119_i2c_gop_wait_scl(struct gf119_i2c_bus *bus)
++{
++	bool high = false;
++	int i;
++
++	/* GOP 0x11040 samples SCL exactly six times, even after a high. */
++	for (i = 0; i < 6; i++) {
++		udelay(bus->sw_period_us);
++		if (bus->base.func->sense_scl(&bus->base))
++			high = true;
++	}
++
++	return high ? 0 : -1;
++}
++
++static bool
++gf119_i2c_gop_sample_sda(struct gf119_i2c_bus *bus)
++{
++	udelay(bus->sw_period_us);
++	return bus->base.func->sense_sda(&bus->base);
++}
++
++/*
++ * GOP line helper 0x11500: after recovery leaves both outputs low,
++ * release/clock, emit STOP, then START.
++ */
++static int
++gf119_i2c_gop_start(struct gf119_i2c_bus *bus)
++{
++	int ret;
++
++	gf119_i2c_hw_recovery_drive_sda(bus, 0);
++	gf119_i2c_hw_recovery_drive_scl(bus, 0);
++	gf119_i2c_hw_recovery_drive_scl(bus, 1);
++	ret = gf119_i2c_gop_wait_scl(bus);
++	if (ret)
++		return ret;
++
++	/* The helper explicitly stalls 2 periods between SDA release and START. */
++	gf119_i2c_hw_recovery_drive_sda(bus, 1);
++	udelay(2 * bus->sw_period_us);
++	gf119_i2c_hw_recovery_drive_sda(bus, 0);
++	gf119_i2c_hw_recovery_drive_scl(bus, 0);
++	return 0;
++}
++
++/* GOP line helper 0x11588: emit STOP and leave both outputs low. */
++static int
++gf119_i2c_gop_stop(struct gf119_i2c_bus *bus)
++{
++	int ret;
++
++	gf119_i2c_hw_recovery_drive_sda(bus, 0);
++	gf119_i2c_hw_recovery_drive_scl(bus, 0);
++	gf119_i2c_hw_recovery_drive_scl(bus, 1);
++	ret = gf119_i2c_gop_wait_scl(bus);
++	if (ret)
++		return ret;
++
++	/* Each line setter supplies the one-period delay in the GOP helper. */
++	gf119_i2c_hw_recovery_drive_sda(bus, 1);
++	gf119_i2c_hw_recovery_drive_scl(bus, 0);
++	gf119_i2c_hw_recovery_drive_sda(bus, 0);
++	return 0;
++}
++
++/* GOP byte writer 0x11600: MSB first, 1=ACK, 2=NACK, negative=timeout. */
++static int
++gf119_i2c_gop_write_byte(struct gf119_i2c_bus *bus, u8 byte)
++{
++	int bit;
++	int ret;
++
++	for (bit = 7; bit >= 0; bit--) {
++		gf119_i2c_hw_recovery_drive_scl(bus, 0);
++		gf119_i2c_hw_recovery_drive_sda(bus, (byte >> bit) & 1);
++		gf119_i2c_hw_recovery_drive_scl(bus, 1);
++		ret = gf119_i2c_gop_wait_scl(bus);
++		/* The GOP lowers SCL after each data bit before checking the result. */
++		gf119_i2c_hw_recovery_drive_scl(bus, 0);
++	}
++	if (ret)
++		return ret;
++
++	/* The GOP performs another low, releases SDA, then clocks the ACK bit. */
++	gf119_i2c_hw_recovery_drive_scl(bus, 0);
++	gf119_i2c_hw_recovery_drive_sda(bus, 1);
++	gf119_i2c_hw_recovery_drive_scl(bus, 1);
++	ret = gf119_i2c_gop_wait_scl(bus);
++	if (ret)
++		return ret;
++	ret = gf119_i2c_gop_sample_sda(bus) ? 2 : 1;
++	gf119_i2c_hw_recovery_drive_scl(bus, 0);
++	return ret;
++}
++
++/* GOP byte reader 0x116f8: ACK each non-final byte and NACK the last. */
++static int
++gf119_i2c_gop_read_byte(struct gf119_i2c_bus *bus, bool ack, u8 *byte)
++{
++	int bit;
++	int ret;
++
++	*byte = 0;
++	for (bit = 7; bit >= 0; bit--) {
++		gf119_i2c_hw_recovery_drive_scl(bus, 0);
++		gf119_i2c_hw_recovery_drive_sda(bus, 1);
++		gf119_i2c_hw_recovery_drive_scl(bus, 1);
++		ret = gf119_i2c_gop_wait_scl(bus);
++		/* The GOP samples SDA, then lowers SCL before checking this result. */
++		if (gf119_i2c_gop_sample_sda(bus))
++			*byte |= BIT(bit);
++		gf119_i2c_hw_recovery_drive_scl(bus, 0);
++	}
++	if (ret)
++		return ret;
++
++	/* ACK is SDA low; the final NACK releases SDA high. */
++	gf119_i2c_hw_recovery_drive_scl(bus, 0);
++	gf119_i2c_hw_recovery_drive_sda(bus, !ack);
++	gf119_i2c_hw_recovery_drive_scl(bus, 1);
++	ret = gf119_i2c_gop_wait_scl(bus);
++	if (ret)
++		return ret;
++	gf119_i2c_hw_recovery_drive_scl(bus, 0);
++	return 0;
++}
++
++static void
++gf119_i2c_gop_log_write(struct nvkm_subdev *subdev, const char *stage,
++			u8 wire, int ret)
++{
++	nvkm_info(subdev,
++		  "DDC_DIAG: PNVIO_HW_DDC phase=software-fallback stage=%s wire=%02x gop_ret=%d ack=%u\n",
++		  stage, wire, ret, ret == 1);
++}
++
++static int
++gf119_i2c_gop_software_xfer(struct gf119_i2c_bus *bus,
++			    struct i2c_msg *msgs, int num, const char *path,
++			    u32 *bytes, const char **first_nack_stage,
++			    const char **failure_stage)
++{
++	struct nvkm_device *device = bus->base.pad->i2c->subdev.device;
++	struct nvkm_subdev *subdev = &bus->base.pad->i2c->subdev;
++	u32 length = msgs[1].len;
++	u32 checksum = 0;
++	u32 i;
++	int start_ret;
++	int segment_addr_ret = 0;
++	int segment_data_ret = 0;
++	int edid_write_ret = 0;
++	int offset_ret = 0;
++	int edid_read_ret = 0;
++	int read_ret = 0;
++	int stop_ret;
++	int ret;
++
++	*bytes = 0;
++	*first_nack_stage = "none";
++	*failure_stage = "none";
++
++	nvkm_info(subdev,
++		  "DDC_DIAG: PNVIO_HW_DDC phase=software-fallback path=%s rate_khz=60 period_us=%u length=%u selector=%u d014=%08x\n",
++		  path, bus->sw_period_us, length, bus->base.speed_sel,
++		  nvkm_rd32(device, bus->addr));
++
++	start_ret = gf119_i2c_gop_start(bus);
++	nvkm_info(subdev,
++		  "DDC_DIAG: PNVIO_HW_DDC phase=software-fallback stage=start-initial gop_ret=%d\n",
++		  start_ret);
++	if (start_ret < 0) {
++		ret = -ETIMEDOUT;
++		*failure_stage = "start-initial";
++		goto stop;
++	}
++
++	segment_addr_ret = gf119_i2c_gop_write_byte(bus, 0x60);
++	gf119_i2c_gop_log_write(subdev, "segment-address", 0x60,
++				segment_addr_ret);
++	if (segment_addr_ret == 2)
++		*first_nack_stage = "segment-address";
++	if (segment_addr_ret < 0) {
++		ret = -ETIMEDOUT;
++		*failure_stage = "segment-address";
++		goto stop;
++	}
++
++	segment_data_ret = gf119_i2c_gop_write_byte(bus, 0x00);
++	gf119_i2c_gop_log_write(subdev, "segment-data", 0x00,
++				segment_data_ret);
++	if (segment_data_ret == 2 && !strcmp(*first_nack_stage, "none"))
++		*first_nack_stage = "segment-data";
++	if (segment_data_ret < 0) {
++		ret = -ETIMEDOUT;
++		*failure_stage = "segment-data";
++		goto stop;
++	}
++
++	start_ret = gf119_i2c_gop_start(bus);
++	nvkm_info(subdev,
++		  "DDC_DIAG: PNVIO_HW_DDC phase=software-fallback stage=start-after-segment gop_ret=%d\n",
++		  start_ret);
++	if (start_ret < 0) {
++		ret = -ETIMEDOUT;
++		*failure_stage = "start-after-segment";
++		goto stop;
++	}
++
++	edid_write_ret = gf119_i2c_gop_write_byte(bus, 0xa0);
++	gf119_i2c_gop_log_write(subdev, "edid-address-write", 0xa0,
++				edid_write_ret);
++	if (edid_write_ret == 2 && !strcmp(*first_nack_stage, "none"))
++		*first_nack_stage = "edid-address-write";
++	if (edid_write_ret < 0) {
++		ret = -ETIMEDOUT;
++		*failure_stage = "edid-address-write";
++		goto stop;
++	}
++
++	offset_ret = gf119_i2c_gop_write_byte(bus, 0x00);
++	gf119_i2c_gop_log_write(subdev, "edid-offset", 0x00, offset_ret);
++	if (offset_ret == 2 && !strcmp(*first_nack_stage, "none"))
++		*first_nack_stage = "edid-offset";
++	if (offset_ret < 0) {
++		ret = -ETIMEDOUT;
++		*failure_stage = "edid-offset";
++		goto stop;
++	}
++
++	start_ret = gf119_i2c_gop_start(bus);
++	nvkm_info(subdev,
++		  "DDC_DIAG: PNVIO_HW_DDC phase=software-fallback stage=start-after-offset gop_ret=%d\n",
++		  start_ret);
++	if (start_ret < 0) {
++		ret = -ETIMEDOUT;
++		*failure_stage = "start-after-offset";
++		goto stop;
++	}
++
++	edid_read_ret = gf119_i2c_gop_write_byte(bus, 0xa1);
++	gf119_i2c_gop_log_write(subdev, "edid-address-read", 0xa1,
++				edid_read_ret);
++	if (edid_read_ret == 2 && !strcmp(*first_nack_stage, "none"))
++		*first_nack_stage = "edid-address-read";
++	if (edid_read_ret < 0) {
++		ret = -ETIMEDOUT;
++		*failure_stage = "edid-address-read";
++		goto stop;
++	}
++	if (edid_read_ret != 1) {
++		ret = -ENXIO;
++		*failure_stage = "edid-address-read";
++		goto stop;
++	}
++
++	for (i = 0; i < length; i++) {
++		u8 value;
++
++		read_ret = gf119_i2c_gop_read_byte(bus, i + 1 < length, &value);
++		if (read_ret < 0) {
++			ret = -ETIMEDOUT;
++			*failure_stage = "read-data";
++			break;
++		}
++		msgs[1].buf[i] = value;
++		checksum += value;
++		(*bytes)++;
++	}
++	if (*bytes == length)
++		ret = num;
++
++stop:
++	stop_ret = gf119_i2c_gop_stop(bus);
++	nvkm_info(subdev,
++		  "DDC_DIAG: PNVIO_HW_DDC phase=software-fallback stage=stop gop_ret=%d\n",
++		  stop_ret);
++	if (ret == num) {
++		if (length == 128)
++			nvkm_info(subdev,
++				  "DDC_DIAG: PNVIO_HW_DDC phase=software-fallback result ret=%d bytes=%u first_nack=%s failure_stage=%s checksum=%02x checksum_valid=%u head=%02x%02x%02x%02x stop_ret=%d\n",
++				  ret, *bytes, *first_nack_stage, *failure_stage,
++				  checksum & 0xff, (checksum & 0xff) == 0,
++				  msgs[1].buf[0], msgs[1].buf[1], msgs[1].buf[2],
++				  msgs[1].buf[3], stop_ret);
++		else
++			nvkm_info(subdev,
++				  "DDC_DIAG: PNVIO_HW_DDC phase=software-fallback result ret=%d bytes=%u first_nack=%s failure_stage=%s byte0=%02x stop_ret=%d\n",
++				  ret, *bytes, *first_nack_stage, *failure_stage,
++				  msgs[1].buf[0], stop_ret);
++	} else {
++		nvkm_info(subdev,
++			  "DDC_DIAG: PNVIO_HW_DDC phase=software-fallback result ret=%d bytes=%u first_nack=%s failure_stage=%s edid_address_write_ret=%d offset_ret=%d edid_address_read_ret=%d stop_ret=%d\n",
++			  ret, *bytes, *first_nack_stage, *failure_stage,
++			  edid_write_ret, offset_ret, edid_read_ret, stop_ret);
++	}
++	return ret;
++}
++
++static int
 +gf119_i2c_bus_hw_xfer(struct nvkm_i2c_bus *base,
 +		      struct i2c_msg *msgs, int num)
 +{
@@ -512,6 +813,9 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..eab6ebe815f6d5c462bb4325a5c8ecf3
 +	struct gf119_i2c_hw_attempt first;
 +	struct gf119_i2c_hw_attempt second;
 +	u32 saved_d014 = nvkm_rd32(device, bus->addr);
++	u32 saved_d004;
++	u32 saved_d008;
++	u32 saved_d010;
 +	u32 d000_before;
 +	u32 d008_before_speed;
 +	u32 d008_after_speed;
@@ -522,21 +826,33 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..eab6ebe815f6d5c462bb4325a5c8ecf3
 +	u32 retry_speed_status = 0;
 +	u32 caller_recovery_cycles = 0;
 +	u32 retry_recovery_cycles = 0;
++	u32 software_recovery_cycles = 0;
 +	u32 retry_d008_before = 0;
 +	u32 retry_d008_after = 0;
-+	int init_wait_ret;
-+	int speed_wait_ret;
-+	int retry_speed_wait_ret = 0;
-+	int first_ret = -EOPNOTSUPP;
-+	int second_ret = -EOPNOTSUPP;
++	u32 software_d008_before = 0;
++	u32 software_d008_after = 0;
++	u32 software_speed_status = 0;
++	u32 software_bytes = 0;
 +	u32 result_bytes = 0;
 +	u32 result_chunks = 0;
++	int init_wait_ret;
++	int speed_wait_ret = 0;
++	int retry_speed_wait_ret = 0;
++	int software_speed_wait_ret = 0;
++	int first_ret = -EOPNOTSUPP;
++	int second_ret = -EOPNOTSUPP;
++	int ret = -EIO;
++	bool speed_setter;
 +	bool primary_attempted = false;
-+	bool caller_recovered;
++	bool caller_recovered = false;
 +	bool retry100_attempted = false;
 +	bool retry_recovered = false;
++	bool software_attempted = false;
++	bool software_recovered = false;
 +	const char *failure_stage = "caller-recovery";
-+	int ret;
++	const char *software_path = "none";
++	const char *software_first_nack = "none";
++	const char *software_failure_stage = "none";
 +
 +	/*
 +	 * This is a read-only preflight. Returning -EOPNOTSUPP lets the
@@ -549,129 +865,211 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..eab6ebe815f6d5c462bb4325a5c8ecf3
 +		return -EOPNOTSUPP;
 +	}
 +
++	saved_d004 = nvkm_rd32(device, bus->addr - 0x10);
++	saved_d008 = nvkm_rd32(device, d008);
++	saved_d010 = nvkm_rd32(device, d010);
 +	d000_before = nvkm_rd32(device, d000);
 +	nvkm_info(subdev,
-+		  "DDC_DIAG: PNVIO_HW_DDC phase=start bus=d014 selector=%u rate_khz=%u address=50 offset=00 length=%u d014=%08x d008=%08x d000_before=%08x\n",
++		  "DDC_DIAG: PNVIO_HW_DDC phase=start bus=d014 selector=%u rate_khz=%u address=50 offset=00 length=%u d014=%08x d004=%08x d008=%08x d010=%08x d000_before=%08x\n",
 +		  base->speed_sel, first_rate / 1000, msgs[1].len, saved_d014,
-+		  nvkm_rd32(device, d008), d000_before);
++		  saved_d004, saved_d008, saved_d010, d000_before);
++
 +	init_wait_ret = gf119_i2c_hw_wait(device, d000, &init_wait_status);
 +	/* The GOP caller ignores this initial wait result. */
 +	nvkm_wr32(device, d010, 0x000f4240);
 +	nvkm_wr32(device, bus->addr, 0x00000003);
 +
-+	/* GOP speed setter: program rate, ignore waiter result, then STOP. */
++	/*
++	 * The GOP speed setter runs for rates >= 100 kHz. At 60 kHz it keeps
++	 * the constructor period on the 100->60 retry; a later GOP init
++	 * recalculates the software period before caller recovery.
++	 */
++	speed_setter = first_rate >= 100000;
 +	d008_before_speed = nvkm_rd32(device, d008);
-+	if (first_rate == 400000)
++	if (first_rate == 400000) {
 +		nvkm_mask(device, d008, 0x00000fbc, 0x00000043);
-+	else
++	} else if (speed_setter) {
 +		nvkm_mask(device, d008, 0x00000ef1, 0x0000010e);
-+	speed_wait_ret =
-+		gf119_i2c_hw_wait(device, d000, &speed_wait_status);
-+	nvkm_wr32(device, d000, 0x8000000c);
++	}
++
++	if (speed_setter) {
++		speed_wait_ret =
++			gf119_i2c_hw_wait(device, d000, &speed_wait_status);
++		/* The GOP ignores this wait result, then writes STOP. */
++		nvkm_wr32(device, d000, 0x8000000c);
++	}
 +	d008_after_speed = nvkm_rd32(device, d008);
 +
-+	/* The GOP applies this initializer mask after the speed-setter STOP. */
++	if (first_rate < 100000) {
++		u32 rate_div = 1000000 / first_rate;
++		u32 period = ((u64)rate_div * 0xaaaaaaabULL) >> 34;
++
++		if (period)
++			bus->sw_period_us = period;
++	}
++
++	/* The GOP applies this initializer mask after speed setup. */
 +	nvkm_mask(device, d008, 0x00f58000, 0x010a0000);
 +	d008_after_init = nvkm_rd32(device, d008);
 +	nvkm_info(subdev,
-+		  "DDC_DIAG: PNVIO_HW_DDC phase=caller-init rate_khz=%u init_wait_ret=%d init_wait_status=%08x speed_wait_ret=%d speed_status=%08x stop_written=1 d008_before_speed=%08x d008_after_speed=%08x d008_after_init=%08x d010=%08x d014=%08x\n",
++		  "DDC_DIAG: PNVIO_HW_DDC phase=caller-init rate_khz=%u init_wait_ret=%d init_wait_status=%08x speed_setter=%u speed_wait_ret=%d speed_status=%08x stop_written=%u d008_before_speed=%08x d008_after_speed=%08x d008_after_init=%08x d010=%08x d014=%08x sw_period_us=%u\n",
 +		  first_rate / 1000, init_wait_ret, init_wait_status,
-+		  speed_wait_ret, speed_wait_status, d008_before_speed,
-+		  d008_after_speed, d008_after_init,
-+		  nvkm_rd32(device, d010), nvkm_rd32(device, bus->addr));
++		  speed_setter, speed_wait_ret, speed_wait_status, speed_setter,
++		  d008_before_speed, d008_after_speed, d008_after_init,
++		  nvkm_rd32(device, d010), nvkm_rd32(device, bus->addr),
++		  bus->sw_period_us);
 +
-+	/* GOP caller vtable +0x70 recovery must succeed before the read. */
++	/* GOP caller vtable +0x70 recovery must succeed before a transfer. */
 +	caller_recovered =
 +		gf119_i2c_hw_recover(bus, &caller_recovery_cycles);
 +	nvkm_info(subdev,
 +		  "DDC_DIAG: PNVIO_HW_DDC phase=caller-recovery result=%u cycles=%u d014_after=%08x\n",
 +		  caller_recovered, caller_recovery_cycles,
-+		nvkm_rd32(device, bus->addr));
++		  nvkm_rd32(device, bus->addr));
 +
-+	if (caller_recovered) {
-+		/* The GOP read helper re-enters controller mode after recovery. */
-+		nvkm_wr32(device, bus->addr, 0x00000003);
-+		primary_attempted = true;
-+		first_ret = gf119_i2c_hw_read_attempt(bus, msgs, num, &first);
-+		nvkm_info(subdev,
-+			  "DDC_DIAG: PNVIO_HW_DDC phase=attempt attempt=primary rate_khz=%u ret=%d bytes=%u chunks=%u failure_stage=%s d000_before=%08x pre_idle_ret=%d pre_idle_status=%08x d004=%08x command=%08x command_status=%08x final_wait_ret=%d final_status=%08x\n",
-+			  first_rate / 1000, first.ret, first.bytes, first.chunks,
-+			  first.failure_stage, first.d000_before, first.pre_idle_ret,
-+			  first.pre_idle_status, first.d004, first.command,
-+			  first.command_status, first.final_wait_ret,
-+			  first.final_status);
-+		ret = first_ret;
-+		result_bytes = first.bytes;
-+		result_chunks = first.chunks;
-+		failure_stage = first.failure_stage;
-+
-+		/*
-+		 * The K4200 GOP retries a failed 400 kHz read at 100 kHz. The only
-+		 * admitted transactions are EDID block-0 reads, so this replay is
-+		 * limited to the read-only offset-zero probe or base-block read.
-+		 */
-+		if (first_ret != num && first_rate == 400000) {
-+			retry100_attempted = true;
-+			bus->hw_speed = 100000;
-+
-+			retry_d008_before = nvkm_rd32(device, d008);
-+			nvkm_wr32(device, d008,
-+				  (retry_d008_before & 0xfffff10e) | 0x0000010e);
-+			retry_speed_wait_ret =
-+				gf119_i2c_hw_wait(device, d000,
-+						  &retry_speed_status);
-+			/* GOP ignores this wait result and issues STOP before recovery. */
-+			nvkm_wr32(device, d000, 0x8000000c);
-+			retry_d008_after = nvkm_rd32(device, d008);
-+
-+			retry_recovered =
-+				gf119_i2c_hw_recover(bus, &retry_recovery_cycles);
-+			nvkm_info(subdev,
-+				  "DDC_DIAG: PNVIO_HW_DDC phase=recovery rate_khz=100 result=%u cycles=%u speed_wait_ret=%d speed_status=%08x d008_before=%08x d008_after=%08x d014=%08x\n",
-+				  retry_recovered, retry_recovery_cycles,
-+				  retry_speed_wait_ret, retry_speed_status,
-+				  retry_d008_before, retry_d008_after,
-+				  nvkm_rd32(device, bus->addr));
-+
-+			if (retry_recovered) {
-+				/*
-+				 * GOP's recursive read helper sees software mode and
-+				 * re-enters hardware mode with D014=3 before D004.
-+				 */
-+				nvkm_wr32(device, bus->addr, 0x00000003);
-+				second_ret =
-+					gf119_i2c_hw_read_attempt(bus, msgs, num, &second);
-+				nvkm_info(subdev,
-+					  "DDC_DIAG: PNVIO_HW_DDC phase=attempt attempt=retry100 rate_khz=100 ret=%d bytes=%u chunks=%u failure_stage=%s d000_before=%08x pre_idle_ret=%d pre_idle_status=%08x d004=%08x command=%08x command_status=%08x final_wait_ret=%d final_status=%08x\n",
-+					  second.ret, second.bytes, second.chunks,
-+					  second.failure_stage, second.d000_before,
-+					  second.pre_idle_ret, second.pre_idle_status,
-+					  second.d004, second.command,
-+					  second.command_status, second.final_wait_ret,
-+					  second.final_status);
-+				ret = second_ret;
-+				result_bytes = second.bytes;
-+				result_chunks = second.chunks;
-+				failure_stage = second.failure_stage;
-+			} else {
-+				failure_stage = "retry-recovery";
-+			}
-+		}
-+	} else {
-+		/* Never issue or retry an EDID command without GOP recovery. */
++	if (!caller_recovered) {
 +		ret = -EIO;
++		goto restore;
 +	}
 +
-+	/* Restore the saved port-control bits after the final attempt. */
++	if (first_rate < 100000) {
++		/* At 60 kHz the GOP dispatcher selects the line-transfer helper. */
++		software_attempted = true;
++		software_recovered = true;
++		software_path = "direct-60";
++		ret = gf119_i2c_gop_software_xfer(bus, msgs, num, software_path,
++						  &software_bytes,
++						  &software_first_nack,
++						  &software_failure_stage);
++		result_bytes = software_bytes;
++		failure_stage = software_failure_stage;
++		goto restore;
++	}
++
++	/* The GOP read helper re-enters controller mode after recovery. */
++	nvkm_wr32(device, bus->addr, 0x00000003);
++	primary_attempted = true;
++	first_ret = gf119_i2c_hw_read_attempt(bus, msgs, num, &first);
++	nvkm_info(subdev,
++		  "DDC_DIAG: PNVIO_HW_DDC phase=attempt attempt=primary rate_khz=%u ret=%d bytes=%u chunks=%u failure_stage=%s d000_before=%08x pre_idle_ret=%d pre_idle_status=%08x d004=%08x command=%08x command_status=%08x final_wait_ret=%d final_status=%08x\n",
++		  first_rate / 1000, first.ret, first.bytes, first.chunks,
++		  first.failure_stage, first.d000_before, first.pre_idle_ret,
++		  first.pre_idle_status, first.d004, first.command,
++		  first.command_status, first.final_wait_ret, first.final_status);
++	ret = first_ret;
++	result_bytes = first.bytes;
++	result_chunks = first.chunks;
++	failure_stage = first.failure_stage;
++
++	/*
++	 * The K4200 GOP retries a failed 400 kHz read at 100 kHz. The only
++	 * admitted transfers are read-only EDID block-0 probe/base reads.
++	 */
++	if (first_ret != num && first_rate == 400000) {
++		retry100_attempted = true;
++		bus->hw_speed = 100000;
++
++		retry_d008_before = nvkm_rd32(device, d008);
++		nvkm_wr32(device, d008,
++			  (retry_d008_before & 0xfffff10e) | 0x0000010e);
++		retry_speed_wait_ret =
++			gf119_i2c_hw_wait(device, d000, &retry_speed_status);
++		/* GOP ignores the wait result and issues STOP before recovery. */
++		nvkm_wr32(device, d000, 0x8000000c);
++		retry_d008_after = nvkm_rd32(device, d008);
++
++		retry_recovered =
++			gf119_i2c_hw_recover(bus, &retry_recovery_cycles);
++		nvkm_info(subdev,
++			  "DDC_DIAG: PNVIO_HW_DDC phase=recovery rate_khz=100 result=%u cycles=%u speed_wait_ret=%d speed_status=%08x d008_before=%08x d008_after=%08x d014=%08x\n",
++			  retry_recovered, retry_recovery_cycles,
++			  retry_speed_wait_ret, retry_speed_status,
++			  retry_d008_before, retry_d008_after,
++			  nvkm_rd32(device, bus->addr));
++
++		if (retry_recovered) {
++			/* Re-enter hardware mode before the GOP's recursive read. */
++			nvkm_wr32(device, bus->addr, 0x00000003);
++			second_ret =
++				gf119_i2c_hw_read_attempt(bus, msgs, num, &second);
++			nvkm_info(subdev,
++				  "DDC_DIAG: PNVIO_HW_DDC phase=attempt attempt=retry100 rate_khz=100 ret=%d bytes=%u chunks=%u failure_stage=%s d000_before=%08x pre_idle_ret=%d pre_idle_status=%08x d004=%08x command=%08x command_status=%08x final_wait_ret=%d final_status=%08x\n",
++				  second.ret, second.bytes, second.chunks,
++				  second.failure_stage, second.d000_before,
++				  second.pre_idle_ret, second.pre_idle_status,
++				  second.d004, second.command,
++				  second.command_status, second.final_wait_ret,
++				  second.final_status);
++			ret = second_ret;
++			result_bytes = second.bytes;
++			result_chunks = second.chunks;
++			failure_stage = second.failure_stage;
++		} else {
++			failure_stage = "retry-recovery";
++		}
++	}
++
++	/*
++	 * Match the GOP 100->60 transition only after a completed 100 kHz
++	 * hardware attempt fails. Do not invoke software after a failed 400 kHz
++	 * attempt if the intervening 100 kHz recovery did not succeed.
++	 */
++	if ((first_rate == 100000 && first_ret != num) ||
++	    (retry100_attempted && retry_recovered && second_ret != num)) {
++		software_attempted = true;
++		software_path = retry100_attempted ? "after-retry100" :
++						      "after-primary100";
++		software_d008_before = nvkm_rd32(device, d008);
++		nvkm_wr32(device, d008,
++			  (software_d008_before & 0xfffff10e) | 0x0000010e);
++		software_speed_wait_ret =
++			gf119_i2c_hw_wait(device, d000, &software_speed_status);
++		/* GOP ignores this wait and emits STOP before recovery. */
++		nvkm_wr32(device, d000, 0x8000000c);
++		software_d008_after = nvkm_rd32(device, d008);
++		bus->hw_speed = 60000;
++
++		software_recovered =
++			gf119_i2c_hw_recover(bus, &software_recovery_cycles);
++		nvkm_info(subdev,
++			  "DDC_DIAG: PNVIO_HW_DDC phase=software-fallback-setup path=%s rate_khz=60 result=%u cycles=%u speed_wait_ret=%d speed_status=%08x stop_written=1 d008_before=%08x d008_after=%08x d014=%08x sw_period_us=%u\n",
++			  software_path, software_recovered,
++			  software_recovery_cycles, software_speed_wait_ret,
++			  software_speed_status, software_d008_before,
++			  software_d008_after, nvkm_rd32(device, bus->addr),
++			  bus->sw_period_us);
++		if (software_recovered) {
++			ret = gf119_i2c_gop_software_xfer(bus, msgs, num,
++						  software_path,
++						  &software_bytes,
++						  &software_first_nack,
++						  &software_failure_stage);
++			result_bytes = software_bytes;
++			result_chunks = 0;
++			failure_stage = software_failure_stage;
++		} else {
++			ret = -EIO;
++			failure_stage = "software-recovery";
++		}
++	}
++
++restore:
++	/* Restore transfer parameters before returning the PNVIO port to its mode. */
++	nvkm_wr32(device, bus->addr - 0x10, saved_d004);
++	nvkm_wr32(device, d008, saved_d008);
++	nvkm_wr32(device, d010, saved_d010);
 +	nvkm_mask(device, bus->addr, 0x00000007, saved_d014 & 0x7);
 +
 +	nvkm_info(subdev,
-+		  "DDC_DIAG: PNVIO_HW_DDC phase=result ret=%d bytes=%u chunks=%u rate_khz=%u primary_attempted=%u retry100_attempted=%u caller_recovery=%u caller_recovery_cycles=%u retry_recovery=%u retry_recovery_cycles=%u primary_ret=%d retry100_ret=%d retry_speed_wait_ret=%d retry_speed_status=%08x failure_stage=%s d014_restored=%08x\n",
++		  "DDC_DIAG: PNVIO_HW_DDC phase=result ret=%d bytes=%u chunks=%u rate_khz=%u primary_attempted=%u retry100_attempted=%u caller_recovery=%u caller_recovery_cycles=%u retry_recovery=%u retry_recovery_cycles=%u software_fallback_attempted=%u software_recovery=%u software_recovery_cycles=%u software_speed_wait_ret=%d software_speed_status=%08x first_nack=%s software_failure_stage=%s failure_stage=%s d004_restored=%08x d008_restored=%08x d010_restored=%08x d014_restored=%08x\n",
 +		  ret, result_bytes, result_chunks, bus->hw_speed / 1000,
 +		  primary_attempted, retry100_attempted, caller_recovered,
 +		  caller_recovery_cycles, retry_recovered, retry_recovery_cycles,
-+		  first_ret, second_ret, retry_speed_wait_ret,
-+		  retry_speed_status, failure_stage,
++		  software_attempted, software_recovered, software_recovery_cycles,
++		  software_speed_wait_ret, software_speed_status,
++		  software_first_nack, software_failure_stage, failure_stage,
++		  nvkm_rd32(device, bus->addr - 0x10),
++		  nvkm_rd32(device, d008), nvkm_rd32(device, d010),
 +		  nvkm_rd32(device, bus->addr));
 +	return ret;
 +}
@@ -679,7 +1077,7 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..eab6ebe815f6d5c462bb4325a5c8ecf3
  static const struct nvkm_i2c_bus_func
  gf119_i2c_bus_func = {
  	.init = gf119_i2c_bus_init,
-@@ -77,10 +471,13 @@
+@@ -77,10 +869,13 @@
  	.sense_scl = gf119_i2c_bus_sense_scl,
  	.sense_sda = gf119_i2c_bus_sense_sda,
  	.xfer = nvkm_i2c_bit_xfer,
@@ -694,13 +1092,14 @@ index a0fdc623d2042aa33188a5d2cc5b3e469b60b930..eab6ebe815f6d5c462bb4325a5c8ecf3
  		 struct nvkm_i2c_bus **pbus)
  {
  	struct gf119_i2c_bus *bus;
-@@ -89,7 +486,8 @@
+@@ -89,7 +884,9 @@
  		return -ENOMEM;
  	*pbus = &bus->base;
  
 -	nvkm_i2c_bus_ctor(&gf119_i2c_bus_func, pad, id, &bus->base);
  	bus->addr = 0x00d014 + (drive * 0x20);
 +	bus->hw_speed = speed_sel == 3 ? 400000 : 0;
++	bus->sw_period_us = 1;
 +	nvkm_i2c_bus_ctor(&gf119_i2c_bus_func, pad, id, speed_sel, &bus->base);
  	return 0;
  }
