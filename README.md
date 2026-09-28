@@ -23,6 +23,7 @@ generated DKMS staging data and are replaced during installation.
 | `docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md` | Permanent K4200 GOP register and command transcript |
 | `docs/BOARD-PAD-POST-DIAGNOSTIC.md` | POST/GPIO31 trace scope and interpretation |
 | `docs/STATIC-ANALYSIS.md` | Current static-analysis conclusions and eliminated hypotheses |
+| `docs/NOUVEAU-VAAPI-VIDEO-DECODE-ISSUE.md` | Separate GK104/NVE4 VA-API decode failure checkpoint; no code fix yet |
 | `dkms/` | DKMS config, build script, and hooks |
 | `docs/BUG-REPORT.md` | Hardware and diagnostic evidence |
 | `debian/` | Debian package metadata and maintainer scripts |
