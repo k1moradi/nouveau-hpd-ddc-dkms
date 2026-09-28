@@ -19,7 +19,7 @@ Hardware and software in the capture:
 The repository starting point for this follow-up was
 `b9744ba922a407aa2992efdef4bb54ed2962e303` on
 `review/gk104-vaapi-video-decode-20260927`. The diagnostic/build-state change
-is separately recorded in commit `e40e7140134d7ec747b2178575c51dd1c6c4aa49`.
+is separately recorded in commit `0c8d803f70d262cf86b7b57b0c1dd2e6fd441656`.
 
 ## Hardware observations
 
