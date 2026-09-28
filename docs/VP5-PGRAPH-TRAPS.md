@@ -79,6 +79,81 @@ CPU `lavfi` frame did not produce these traps in that sample. It does **not**
 create an H.264 decoder, VA-API decode surfaces, or the NVE4 video-engine
 channels; it cannot establish that decoder/surface setup is trap-free.
 
+## Mesa-instrumented follow-up capture
+
+On 2026-09-28, the standalone `nvc0_clear_render_target()` trace was built in
+a private prefix and selected with `LIBVA_DRIVERS_PATH`; no Mesa packages,
+DKMS modules, or kernel state were changed. The diagnostic build used the
+upstream Mesa 26.0.8 source archive with SHA-256
+`caf1c0061a68e88dfa74967a7e780c0e85d65b6c4e334cd69095a5dc54ad78bc`. The
+cached Ubuntu `26.0.8-1ubuntu0.3` source patch series was inspected and does
+not patch Nouveau Gallium sources. The VA `surface.c` and Nouveau
+`nouveau_vp3_video.c` files have identical SHA-256 values in the original and
+Ubuntu source trees; `nvc0_surface.c` differs only by this local diagnostic.
+The test therefore exercises the same relevant Nouveau Gallium source, but
+the private plugin is an upstream-source build and reports
+`Mesa Gallium driver 26.0.8 for NVE4`, without Ubuntu's package revision
+suffix.
+
+The logger overlapped both tests. The init-only command loaded the private
+driver, exited 0, and produced a zero-byte kernel log. The 3000-frame run
+kept the known-good named VA-API device invocation unchanged apart from the
+private driver path and diagnostic environment variable:
+
+```bash
+LIBVA_DRIVERS_PATH=/home/keivan/.cache/nouveau-mesa-diag-20260928/prefix/lib/x86_64-linux-gnu/dri \
+NOUVEAU_DIAG_RT_CLEAR=1 ffmpeg -hide_banner -loglevel verbose \
+    -init_hw_device vaapi=va:/dev/dri/renderD128 \
+    -hwaccel vaapi \
+    -hwaccel_device va \
+    -hwaccel_output_format vaapi \
+    -i /home/keivan/test_1080p.mkv \
+    -an -frames:v 3000 -f null -
+```
+
+FFmpeg selected the private plugin, used `pixfmt:vaapi` surfaces, output 3000
+frames, decoded 3003 frames with zero decode errors, reported 38.71 seconds
+elapsed, and exited 0. The capture still had clustered startup PROP traps:
+43 records included `RT_WIDTH_OVERRUN` and 7 included
+`RT_HEIGHT_OVERRUN` (the counts overlap). Those records ran from monotonic
+`19422.024041` through `19422.179315`; one further PROP trap was logged at
+`19460.725159`, near the 3000-frame completion. No continuous per-frame trap
+stream appeared.
+
+The opt-in Mesa trace emitted **zero** `NOUVEAU_DIAG_RT_CLEAR` records even
+though FFmpeg loaded the private driver and was launched with the environment
+flag.
+This does not support the hypothesis that the observed traps came from
+`nvc0_clear_render_target()` in this run. It demotes the static VA-surface
+clear candidate, but is not a conclusive negative until the trace hook is
+positively exercised or the VA allocation/callback path is logged directly.
+
+The same kernel capture had two later FIFO `CTXSW_TIMEOUT` scheduler errors,
+video channels 4 and 5 killed, and a BAR2/HOST_CPU PTE fault. These appeared
+after the successful FFmpeg output and are separate from the earlier
+MSVLD `PRIV_VIOLATION`/Mesa SIGBUS failure chain; they do mean that this
+follow-up must not be summarized as free of all channel or BAR2 faults. This
+capture still had no MSVLD `PRIV_VIOLATION` and FFmpeg itself returned 0. The
+two scheduler errors were logged at 16:34:56 and 16:35:00 -07:00; the BAR2
+fault followed at 16:35:00 -07:00.
+
+The exact local records are outside Git at:
+
+- `/home/keivan/nouveau-vaapi-init-mesa-diag-20260928-{kernel.log,ffmpeg.log,transcript.txt}`
+- `/home/keivan/nouveau-pgraph-3000-mesa-diag-20260928-{kernel.log,ffmpeg.log,transcript.txt}`
+
+The kernel-log SHA-256 values are respectively
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855` and
+`1df7bbd0a6e652402ab0b08ca2ce5259bd0884ac03d01fc1d1457b2d98d89a77`.
+The corresponding FFmpeg logs have SHA-256 values
+`df33a26c34a6aab135419be27a873ff1cc1f6e24de42542b5b6fac212ea2ff4d` and
+`ee534f0b00b2f503bf71682449e9c6d3e8f22c6fbe5f55498a23847ed8be2780`; the
+transcripts have SHA-256 values
+`f460925df7d923ae73aea229e1387154e5e246e45e36cdf1c7fc72c30e0f3012` and
+`46f72bc892c365d356a4edaf7e409c851906f18de990b1d96a078e5548ffe5fd`.
+The init-only control details are also recorded in
+[`VAAPI-INIT-CONTROL-20260928.md`](VAAPI-INIT-CONTROL-20260928.md).
+
 ## Source audit: why a video process also uses GR/PGRAPH
 
 The exact Ubuntu Mesa source package was `mesa 26.0.8-1ubuntu0.3`. Its
@@ -114,7 +189,7 @@ Relevant exact-source locations:
   work to BSP/VP/PPP; `:91-110` starts decoder creation and selects the
   Kepler path.
 
-## Strong Mesa-side candidate: VA surface clears
+## Static Mesa candidate: VA surface clears
 
 The most concrete source-level candidate for the startup burst is the default
 VA surface initialization clear:
@@ -140,10 +215,12 @@ VA surface initialization clear:
    `CLEAR_BUFFERS` (`nvc0/nvc0_surface.c:289-365`). That is a direct candidate
    for a GR/PROP render-target overrun during initial video-surface clears.
 
-This source path makes surface initialization the strongest current lead for
-the startup burst. It does not prove that these clear commands caused the
-captured traps: the kernel log does not identify the GR method, the active
-render-target dimensions, or a userspace call site.
+This source path makes surface initialization a plausible static candidate
+for the startup burst. The Mesa-instrumented run above emitted no
+`nvc0_clear_render_target()` records, so this path is not correlated with the
+observed traps at runtime and should not be described as the leading cause.
+The kernel log also does not identify the GR method, active render-target
+dimensions, or userspace call site.
 
 The teardown burst remains less explained. Video-buffer destruction releases
 resource references, and decoder destruction releases video-engine objects
@@ -184,18 +261,23 @@ This is a bounded search, not proof that no related report or patch exists.
 
 ## Diagnosis and next step
 
-**Observed:** hardware H.264 decode succeeds for 3000 frames with both video
-fixes; the old channel-kill/SIGBUS/BAR2-PTE chain is absent from that capture;
-PGRAPH width/height overrun traps cluster around startup and near teardown;
-the valid driver-init-only control is clean.
+**Observed:** hardware H.264 decode completed 3000 output frames with both
+video fixes and the instrumented private Mesa driver; FFmpeg reported zero
+decode errors and exit 0. Startup and completion-adjacent PROP overrun traps
+remain. The follow-up capture also logged later FIFO context-switch timeouts,
+video-channel kills, and a BAR2 PTE fault, but no MSVLD `PRIV_VIOLATION` or
+FFmpeg failure. The overlapping init-only control was clean.
 
-**Source-proven:** VA decode setup can allocate and clear render-target-capable
-NV12 surfaces through the NVC0 3D engine; the kernel logs only a PROP error
-class and partial trap state.
+**Source-proven:** the VA frontend's default surface-allocation path requests
+render-target-capable NV12 surfaces and calls the pipe clear callback unless
+the screen advertises `PIPE_VIDEO_CAP_SKIP_CLEAR_SURFACE`. Nouveau returns
+false for that capability. This run did not log the callback. The PROP
+records contain only the error class and partial trap state.
 
-**Hypothesis:** one or more NVC0 render-target clears during VA surface
-initialization are responsible for the startup cluster. The teardown cluster
-has no proven source operation yet.
+**Hypothesis:** the precise GR operation behind the PROP traps remains
+unknown. VA surface clears are a plausible source-level path, but the
+instrumented run produced no corresponding clear records. The later video
+channel timeouts and BAR2 PTE fault also need separate correlation.
 
 **Root cause status: still HYPOTHESIS.** No functional PGRAPH fix was created.
 
@@ -204,30 +286,14 @@ The small opt-in trace in
 prints the NVC0 context, pipe format, RT format value, RT dimensions, clear
 rectangle, and layer range immediately before `nvc0_clear_render_target()`
 emits the state. It is standalone Mesa instrumentation: it is not included in
-`install.sh`, DKMS, or the kernel package, and it has not been built or tested
-on the GPU.
+`install.sh`, DKMS, or the kernel package. It was built and selected for the
+capture above, but yielded no records; a positive-control test of the hook has
+not yet been performed.
 
-For the next hardware capture, apply that patch to the exact Mesa source build,
-build only Mesa userspace, then overlap the kernel logger with both the small
-init control and the same 3000-frame H.264 run. Keep the known-good named VA-API
-device setup unchanged; set `NOUVEAU_DIAG_RT_CLEAR=1` only for FFmpeg:
-
-```bash
-set -o pipefail
-NOUVEAU_DIAG_RT_CLEAR=1 ffmpeg -hide_banner -loglevel verbose \
-    -init_hw_device vaapi=va:/dev/dri/renderD128 \
-    -hwaccel vaapi \
-    -hwaccel_device va \
-    -hwaccel_output_format vaapi \
-    -i /home/keivan/test_1080p.mkv \
-    -an -frames:v 3000 -f null - \
-    2>&1 | tee ~/nouveau-pgraph-3000-mesa.log
-```
-
-Matching clear records near the kernel trap timestamps would support the
-startup hypothesis; absence of such records would demote it. A functional
-change should wait until a specific emitted method/state and the expected
-correct dimensions are proven.
+A next diagnostic should positively validate the trace hook or log VA surface
+allocation and the callback selected at `vlVaHandleSurfaceAllocate()` before
+adding more kernel instrumentation. A functional change should wait until a
+specific emitted method/state and the expected correct dimensions are proven.
 
 The legacy-video fix details remain in
 [`VP5-VIDEO-DECODE.md`](VP5-VIDEO-DECODE.md); the nonstall build experiment is

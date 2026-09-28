@@ -125,6 +125,20 @@ decoder or decode surfaces. The rerun's exact transcript is recorded in
 control details, and current hypothesis. Do not treat the PGRAPH traps as
 evidence that the hardware-decode fixes failed.
 
+A follow-up 3000-frame run using the standalone Mesa diagnostic driver also
+completed successfully: it output 3000 VA-API frames, decoded 3003 with zero
+decode errors, reported 38.71 seconds elapsed, and exited 0. Its overlapping
+kernel capture still showed the startup/completion-adjacent PROP overruns and
+later recorded two video FIFO `CTXSW_TIMEOUT` events, channels 4 and 5 killed,
+and a BAR2/HOST_CPU PTE fault after the successful FFmpeg output. It did not
+show the old MSVLD `PRIV_VIOLATION` or user-space SIGBUS. Keep this teardown
+evidence separate from the earlier clean 3000-frame capture; it does not
+invalidate the completed decode, but it means the full graphics/video stack
+is not yet free of kernel faults. The Mesa trace produced no
+`NOUVEAU_DIAG_RT_CLEAR` records, so the render-target-clear hypothesis is not
+confirmed. Full details and capture hashes are in
+[`VP5-PGRAPH-TRAPS.md`](VP5-PGRAPH-TRAPS.md).
+
 ### Primary VA-API test
 
 ```bash

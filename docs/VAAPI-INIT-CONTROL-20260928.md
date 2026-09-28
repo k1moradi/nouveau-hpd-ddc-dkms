@@ -52,3 +52,32 @@ control did not produce a matching kernel record. It does not show that H.264
 decoder creation or video-surface allocation is trap-free. The earlier
 `~/nouveau-vaapi-init-kernel.log` remains an invalid control because its logger
 was stopped before FFmpeg ran.
+
+## Control with the private Mesa diagnostic build
+
+The same control was repeated on 2026-09-28 with the locally built diagnostic
+plugin. `journalctl -kf -n 0 -o short-monotonic` was started and confirmed
+alive before FFmpeg, then kept running until after FFmpeg exited. The driver
+path was explicitly set to the private prefix:
+
+```bash
+LIBVA_DRIVERS_PATH=/home/keivan/.cache/nouveau-mesa-diag-20260928/prefix/lib/x86_64-linux-gnu/dri \
+NOUVEAU_DIAG_RT_CLEAR=1 ffmpeg -hide_banner -loglevel verbose \
+    -init_hw_device vaapi=va:/dev/dri/renderD128 \
+    -f lavfi -i 'nullsrc=s=16x16:d=0.1' \
+    -frames:v 1 -f null -
+```
+
+FFmpeg selected the private `nouveau_drv_video.so`, reported Mesa Gallium
+`26.0.8` for NVE4, and exited 0. The overlapping kernel log remained zero
+bytes (SHA-256
+`e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855`). The
+exact transcript and FFmpeg log are saved at
+`/home/keivan/nouveau-vaapi-init-mesa-diag-20260928-transcript.txt` and
+`/home/keivan/nouveau-vaapi-init-mesa-diag-20260928-ffmpeg.log`; the FFmpeg
+log SHA-256 is
+`df33a26c34a6aab135419be27a873ff1cc1f6e24de42542b5b6fac212ea2ff4d`.
+
+This repeats only the driver-open/CPU-lavfi control. It does not create the
+H.264 decoder or its VA-API surfaces and therefore does not explain the PROP
+traps seen in the 3000-frame capture.
