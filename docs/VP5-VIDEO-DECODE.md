@@ -102,6 +102,28 @@ Capture at least 30 kernel-log lines before the first channel-kill/fault line.
 For the pre-patch failure, record engine, client, access, reason, fault address,
 channel ID, and channel instance.
 
+## Current K4200 result after both video changes
+
+The current K4200 test enabled both the GK104 legacy-video context mapping fix
+and the opt-in legacy FIFO nonstall-event fix. A 3000-frame H.264 High
+1920x1080 VA-API run completed with actual `vaapi` output surfaces, 3002
+frames decoded, zero decode errors, 39.01 seconds elapsed, and exit status 0.
+This crosses the earlier approximately 30-second failure interval. The
+matching kernel capture did not show the previous video-engine
+`PRIV_VIOLATION`, killed-channel/pushbuf `ENODEV`, Mesa SIGBUS, or BAR2/HOST_CPU
+PTE failure chain.
+
+That capture still contains clustered PGRAPH/PROP
+`RT_WIDTH_OVERRUN`/`RT_HEIGHT_OVERRUN` messages near process startup and close
+to teardown. They did not prevent decoding and are being tracked as a separate
+GR investigation. The earlier empty VAAPI-init kernel log is not a valid
+control because logging stopped before FFmpeg ran; a later overlapping
+driver-initialization-only control was clean, but it did not create an H.264
+decoder or decode surfaces. See
+[`VP5-PGRAPH-TRAPS.md`](VP5-PGRAPH-TRAPS.md) for the source audit, valid
+control details, and current hypothesis. Do not treat the PGRAPH traps as
+evidence that the hardware-decode fixes failed.
+
 ### Primary VA-API test
 
 ```bash
