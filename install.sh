@@ -55,6 +55,7 @@ fi
 for source_file in \
     dkms/dkms.conf \
     dkms/dkms-build.sh \
+    dkms/nonstall-state.sh \
     dkms/check-gk104-video-context.py \
     dkms/check-legacy-fifo-nonstall.py \
     patches/hpd-low-ddc-probe.patch \

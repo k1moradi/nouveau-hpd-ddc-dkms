@@ -6,8 +6,19 @@ if [ -z "$kernelver" ]; then
     echo "ERROR: DKMS did not supply kernel version" >&2
     exit 2
 fi
-nonstall_state_file="$PWD/legacy-fifo-nonstall-state-$kernelver"
-printf '%s\n' 'build-incomplete' > "$nonstall_state_file"
+if ! . "$PWD/nonstall-state.sh"; then
+    echo "ERROR: DKMS nonstall state helper is missing" >&2
+    exit 2
+fi
+if ! nonstall_source_dir=$(nouveau_nonstall_source_from_build "$PWD"); then
+    echo "ERROR: cannot resolve DKMS persistent source tree from $PWD/../source" >&2
+    exit 2
+fi
+nonstall_state_file=$(nouveau_nonstall_state_file "$nonstall_source_dir" "$kernelver")
+if ! nouveau_nonstall_write_state "$nonstall_state_file" build-incomplete; then
+    echo "ERROR: cannot persist nonstall build-incomplete state to $nonstall_state_file" >&2
+    exit 2
+fi
 
 kdir="/lib/modules/$kernelver/build"
 if [ ! -d "$kdir" ]; then
@@ -189,7 +200,9 @@ if [ -f "$PWD/experimental-legacy-nonstall.enabled" ]; then
     case "$nonstall_state" in
         vulnerable)
             echo "nouveau-hpd-ddc: applying experimental legacy FIFO nonstall event-index patch"
-            if ! patch -l -d "$srcdir" -p1 --forward --batch < "$PWD/patches/video/legacy-fifo-nonstall-event-index.patch"; then
+            # Keep the patch's tabbed context exact. --fuzz=0 requires every
+            # context line to match; do not normalize whitespace here.
+            if ! patch --fuzz=0 -d "$srcdir" -p1 --forward --batch < "$PWD/patches/video/legacy-fifo-nonstall-event-index.patch"; then
                 echo "ERROR: legacy FIFO nonstall patch did not apply cleanly; refusing to guess." >&2
                 exit 2
             fi
@@ -369,7 +382,6 @@ if [ ! -f "$module" ]; then
     echo "ERROR: build completed without $module" >&2
     exit 2
 fi
-printf '%s\n' "$nonstall_build_state" > "$nonstall_state_file"
 
 cp -f "$module" "$out/nouveau.ko"
 vermagic=$(modinfo -F vermagic "$out/nouveau.ko" 2>/dev/null || true)
@@ -380,6 +392,11 @@ case "$vermagic" in
         exit 2
         ;;
 esac
+
+if ! nouveau_nonstall_write_state "$nonstall_state_file" "$nonstall_build_state"; then
+    echo "ERROR: cannot persist final nonstall build state to $nonstall_state_file" >&2
+    exit 2
+fi
 
 echo "nouveau-hpd-ddc: built $out/nouveau.ko"
 echo "nouveau-hpd-ddc: temporary tree will now be removed from $tmp_parent"

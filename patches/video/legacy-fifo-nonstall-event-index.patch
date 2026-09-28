@@ -29,11 +29,11 @@ index d6a87cec2..b96e84192 100644
 --- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/uchan.c
 +++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/uchan.c
 @@ -53,6 +53,7 @@ nvkm_uchan_uevent
-         switch (args->v0.type) {
-         case NVIF_CHAN_EVENT_V0_NON_STALL_INTR:
+	switch (args->v0.type) {
+	case NVIF_CHAN_EVENT_V0_NON_STALL_INTR:
 -		return nvkm_uevent_add(uevent, &runl->fifo->nonstall.event, runl->id,
 +		return nvkm_uevent_add(uevent, &runl->fifo->nonstall.event,
 +					       runl->fifo->func->nonstall_ctor ? runl->id : 0,
-                                NVKM_FIFO_NONSTALL_EVENT, NULL);
-         case NVIF_CHAN_EVENT_V0_KILLED:
-         return nvkm_uevent_add(uevent, &runl->chid->event, chan->id,
+				       NVKM_FIFO_NONSTALL_EVENT, NULL);
+	case NVIF_CHAN_EVENT_V0_KILLED:
+		return nvkm_uevent_add(uevent, &runl->chid->event, chan->id,

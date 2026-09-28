@@ -57,6 +57,28 @@ equivalent change):
 ./verify-after-reboot.sh
 ```
 
+The build-state record lives in the persistent `/usr/src/nouveau-hpd-ddc-0.1.13`
+source tree. DKMS 3.2.2 copies that tree into its sibling `build` directory
+while compiling, then removes the temporary build directory after a successful
+build. The build writes `build-incomplete` before doing work and changes it to
+`patched`, `already-fixed`, or `disabled` only after the module output copy and
+vermagic check succeed. A failed or interrupted build therefore remains
+`build-incomplete`, and the verifier reads only the persistent source-tree
+record. The DKMS 3.2.2 script was checked directly: `do_build()` copies
+`$.../source/` into `$.../build/`, and removes `$.../build/` after a successful
+build. The lifecycle regression test mirrors that source link, temporary copy,
+state update, and cleanup without needing root or a live DKMS registration:
+
+```bash
+bash tests/test-dkms-state-lifecycle.sh
+```
+
+The patch hunk keeps full surrounding source context. Its context indentation is
+normalized in the tracked patch so `git diff --check` remains clean; DKMS uses
+`patch -l --fuzz=0`, which requires all context lines while treating tabs and
+spaces as equivalent. The source detector then requires the exact fixed event
+index expression before compilation continues.
+
 Then repeat the same VA-API reproduction and capture the kernel log from the
 same time window. First test one run; do not start the 20-run reliability
 series until the single run completes without the SIGBUS.
