@@ -273,12 +273,14 @@ This narrows the static conclusion to the **standard documented VBIOS paths
 audited so far**; it does not rule out proprietary/computed-address firmware
 behavior or prove which tables pre-Linux firmware executed. Full table mapping
 and field values are in
-[BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md). The remaining
-software investigations are distinct: a whole-GOP computed-address audit,
-a targeted PMU/Falcon firmware scan, and cross-board `e600–e620` comparisons.
-A live pre-`ExitBootServices()` UEFI EDID-protocol query would be a separate
-dynamic discriminator. None of these leads currently justifies a new MMIO
-write experiment.
+[BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md). BIT `p` v1
+identifies a 24,564-byte Kepler PMU Init-From-ROM image in this ROM, but its
+container and code have not yet been decoded semantically. The INA3221 in
+EXTDEV entry 0 is another concrete table path, but Nouveau maps it to primary
+CCB 2 (`0xd054`), not the failing DVI-I CCB 0 (`0xd014`); its existing
+ICCSENSE initialization also writes sensor configuration. A live
+pre-`ExitBootServices()` UEFI EDID-protocol query remains a separate dynamic
+discriminator. These findings do not justify a new speculative MMIO write.
 
 ## Static-analysis ceiling
 
@@ -303,8 +305,12 @@ depends on a documented status bit. The 0.1.11 trace captured that decision
 and showed Nouveau skipped POST on the observed boot; it cannot establish
 whether pre-Linux firmware had already executed the conditional GPIO31 pulse.
 See [BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md).
-The remaining uncertainty is whether ACK is lost on the board path or reaches
-the GPU but is hidden by an undocumented pad/input-routing state.
+The remaining hardware uncertainty is whether ACK is lost on the board path
+or reaches the GPU but is hidden by an undocumented pad/input-routing state.
+The BIT `p` PMU image is a remaining software-analysis lead, although its
+execution on this boot and relevance to DDC are not established. The
+INA3221/EXTDEV path does not resolve the hardware uncertainty because it
+selects CCB 2 rather than DVI-I's CCB 0.
 
 ## Experiment safety
 

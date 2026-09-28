@@ -94,8 +94,10 @@ exists anywhere in the ROM.
 The GPIO table is version 4.1 and lists assigned GPIO lines 0–24. It does not
 list GPIO31. It also contains no assignment for EnvyTools' named
 `I2C_OR_DDC`, `I2C_SCL_KEEPER_CIRCUIT_ENABLE`, or `DVI_DAC_SWITCH` functions.
-All three XPIO subtables decode as `UNUSED`. The EXTDEV table lists an
-INA3221 at address `0x80` on bus 0; it is not identified as a DDC control.
+All three XPIO subtables decode as `UNUSED`. EXTDEV entry 0 is an INA3221
+with raw address `0x80` and bus selector 0. That selector is not CCB/I2C bus
+index 0: the I2C table maps the primary-bus selector to CCB 2 on this ROM.
+The INA3221 therefore does not share DVI-I's CCB 0 / PNVIO port 0 path.
 
 These tables weaken the hypothesis of a conventional, VBIOS-described DDC
 GPIO mux or enable. They do not exclude an undocumented private net or a
@@ -165,7 +167,7 @@ addresses:
 |---|---|---|
 | Main init script 0, `0x8696`, and its clock-related subroutines | `0xe114`, `0xe118`, `0xe11c`, `0xe120`; `0xe800`, `0xe808`, `0xe820`, `0xe828`, `0xe82c`, `0xe830`; `0xe920`, `0xe924`, `0xe928`, `0xe92c`, `0xe960`, `0xe964`, `0xe968`, `0xe96c`, `0xe9a0`, `0xe9a4`, `0xe9b0`, `0xe9c0`, `0xe9c4`, `0xe9c8`, `0xe9cc`, `0xe9e0`, `0xe9e4`, `0xe9f0`, `0xe9f8` | `0xe114–0xe120` are PNVIO PWM registers. The remaining sequence is part of the decoded init/clock setup; no operation is identified as I2C0 routing. |
 | Main init script 4, `0xaba0` | `0xe500`, `0xe550`, `0xe5a0`, `0xe5f0` | Each decodes as an RMW with `AND=0xffffffff`, `OR=0`, so it preserves the old value. These addresses are AUXCH `SETUP` registers in EnvyTools' PNVIO map and overlap Nouveau's shared/hybrid pad-mode registers. |
-| Main init script 4, `0xaba0` | `0xe600`, `0xe60c`, `0xe610`, `0xe614`, `0xe618`, `0xe61c`, `0xe620` | Written by a register sequence. Their role in this board's DDC path is not established; do not infer one from adjacency. |
+| Main init script 4, `0xaba0` | `0xe600=a060a060`, `0xe60c=80000a0a`, `0xe610=00020000`, `0xe614=f83e0000`, `0xe618=80000a0a`, `0xe61c=00020000`, `0xe620=f83e0000` | Written by a register sequence. Their role in this board's DDC path is not established; do not infer one from adjacency. |
 | Main init script 4, `0xaba0` | `0xe1b8` | Mask `0xfffdffff`, value `0x00020000`: bit 17 is set, selecting I2C1 in the documented `IBUF_ENABLE_0` mapping. |
 
 EnvyTools describes `0xe500 + n * 0x50` as AUXCH `SETUP` space. Nouveau's
@@ -175,10 +177,12 @@ the four shared PNVIO buses are I2C6–9 and the associated AUX buses are
 I2C10–13. Therefore these four zero writes do not establish a missing mode
 write for the failing I2C0 path.
 
-The `0xe600–0xe620` sequence remains an open register-identification question.
-No source or table evidence found in this pass ties those writes to I2C0,
-GPIO31, or the DVI-I DDC pair. They are retained here so a future register
-map discovery can revisit them without repeating the ROM scan.
+The register semantics of `0xe600–0xe620` remain unidentified. The user
+reports finding the same seven writes and values in a GP107 VBIOS whose DCB
+lists only DP/eDP/HDMI outputs. That ROM is not present in this workspace, so
+the cross-board comparison has not been independently reproduced here. If
+accurate, it demotes this sequence as a K4200-specific VGA/DDC switch; it
+still does not establish the registers' function or rule out indirect effects.
 
 ### Complete decoded address inventory
 
@@ -452,3 +456,60 @@ existing safety conclusion: the audit provides no basis for speculative
 GPIO, `e1b8`, `e600–e620`, `0x1590`, or D014 writes. A UEFI EDID-protocol
 query remains a separate dynamic experiment; it is not answered by this
 static table decode.
+
+## BIT `p` PMU Init-From-ROM image
+
+The K4200 ROM's BIT `p` v1 table identifies the deprecated pre-core82 PMU
+Init-From-ROM image. Its fields resolve to logical code pointer `0x15198`,
+size `0x5ff4` (24,564 bytes), image ID `0x0c`, and info structure
+`0x64cf`. Applying the NVIDIA BIT specification's EFI-image adjustment puts
+the image at file offset `0x25f98`, ending at `0x2bf8c`, within the
+184,320-byte (`0x2d000`) ROM. The extracted `/tmp/k4200-pmu-ifr-kepler.bin`
+matches that ROM slice byte-for-byte (SHA-256
+`eab925408691f34683c6e6abae369f96782b426051f7e34c91a7a965937f2f2a`); the
+ROM and extracted image remain outside Git.
+
+This establishes a real Kepler PMU Init-From-ROM payload, but its contents
+have not yet been decoded semantically. EnvyTools does not parse BIT `p` v1;
+its generic FUC4 linear disassembly produced invalid/mixed output and is not
+treated as a valid decode of this Kepler container. A bounded raw-byte scan
+did not find literal encodings of the previously investigated DDC/GPIO
+registers, but that does not rule out computed addresses or encoded code.
+There is no evidence yet that this image changes the DDC path or that this
+specific image was executed on the observed boot. Nouveau's GK104 PMU
+firmware compiled into the driver is a separate runtime firmware path.
+
+## EXTDEV / ICCSENSE INA3221 bus mapping
+
+The ROM's EXTDEV v4 entry at `0x55d2` is `4e 80 40 02`: INA3221 type,
+8-bit address byte `0x80`, and bus-selector bit 0. Nouveau shifts the
+address byte right once, giving Linux 7-bit address `0x40`; selector 0 means
+`NVKM_I2C_BUS_PRI`, not CCB index 0.
+
+The DCB I2C table at `0x5442` has header defaults byte `0x52`, printed by
+EnvyTools as primary 2 / secondary 5. Linux v7 `nvkm_i2c_bus_find()` maps
+`PRI` through the low nibble, so EXTDEV 0 resolves to CCB 2. The CCB 2 table
+entry is PNVIO location 2. In the GF119-derived PNVIO bus implementation,
+the MMIO address is `0xd014 + drive * 0x20`; CCB 2 therefore uses `0xd054`.
+By contrast, DCB 0 and DCB 1 (the DVI-I digital and analog paths) both name
+I2C 0, which is PNVIO location 0 at `0xd014`. The INA3221 is consequently
+not a same-bus ACK discriminator for the failing DVI-I DDC path.
+
+The K4200 ICCSENSE table at `0x7d6a` contains an active mode-1 rail entry for
+EXTDEV 0 with three enabled 5-milliohm channels and configuration `0x7807`.
+GK104's Nouveau chipset table selects the GF100 ICCSENSE implementation
+([device table](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/engine/device/base.c));
+when its oneinit processes this entry, it validates an INA3221 by reading
+ID registers `0xff` and `0xfe` at address `0x40` on the selected CCB 2 bus.
+If validation succeeds, the later ICCSENSE init writes configuration
+`0x7807` to register `0x00`. Thus the existing full ICCSENSE path is not a
+read-only experiment. A successful INA response would demonstrate reception
+on CCB 2, but would not establish reception on CCB 0 / `0xd014` or resolve
+the DVI-I branch fault. No additional sensor probe or kernel patch is
+justified by this table alone.
+
+The mapping follows the Linux v7.0 Nouveau implementations of
+[`nvkm_i2c_bus_find()`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/base.c),
+[`nvbios_extdev_parse()`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/bios/extdev.c),
+[`nvkm_iccsense_create_sensor()`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/iccsense/base.c),
+and [`gf119_i2c_bus_new()`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/busgf119.c).
