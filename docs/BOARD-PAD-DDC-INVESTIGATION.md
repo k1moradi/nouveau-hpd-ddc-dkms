@@ -469,15 +469,16 @@ matches that ROM slice byte-for-byte (SHA-256
 `eab925408691f34683c6e6abae369f96782b426051f7e34c91a7a965937f2f2a`); the
 ROM and extracted image remain outside Git.
 
-This establishes a real Kepler PMU Init-From-ROM payload, but its contents
-have not yet been decoded semantically. EnvyTools does not parse BIT `p` v1;
-its generic FUC4 linear disassembly produced invalid/mixed output and is not
-treated as a valid decode of this Kepler container. A bounded raw-byte scan
-did not find literal encodings of the previously investigated DDC/GPIO
-registers, but that does not rule out computed addresses or encoded code.
-There is no evidence yet that this image changes the DDC path or that this
-specific image was executed on the observed boot. Nouveau's GK104 PMU
-firmware compiled into the driver is a separate runtime firmware path.
+The image is now decoded in its numbered 256-byte FUC4 blocks. EnvyTools' FUC4
+disassembly of the reassembled code contains local `D[]` and Falcon `I[]`
+operations; numeric `D[]` offsets such as `0xd014` are not BAR0 register
+accesses. This pass found no BAR0 read/write helper or target reaching the
+DDC/GPIO register ranges, but opaque PMU interface side effects remain a
+limit, and this specific image's execution on the observed boot is unknown.
+Nouveau's GK104 PMU firmware compiled into the driver is a separate runtime
+firmware path. The block reconstruction, code hash, address-space evidence,
+and limits are recorded in
+[`GK104-FIRMWARE-RESIDUAL-AUDIT.md`](GK104-FIRMWARE-RESIDUAL-AUDIT.md).
 
 ## EXTDEV / ICCSENSE INA3221 bus mapping
 
@@ -513,3 +514,19 @@ The mapping follows the Linux v7.0 Nouveau implementations of
 [`nvbios_extdev_parse()`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/bios/extdev.c),
 [`nvkm_iccsense_create_sensor()`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/iccsense/base.c),
 and [`gf119_i2c_bus_new()`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/busgf119.c).
+
+## GPIO20 `GENERIC_INITIALIZED` and GOP-computed access
+
+The line-20 GPIO record is function `0x30` (`GENERIC_INITIALIZED`) with
+default 0, which decodes to input/released. Script 0's condition at `0x89b7`
+selects between `GPIO_NE` (whose exclusion list omits `0x30`) and a following
+`INIT_GPIO`; after the `NOT`, either enabled branch resets GPIO20 to that
+default if the script executes. The observed Linux boot had `execute=0`, so
+Nouveau did not run this script path. Pre-Linux execution is not known.
+
+The GOP also contains a generic table-driven GPIO helper computing
+`0xd610 + 4*line`, which can address `0xd660` for line 20. This closes the
+literal-only search gap, but it does not prove that firmware invoked the
+helper for GPIO20 during boot. The decoded PMU IFR and GOP data-flow findings
+are summarized, with their limitations, in
+[`GK104-FIRMWARE-RESIDUAL-AUDIT.md`](GK104-FIRMWARE-RESIDUAL-AUDIT.md).

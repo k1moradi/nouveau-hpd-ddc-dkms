@@ -275,7 +275,12 @@ behavior or prove which tables pre-Linux firmware executed. Full table mapping
 and field values are in
 [BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md). BIT `p` v1
 identifies a 24,564-byte Kepler PMU Init-From-ROM image in this ROM, but its
-container and code have not yet been decoded semantically. The INA3221 in
+container is now reconstructed as 82 numbered FUC4 blocks and its code has
+been disassembled. The apparent `D014`/`D010` offsets are Falcon-local `D[]`
+data operations, not evidence of BAR0 MMIO; this pass identified no PMU IFR
+BAR0 DDC/GPIO helper or target, while leaving opaque firmware-interface
+side effects and whether this image ran on the observed boot unresolved. The
+INA3221 in
 EXTDEV entry 0 is another concrete table path, but Nouveau maps it to primary
 CCB 2 (`0xd054`), not the failing DVI-I CCB 0 (`0xd014`); its existing
 ICCSENSE initialization also writes sensor configuration. A live
@@ -286,8 +291,15 @@ discriminator. These findings do not justify a new speculative MMIO write.
 
 The obvious decoded Nouveau/VBIOS/GOP transport path and the standard
 documented BIT/display-script paths audited above have not identified a
-missing software enable. A few bounded static audits and the UEFI protocol
-query remain, but static analysis cannot determine the PCB destination of
+missing software enable. The GPIO20 script's two execution arms both reset
+line 20 to its VBIOS-declared input/released default if enabled; Nouveau's
+observed boot passed `execute=0`. A GOP helper can compute the GPIO20 address
+`0xd660` from its generic `0xd610 + 4*line` formula, but the static evidence
+does not establish that pre-Linux firmware invoked it. The PMU IFR and
+computed-GOP findings and their limits are recorded in
+[`GK104-FIRMWARE-RESIDUAL-AUDIT.md`](GK104-FIRMWARE-RESIDUAL-AUDIT.md).
+The remaining runtime firmware discriminator is the UEFI EDID protocol
+query. Static analysis cannot determine the PCB destination of
 GPIO31, the D014 input bits' electrical sampling point, or the function of a
 private board-level DDC control.
 
@@ -307,8 +319,8 @@ whether pre-Linux firmware had already executed the conditional GPIO31 pulse.
 See [BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md).
 The remaining hardware uncertainty is whether ACK is lost on the board path
 or reaches the GPU but is hidden by an undocumented pad/input-routing state.
-The BIT `p` PMU image is a remaining software-analysis lead, although its
-execution on this boot and relevance to DDC are not established. The
+The decoded PMU IFR body revealed no identified BAR0 DDC/GPIO access, though
+opaque side effects and execution history remain unresolved. The
 INA3221/EXTDEV path does not resolve the hardware uncertainty because it
 selects CCB 2 rather than DVI-I's CCB 0.
 
