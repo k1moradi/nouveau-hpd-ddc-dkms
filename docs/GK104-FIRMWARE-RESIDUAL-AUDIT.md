@@ -163,31 +163,49 @@ calls the status helper at `0x289`, which reads UAS address
 `5` skip the `e320/e32c` block. For ports greater than `5`, the helper
 computes `port * 0x50`, reads `0x1400e320 + port * 0x50`, ORs `0x0000c001`,
 and writes it back; it also reads `0x1400e32c + port * 0x50`, clears bit 0,
-and writes it back. After that conditional block, all ports take the normal
+and writes it back. For any port value above `5`, these expressions simplify to
+`0x1400e500 + (port - 6) * 0x50` and
+`0x1400e50c + (port - 6) * 0x50`. The helpers therefore never access the
+literal `e320/e32c` addresses: indices that would target those offsets are
+excluded by the `port <= 5` branch. The reachable addresses are exactly the
+same base and stride as the `e500/e50c` register series Linux uses for
+hybrid/shared pads. After that conditional block, all ports take the normal
 controller setup writes through UAS addresses corresponding to
 `0xd010 + port * 0x20` (`0x000f4240`), `0xd014 + port * 0x20` (`3`), and
 `0xd008 + port * 0x20` (`0x010a010e`). The DDC register offsets, stride, and
 values match the K4200 GOP's PNVIO controller setup.
 
 The companion helper at `0x33d` has the same `port <= 5` early-exit. For
-ports above 5 it applies `0xffff3ffe` to `0x1400e320 + port * 0x50`, clearing
-exactly the `0xc001` bits, and clears bit 0 at `0x1400e32c + port * 0x50`.
-The `0xe320/e32c` pair therefore has an enable/disable-shaped per-port
-operation, but EnvyTools does not name that register family. Its bit-pattern
-similarity to Nouveau's `0xe500/0xe50c` hybrid-pad operation is not enough to
-assign it the same function.
+ports above 5 it applies `0xffff3ffe` to the same reachable `e500` address
+series, clearing the `0xc001` bits, and clears bit 0 in the matching `e50c`
+series. The setup sequence's OR does not explicitly clear bit 1 as Linux's
+`nvkm_mask()` does, so the operations are not byte-for-byte equivalent; still,
+their reachable address series and principal I2C-mode bits match Linux's
+documented hybrid-pad path. This supports interpreting the IFR sequence as
+hybrid/shared-pad setup for indices above 5, not as setup of exclusive CCB0.
+
+The setup helper copies its incoming `r10` argument unchanged into `r0`. That
+same value controls the `<= 5` branch, the `e500/e50c`-equivalent address
+calculation, and the `D010/D014/D008 + port * 0x20` controller addresses.
+Static call sites at FUC RVAs `0x9c2`, `0x1d29`, `0x2053`, and `0x20fd` pass a
+stored or descriptor-provided bus/port byte; none visibly adds 6 before the
+call. This ties the setup gate to the controller index rather than to a
+separate pad index. The runtime values supplied to every firmware entrypoint
+remain unobserved, but a helper invocation targeting DVI-I's `D014` at port 0
+must pass 0 and therefore bypasses the conditional pad writes.
 
 For the failing K4200 DVI-I CCB0 path, the port argument is 0: it is also the
 index used in the `D010/D014/D008 + port * 0x20` calculations. Both IFR
-helpers skip `e320/e32c` for this port. Linux v7.0's GF119-derived driver
+helpers skip the conditional hybrid-pad setup for this port; they do not
+write literal `e320/e32c`. Linux v7.0's GF119-derived driver
 constructs an exclusive pad for this CCB; its `gf119_i2c_pad_x_func` has no
 `.mode` callback, while the shared-pad variant has
 `g94_i2c_pad_mode()`, which operates only on `e500/e50c`. The common pad-mode
-wrapper invokes hardware mode code only when that callback exists. So Linux
-does not write `e320/e32c` for CCB0, but the recovered IFR path does not write
-them for port 0 either. This finding does **not** support a missing CCB0
-enable; it only identifies an as-yet-unnamed operation for IFR port indices
-above 5. The Linux v7.0 implementation is in
+wrapper invokes hardware mode code only when that callback exists. So the
+GF119 pad-mode layer does not write hybrid-pad registers for CCB0, and the
+recovered IFR path's hybrid-pad sequence is likewise gated away from port 0.
+This finding does **not** support a missing CCB0 enable. The Linux v7.0
+implementation is in
 [`padgf119.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/padgf119.c),
 [`padg94.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/padg94.c),
 and [`pad.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/pad.c).
@@ -213,11 +231,13 @@ The static audit now establishes:
    actual pre-Linux write to that address is not established.
 4. The decoded PMU IFR uses UAS-tagged `D[]` accesses for the PNVIO
    controller's `D010/D014/D008` register offsets.
-5. Its `e320/e32c` RMW sequence is gated to port indices greater than 5 and
-   is skipped for K4200 CCB0 / physical port 0.
+5. Its per-port RMW sequence is gated to indices greater than 5; after
+   simplifying the address arithmetic, those reachable targets are the
+   known `e500/e50c` hybrid-pad register series. The sequence is skipped for
+   K4200 CCB0 / physical port 0.
 
 These findings do not identify a missing CCB0 software DDC enable and do not
-justify writes to GPIO20, GPIO31, `0xe1b8`, `0xe320/0xe32c`,
+justify writes to GPIO20, GPIO31, `0xe1b8`,
 `0xe600–0xe620`, `0x1590`, or undocumented D014 bits. The remaining dynamic
 discriminator is whether firmware obtains EDID before `ExitBootServices()`
 through `EFI_EDID_ACTIVE_PROTOCOL` or `EFI_EDID_DISCOVERED_PROTOCOL`; otherwise

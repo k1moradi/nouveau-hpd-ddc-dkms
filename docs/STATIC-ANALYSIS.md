@@ -280,11 +280,14 @@ been disassembled. A follow-up corrected the initial address-space reading:
 the IFR forms UAS-tagged `D[]` addresses with the `0x14000000` prefix and
 accesses the PNVIO controller offsets `D010`, `D014`, and `D008`. It also
 contains an `e320/e32c` read-modify-write sequence, but the interpreter
-branches around it for port indices 0 through 5. Since the failing DVI-I
-CCB0 path is port 0, this sequence does not show a missing CCB0 setup step.
-The meaning of `e320/e32c` remains unknown for ports above 5, and whether
-this image ran on the observed boot is unresolved. The detailed instruction
-and callback analysis is in
+branches around it for port indices 0 through 5. For indices above 5, the
+address arithmetic simplifies to the same `e500/e50c` register series used
+by Linux's hybrid/shared-pad path, with effective hybrid index `port - 6`.
+Since the failing DVI-I CCB0 path is port 0, this sequence does not show a
+missing CCB0 setup step. The IFR setup OR also does not explicitly clear bit 1
+as Linux's masked I2C-mode write does, so the operations are related but not
+identical. Whether this image ran on the observed boot remains unresolved.
+The detailed instruction and callback analysis is in
 [`GK104-FIRMWARE-RESIDUAL-AUDIT.md`](GK104-FIRMWARE-RESIDUAL-AUDIT.md). The
 INA3221 in
 EXTDEV entry 0 is another concrete table path, but Nouveau maps it to primary
@@ -325,9 +328,10 @@ whether pre-Linux firmware had already executed the conditional GPIO31 pulse.
 See [BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md).
 The remaining hardware uncertainty is whether ACK is lost on the board path
 or reaches the GPU but is hidden by an undocumented pad/input-routing state.
-The PMU IFR contains a newly identified UAS register path, but its
-`e320/e32c` sequence is skipped for port 0 and therefore does not explain
-CCB0. Opaque PMU side effects and execution history remain unresolved. The
+The PMU IFR contains a newly identified UAS register path. Its conditional
+pad-register writes reach the `e500/e50c` hybrid-pad series only for indices
+above 5; they do not target CCB0/port 0. Opaque PMU side effects and execution
+history remain unresolved. The
 INA3221/EXTDEV path does not resolve the hardware uncertainty because it
 selects CCB 2 rather than DVI-I's CCB 0.
 

@@ -473,12 +473,14 @@ The image is now decoded in its numbered 256-byte FUC4 blocks. A follow-up
 address-flow pass found UAS-tagged `D[]` accesses: the IFR prefixes computed
 register offsets with `0x14000000` and uses that path for the PNVIO
 `D010/D014/D008` controller offsets. Its `e320/e32c` RMW sequence is guarded
-by an unsigned `port <= 5` branch and therefore does not run for the failing
-CCB0/port-0 path. The sequence remains unexplained for port indices above 5;
-the exact UAS translation and this image's execution on the observed boot
-remain limits. Nouveau's GK104 PMU firmware compiled into the driver is a
-separate runtime firmware path. The instruction-level analysis and Linux pad
-comparison are recorded in
+by an unsigned `port <= 5` branch. For larger indices the address expression
+aliases the `e500/e50c` hybrid/shared-pad register series, with effective
+address index `port - 6`; the failing CCB0/port-0 path skips the writes. The
+exact UAS translation and this image's execution on the observed boot remain
+limits.
+Nouveau's GK104 PMU firmware compiled into the driver is a separate runtime
+firmware path. The instruction-level analysis and Linux pad comparison are
+recorded in
 [`GK104-FIRMWARE-RESIDUAL-AUDIT.md`](GK104-FIRMWARE-RESIDUAL-AUDIT.md).
 
 ## EXTDEV / ICCSENSE INA3221 bus mapping
