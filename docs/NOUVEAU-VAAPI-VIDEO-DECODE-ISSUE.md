@@ -3,8 +3,10 @@
 ## Status
 
 This is a separate Nouveau issue from the K4200 DVI-I/DDC investigation. It
-records a reproducible NVE4 hardware video-decode failure for follow-up; it
-does not contain a proposed fix. The root cause is not yet established.
+records the original reproducible NVE4 hardware video-decode failure. A
+separate candidate backport and K4200 validation plan are now in
+[`VP5-VIDEO-DECODE.md`](VP5-VIDEO-DECODE.md); this capture still does not
+establish the K4200-specific root cause.
 
 ## Environment from the captured run
 
@@ -169,5 +171,6 @@ sudo journalctl -k -b --no-pager | \
 
 Until that event is captured, do not treat the error as a confirmed Falcon
 firmware defect, a confirmed GPU-VM/PTE defect, or a VA-API userspace bug.
-This note preserves the failure and the next evidence needed to diagnose it;
-no kernel or firmware changes are proposed here.
+This note preserves the original failure evidence; the separate mapping
+candidate must still be validated against the K4200's pre-patch fault and
+post-patch decode result.

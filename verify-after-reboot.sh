@@ -2,7 +2,7 @@
 set -u
 
 NAME=nouveau-hpd-ddc
-VER=0.1.11
+VER=0.1.12
 k=$(uname -r)
 dac_ddc_diag_enabled=0
 if [ -f "/usr/src/$NAME-$VER/diagnostic-dac-ddc.enabled" ]; then

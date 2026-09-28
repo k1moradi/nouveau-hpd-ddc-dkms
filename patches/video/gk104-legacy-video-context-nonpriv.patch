@@ -1,0 +1,50 @@
+From: Risto Pajula <or.pajula@gmail.com>
+Date: Sun, 13 Sep 2026 23:12:24 +0300
+Subject: [PATCH 1/2] drm/nouveau/fifo/gk104: fix legacy video engine context mappings
+
+Commit 8ab849d6dd4c ("drm/nouveau/fifo: add new engine context handling")
+made gk104_ectx_ctor() map engine contexts privileged by default.
+
+On GK107, mapping the legacy MSVLD, MSPDEC and MSPPP video engine
+contexts privileged causes FIFO PRIV_VIOLATION faults and kills the
+channel during VDPAU decoding.
+
+These engines require non-privileged engine context mappings. Keep
+privileged mappings for the other engines, but clear the privileged
+flag for the legacy video engines.
+
+Fixes: 8ab849d6dd4c ("drm/nouveau/fifo: add new engine context handling")
+Assisted-by: LLM
+Signed-off-by: Risto Pajula <or.pajula@gmail.com>
+Link: https://lists.openwall.net/linux-kernel/2026/09/13/861
+---
+ drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c | 14 ++++++++++++++
+ 1 file changed, 14 insertions(+)
+
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c
+index 5655eda52..bbeb33cd9 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c
+@@ -180,6 +180,20 @@ gk104_ectx_ctor(struct nvkm_engn *engn, struct nvkm_vctx *vctx)
+ 	struct gf100_vmm_map_v0 args = { .priv = 1 };
+ 	int ret;
+ 
++	/*
++	 * Legacy video engines access their engine contexts through
++	 * non-privileged MMU requests.
++	 */
++	switch (engn->engine->subdev.type) {
++	case NVKM_ENGINE_MSPDEC:
++	case NVKM_ENGINE_MSPPP:
++	case NVKM_ENGINE_MSVLD:
++		args.priv = 0;
++		break;
++	default:
++		break;
++	}
++
+ 	ret = nvkm_vmm_get(vctx->vmm, 12, vctx->inst->size, &vctx->vma);
+ 	if (ret)
+ 		return ret;
+-- 
+2.47.3

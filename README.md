@@ -1,8 +1,10 @@
 # Nouveau HPD/DDC DKMS fix
 
 This project builds a maintained Nouveau module for the Quadro K4200 DVI-I to
-VGA EDID investigation. The confirmed fix lets DRM try DDC when HPD is low on a
-non-DisplayPort output. It does not change DisplayPort detection.
+VGA EDID investigation and a separate GK104 legacy-video decode experiment.
+The confirmed display fix lets DRM try DDC when HPD is low on a non-DisplayPort
+output. The video-context backport is a candidate that still needs K4200
+validation.
 
 ## Source layout
 
@@ -13,6 +15,8 @@ generated DKMS staging data and are replaced during installation.
 | Path | Contents |
 | --- | --- |
 | `patches/hpd-low-ddc-probe.patch` | Confirmed HPD-low/DDC fix |
+| `patches/video/gk104-legacy-video-context-nonpriv.patch` | Candidate backport for legacy GK104 MSVLD/MSPDEC/MSPPP context mappings |
+| `dkms/check-gk104-video-context.py` | Fail-closed detection of vulnerable, fixed, and unknown kernel source layouts |
 | `patches/diagnostic/ibuf-state-snapshot.patch` | Optional read-only IBUF diagnostic |
 | `patches/diagnostic/dac-powered-ddc-probe.patch` | Optional DAC-powered DDC diagnostic |
 | `patches/diagnostic/ack-slot-sampler.patch` | Optional read-only PNVIO ACK-slot sampler |
@@ -23,7 +27,8 @@ generated DKMS staging data and are replaced during installation.
 | `docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md` | Permanent K4200 GOP register and command transcript |
 | `docs/BOARD-PAD-POST-DIAGNOSTIC.md` | POST/GPIO31 trace scope and interpretation |
 | `docs/STATIC-ANALYSIS.md` | Current static-analysis conclusions and eliminated hypotheses |
-| `docs/NOUVEAU-VAAPI-VIDEO-DECODE-ISSUE.md` | Separate GK104/NVE4 VA-API decode failure checkpoint; no code fix yet |
+| `docs/NOUVEAU-VAAPI-VIDEO-DECODE-ISSUE.md` | Original GK104/NVE4 VA-API failure capture |
+| `docs/VP5-VIDEO-DECODE.md` | Candidate backport rationale and K4200 validation plan |
 | `dkms/` | DKMS config, build script, and hooks |
 | `docs/BUG-REPORT.md` | Hardware and diagnostic evidence |
 | `debian/` | Debian package metadata and maintainer scripts |
@@ -31,7 +36,7 @@ generated DKMS staging data and are replaced during installation.
 
 ## Install
 
-Install the confirmed fix:
+Install the current build (confirmed HPD/DDC fix plus the GK104 video candidate):
 
 ```bash
 pkexec ./install.sh
@@ -210,7 +215,34 @@ Keep the monitor connected for one reboot, then run
 `./verify-after-reboot.sh` as the normal user. After saving the trace, run a
 normal `pkexec ./install.sh` to rebuild without the optional patch.
 
-The installer removes the known older DKMS revisions (0.1.0 through 0.1.10),
+## GK104 legacy video context mapping candidate
+
+The normal DKMS build includes a candidate backport for the legacy Kepler
+MSVLD, MSPDEC, and MSPPP engine-context mappings. The upstream report describes
+privileged mappings causing `PRIV_VIOLATION` faults on GK107; the same
+`gk104_ectx_ctor()` source is used by the K4200's GK104 FIFO path. This is a
+strong candidate, not yet a confirmed K4200 root cause.
+
+Before installing this revision, capture the current kernel log around one
+reproduction and preserve the engine, client, access, reason, fault address,
+channel ID, and channel instance. The most useful confirmation is a legacy
+video engine fault with reason `0x05 [PRIV_VIOLATION]` immediately before the
+channel is killed. Then install and reboot:
+
+```bash
+pkexec ./install.sh
+```
+
+Run the deterministic H.264 VA-API test in
+[`docs/VP5-VIDEO-DECODE.md`](docs/VP5-VIDEO-DECODE.md). Keep the nonstall-event
+follow-up out of this first test; it is a separate change for a possible later
+fence-completion hang. The DKMS source detector applies the mapping patch only
+to the recognized vulnerable function, skips the recognized three-engine
+fix, and aborts on any unknown layout. It does not key the change to the
+K4200 PCI ID. A successful build alone does not establish that the K4200 fault
+was caused by this mapping or that decode is fixed.
+
+The installer removes the known older DKMS revisions (0.1.0 through 0.1.11),
 copies this project's DKMS files and patches into the package staging directory,
 builds Nouveau for the running kernel, installs it, and updates the initramfs.
 It also cleans only this project's temporary build/test directories under
@@ -260,7 +292,7 @@ The generated package and staging tree live under ignored `build/` output.
 pkexec ./uninstall.sh
 ```
 
-This removes all known DKMS revisions from 0.1.0 through 0.1.11, their source
+This removes all known DKMS revisions from 0.1.0 through 0.1.12, their source
 staging directories, and project temporary trees, then refreshes module
 dependencies and initramfs files. Nouveau uses the distribution module after
 reboot.
@@ -271,7 +303,9 @@ The hardware setup and captured evidence are in [docs/BUG-REPORT.md](docs/BUG-RE
 The IBUF experiment remains diagnostic: the K4200 VBIOS setting bit 17 does not
 prove that bit 16 should be enabled, so the patch does not modify `0xe1b8`.
 
-Version 0.1.11 adds the read-only GK104 POST-decision, effective POST-call,
+Version 0.1.12 adds the fail-closed GK104 legacy-video context mapping
+backport and its K4200 validation notes. Version 0.1.11 adds the read-only
+GK104 POST-decision, effective POST-call,
 and conditional GPIO31 interpreter trace. Version 0.1.10 corrects the GOP
 software-line recovery and adds the
 ROM-derived 100-to-60 software EDID path after the 400/100 kHz hardware

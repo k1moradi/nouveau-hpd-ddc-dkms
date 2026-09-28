@@ -141,6 +141,35 @@ else
     fi
 fi
 
+# Candidate backport for privileged GK104 mappings used by the legacy video
+# engines. Apply only to the exact vulnerable shape; skip the recognized
+# upstream fix and abort on any source layout this detector cannot prove.
+video_ctx_src="$srcdir/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c"
+if [ ! -f "$video_ctx_src" ]; then
+    echo "ERROR: GK104 FIFO source missing; refusing to skip video-context patch" >&2
+    exit 2
+fi
+if ! video_ctx_state=$(python3 "$PWD/check-gk104-video-context.py" "$video_ctx_src"); then
+    echo "ERROR: cannot classify GK104 video engine-context source; refusing to guess." >&2
+    exit 2
+fi
+case "$video_ctx_state" in
+    vulnerable)
+        echo "nouveau-hpd-ddc: applying GK104 legacy-video non-privileged context mapping patch"
+        if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/video/gk104-legacy-video-context-nonpriv.patch"; then
+            echo "ERROR: GK104 legacy-video patch did not apply cleanly; refusing to guess." >&2
+            exit 2
+        fi
+        ;;
+    fixed)
+        echo "nouveau-hpd-ddc: GK104 legacy-video context mappings are already fixed; skipping backport"
+        ;;
+    *)
+        echo "ERROR: unexpected GK104 video-context state '$video_ctx_state'; refusing to guess." >&2
+        exit 2
+        ;;
+esac
+
 # Optional read-only PNVIO input-buffer snapshot for the K4200 DDC diagnosis.
 # The installer creates this marker only when invoked with --diag-ibuf.
 if [ -f "$PWD/diagnostic-ibuf.enabled" ]; then

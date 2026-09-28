@@ -1,7 +1,7 @@
 #!/bin/bash
 set -Eeuo pipefail
 NAME=nouveau-hpd-ddc
-VER=0.1.11
+VER=0.1.12
 SRC_DIR="/usr/src/$NAME-$VER"
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 diag_ibuf=0
@@ -47,7 +47,9 @@ fi
 for source_file in \
     dkms/dkms.conf \
     dkms/dkms-build.sh \
+    dkms/check-gk104-video-context.py \
     patches/hpd-low-ddc-probe.patch \
+    patches/video/gk104-legacy-video-context-nonpriv.patch \
     patches/diagnostic/ibuf-state-snapshot.patch \
     patches/diagnostic/dac-powered-ddc-probe.patch \
     patches/diagnostic/ack-slot-sampler.patch \
@@ -57,7 +59,8 @@ for source_file in \
     patches/diagnostic/gk104-pnvio-hw-ddc.patch \
     patches/diagnostic/gk104-post-gpio31-trace.patch \
     docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md \
-    docs/BOARD-PAD-POST-DIAGNOSTIC.md; do
+    docs/BOARD-PAD-POST-DIAGNOSTIC.md \
+    docs/VP5-VIDEO-DECODE.md; do
     if [ ! -f "$HERE/$source_file" ]; then
         echo "ERROR: canonical project source is missing: $HERE/$source_file" >&2
         exit 2
@@ -95,7 +98,7 @@ apt-get install -y \
     "linux-source-$base"
 
 # Clean up failed/older test revisions before installing this revision.
-for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8 0.1.9 0.1.10; do
+for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8 0.1.9 0.1.10 0.1.11; do
     if dkms status -m "$NAME" -v "$oldver" 2>/dev/null | grep -q .; then
         echo "Removing older DKMS revision $NAME/$oldver"
         dkms remove -m "$NAME" -v "$oldver" --all
@@ -104,7 +107,7 @@ for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8 0.1.9 0.1.10
     rm -rf "/var/lib/dkms/$NAME/$oldver"
 done
 
-for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8 0.1.9 0.1.10; do
+for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.7 0.1.8 0.1.9 0.1.10 0.1.11; do
     if dkms status -m "$NAME" -v "$oldver" 2>/dev/null | grep -q . \
         || [ -e "/usr/src/$NAME-$oldver" ] \
         || [ -e "/var/lib/dkms/$NAME/$oldver" ]; then
@@ -121,8 +124,9 @@ rm -rf "/var/lib/dkms/$NAME/$VER"
 rm -rf "$SRC_DIR"
 mkdir -p "$SRC_DIR"
 cp -a "$HERE/dkms/." "$SRC_DIR/"
-mkdir -p "$SRC_DIR/patches/diagnostic"
+mkdir -p "$SRC_DIR/patches/diagnostic" "$SRC_DIR/patches/video"
 cp -a "$HERE/patches/hpd-low-ddc-probe.patch" "$SRC_DIR/patches/"
+cp -a "$HERE/patches/video/gk104-legacy-video-context-nonpriv.patch" "$SRC_DIR/patches/video/"
 cp -a "$HERE/patches/diagnostic/ibuf-state-snapshot.patch" "$SRC_DIR/patches/diagnostic/"
 cp -a "$HERE/patches/diagnostic/dac-powered-ddc-probe.patch" "$SRC_DIR/patches/diagnostic/"
 cp -a "$HERE/patches/diagnostic/ack-slot-sampler.patch" "$SRC_DIR/patches/diagnostic/"
@@ -134,6 +138,7 @@ cp -a "$HERE/patches/diagnostic/gk104-post-gpio31-trace.patch" "$SRC_DIR/patches
 mkdir -p "$SRC_DIR/docs"
 cp -a "$HERE/docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md" "$SRC_DIR/docs/"
 cp -a "$HERE/docs/BOARD-PAD-POST-DIAGNOSTIC.md" "$SRC_DIR/docs/"
+cp -a "$HERE/docs/VP5-VIDEO-DECODE.md" "$SRC_DIR/docs/"
 if [ "$diag_ibuf" -eq 1 ]; then
     touch "$SRC_DIR/diagnostic-ibuf.enabled"
     echo "Enabling read-only IBUF state diagnostics for this DKMS build."

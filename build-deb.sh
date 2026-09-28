@@ -14,9 +14,10 @@ if [[ -z "$VER" || "$(sed -n 's/^PACKAGE_VERSION="\([^"]*\)"/\1/p' "$ROOT/dkms/d
 fi
 
 rm -rf -- "$STAGE"
-mkdir -p "$SRC/patches/diagnostic" "$SRC/docs" "$STAGE/DEBIAN"
+mkdir -p "$SRC/patches/diagnostic" "$SRC/patches/video" "$SRC/docs" "$STAGE/DEBIAN"
 cp -a "$ROOT/dkms/." "$SRC/"
 cp -a "$ROOT/patches/hpd-low-ddc-probe.patch" "$SRC/patches/"
+cp -a "$ROOT/patches/video/gk104-legacy-video-context-nonpriv.patch" "$SRC/patches/video/"
 cp -a "$ROOT/patches/diagnostic/ibuf-state-snapshot.patch" "$SRC/patches/diagnostic/"
 cp -a "$ROOT/patches/diagnostic/dac-powered-ddc-probe.patch" "$SRC/patches/diagnostic/"
 cp -a "$ROOT/patches/diagnostic/ack-slot-sampler.patch" "$SRC/patches/diagnostic/"
@@ -27,6 +28,7 @@ cp -a "$ROOT/patches/diagnostic/gk104-pnvio-hw-ddc.patch" "$SRC/patches/diagnost
 cp -a "$ROOT/patches/diagnostic/gk104-post-gpio31-trace.patch" "$SRC/patches/diagnostic/"
 cp -a "$ROOT/docs/GK104-PNVIO-HW-I2C-TRANSCRIPT.md" "$SRC/docs/"
 cp -a "$ROOT/docs/BOARD-PAD-POST-DIAGNOSTIC.md" "$SRC/docs/"
+cp -a "$ROOT/docs/VP5-VIDEO-DECODE.md" "$SRC/docs/"
 cp -a "$ROOT/debian/DEBIAN/." "$STAGE/DEBIAN/"
 
 chmod 0755 \

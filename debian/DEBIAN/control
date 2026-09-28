@@ -1,12 +1,13 @@
 Package: nouveau-hpd-ddc-dkms
-Version: 0.1.11
+Version: 0.1.12
 Section: kernel
 Priority: optional
 Architecture: all
 Depends: dkms, build-essential, patch, python3, binutils, bzip2, xz-utils, zstd, linux-source
 Maintainer: Local Administrator <root@localhost>
-Description: DKMS rebuild of Ubuntu Nouveau with HPD/DDC fix and diagnostics
+Description: DKMS rebuild of Ubuntu Nouveau with HPD/DDC fix and GK104 video backport
  Builds Nouveau from matching Ubuntu kernel sources and applies the maintained
- HPD-low/DDC patch. Optional read-only PNVIO diagnostics, DAC load-detect
- probing, the opt-in GK104 K4200 hardware DDC diagnostic, and the read-only
- GK104 POST/GPIO31 interpreter trace are available.
+ HPD-low/DDC patch and a candidate GK104 legacy video context mapping fix.
+ Optional read-only PNVIO diagnostics, DAC load-detect probing, the opt-in
+ GK104 K4200 hardware DDC diagnostic, and the read-only POST/GPIO31 trace are
+ available.
