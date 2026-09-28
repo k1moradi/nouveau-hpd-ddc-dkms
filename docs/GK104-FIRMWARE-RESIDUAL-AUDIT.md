@@ -124,7 +124,7 @@ No data flow was identified from these GPIO/DDC helper inputs to `0xe1b8`,
 families and their instruction sites; it is not a proof that every opaque
 callback or firmware-private mechanism in the GOP has been understood.
 
-## PMU Init-From-ROM code and address spaces
+## PMU Init-From-ROM code, UAS, and per-port I2C setup
 
 BIT `p` v1 identifies the deprecated pre-core82 PMU Init-From-ROM image at
 logical pointer `0x15198`, size `0x5ff4`, image ID `0x0c`, with info structure
@@ -135,27 +135,70 @@ generic linear disassembly was invalid: the container must first be
 reassembled by block, after which EnvyTools' FUC4 decoder yields a coherent
 instruction stream.
 
-The key address-space distinction is that FUC `D[]` loads/stores address the
-Falcon-local data segment, while `I[]` operations use Falcon I/O space. These
-are documented separately by EnvyTools for the
-[data segment](https://github.com/envytools/envytools/blob/f102b82381f3f11cee113d16374c87091db039d9/docs/hw/falcon/data.rst)
-and [I/O space](https://github.com/envytools/envytools/blob/f102b82381f3f11cee113d16374c87091db039d9/docs/hw/falcon/io.rst).
-Accordingly, numeric D-space offsets resembling GPU registers do not show
-BAR0 MMIO. In particular, the FUC code uses local D-space fields at offsets
-including `0xd010` and `0xd014` while building its controller state; those
-operations are not evidence that this IFR image writes GPU PNVIO register
-`0xd014`.
+The address-space and instruction references are EnvyTools' Falcon
+[data-space](https://github.com/envytools/envytools/blob/f102b82381f3f11cee113d16374c87091db039d9/docs/hw/falcon/data.rst),
+[I/O-space](https://github.com/envytools/envytools/blob/f102b82381f3f11cee113d16374c87091db039d9/docs/hw/falcon/io.rst),
+[branch](https://github.com/envytools/envytools/blob/f102b82381f3f11cee113d16374c87091db039d9/docs/hw/falcon/branch.rst),
+and [register-map](https://github.com/envytools/envytools/blob/f102b82381f3f11cee113d16374c87091db039d9/rnndb/falcon.xml)
+documentation. The branch reference defines the `be` condition as unsigned
+below-or-equal, which is the basis for the port `0` through `5` reachability
+result below.
 
-The disassembly contains FUC `iord`/`iowr` operations in Falcon I/O space,
-including indexed accesses, but this audit did not identify a BAR0
-read/write or read-modify-write helper, or a call whose arguments establish
-a BAR0 access to `0xd000–0xdfff`, `0xe000–0xefff`, or `0x1590`. No literal or
-computed access to GPIO20's `0xd660` was identified in the decoded PMU body.
-The result is therefore **no PMU IFR BAR0 DDC/GPIO access identified**, not
-proof that every PMU ABI side effect or opaque callback is understood. The
-observed boot also does not establish that this specific Init-From-ROM image
-was run. Nouveau's separately compiled GK104 PMU firmware is a different
-runtime image and is outside this ROM-image conclusion.
+The first address-space pass missed the Falcon UAS form used by this image.
+Ordinary FUC `D[]` accesses address Falcon-local data, while `I[]` operations
+address Falcon I/O. EnvyTools documents those spaces separately, and its
+Falcon register map also identifies the `UC_CAPS.UAS` capability and UAS
+configuration/fault registers. This IFR constructs UAS-style `D[]` addresses
+by ORing register offsets with `0x14000000`; those accesses must not be
+classified as local data merely because the instruction mnemonic is `ld D[]`
+or `st D[]`. The detailed UAS translation is not fully documented in the
+public EnvyTools material, so the address interpretation below is grounded in
+the code's construction and its cross-check against the same K4200 GOP
+registers, rather than a complete public UAS specification.
+
+The IFR's per-port setup helper at FUC RVA `0x2b8` receives a port index. It
+calls the status helper at `0x289`, which reads UAS address
+`0x14000680 + port * 0x20` and polls bit 31. It then compares the port with
+`5` and branches to `0x2fd` on unsigned-below-or-equal. Thus ports `0` through
+`5` skip the `e320/e32c` block. For ports greater than `5`, the helper
+computes `port * 0x50`, reads `0x1400e320 + port * 0x50`, ORs `0x0000c001`,
+and writes it back; it also reads `0x1400e32c + port * 0x50`, clears bit 0,
+and writes it back. After that conditional block, all ports take the normal
+controller setup writes through UAS addresses corresponding to
+`0xd010 + port * 0x20` (`0x000f4240`), `0xd014 + port * 0x20` (`3`), and
+`0xd008 + port * 0x20` (`0x010a010e`). The DDC register offsets, stride, and
+values match the K4200 GOP's PNVIO controller setup.
+
+The companion helper at `0x33d` has the same `port <= 5` early-exit. For
+ports above 5 it applies `0xffff3ffe` to `0x1400e320 + port * 0x50`, clearing
+exactly the `0xc001` bits, and clears bit 0 at `0x1400e32c + port * 0x50`.
+The `0xe320/e32c` pair therefore has an enable/disable-shaped per-port
+operation, but EnvyTools does not name that register family. Its bit-pattern
+similarity to Nouveau's `0xe500/0xe50c` hybrid-pad operation is not enough to
+assign it the same function.
+
+For the failing K4200 DVI-I CCB0 path, the port argument is 0: it is also the
+index used in the `D010/D014/D008 + port * 0x20` calculations. Both IFR
+helpers skip `e320/e32c` for this port. Linux v7.0's GF119-derived driver
+constructs an exclusive pad for this CCB; its `gf119_i2c_pad_x_func` has no
+`.mode` callback, while the shared-pad variant has
+`g94_i2c_pad_mode()`, which operates only on `e500/e50c`. The common pad-mode
+wrapper invokes hardware mode code only when that callback exists. So Linux
+does not write `e320/e32c` for CCB0, but the recovered IFR path does not write
+them for port 0 either. This finding does **not** support a missing CCB0
+enable; it only identifies an as-yet-unnamed operation for IFR port indices
+above 5. The Linux v7.0 implementation is in
+[`padgf119.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/padgf119.c),
+[`padg94.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/padg94.c),
+and [`pad.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/i2c/pad.c).
+
+The IFR also reaches `0xd014` from its software-line helpers and has the
+separate per-port `0x680` polling/control family described above. The latter's
+role is not identified here. No literal or computed access to GPIO20's
+`0xd660` was identified in the decoded PMU body. The observed boot does not
+establish whether this specific Init-From-ROM image ran. Nouveau's separately
+compiled GK104 PMU firmware is a different runtime image and is outside this
+ROM-image conclusion.
 
 ## Result and remaining boundary
 
@@ -168,13 +211,15 @@ The static audit now establishes:
    that reset there. Pre-Linux execution remains unobserved.
 3. The GOP contains a table-driven GPIO path that can compute `0xd660`; an
    actual pre-Linux write to that address is not established.
-4. The decoded PMU IFR image uses Falcon-local address spaces in the relevant
-   code; no BAR0 DDC/GPIO helper or target was identified.
+4. The decoded PMU IFR uses UAS-tagged `D[]` accesses for the PNVIO
+   controller's `D010/D014/D008` register offsets.
+5. Its `e320/e32c` RMW sequence is gated to port indices greater than 5 and
+   is skipped for K4200 CCB0 / physical port 0.
 
-These findings do not identify a missing software DDC enable and do not
-justify writes to GPIO20, GPIO31, `0xe1b8`, `0xe600–0xe620`, `0x1590`, or
-undocumented D014 bits. The remaining dynamic discriminator is whether
-firmware obtains EDID before `ExitBootServices()` through
-`EFI_EDID_ACTIVE_PROTOCOL` or `EFI_EDID_DISCOVERED_PROTOCOL`; otherwise
+These findings do not identify a missing CCB0 software DDC enable and do not
+justify writes to GPIO20, GPIO31, `0xe1b8`, `0xe320/0xe32c`,
+`0xe600–0xe620`, `0x1590`, or undocumented D014 bits. The remaining dynamic
+discriminator is whether firmware obtains EDID before `ExitBootServices()`
+through `EFI_EDID_ACTIVE_PROTOCOL` or `EFI_EDID_DISCOVERED_PROTOCOL`; otherwise
 physical SDA/SCL observation remains the decisive way to separate a board
 path failure from a GPU receive-path problem.

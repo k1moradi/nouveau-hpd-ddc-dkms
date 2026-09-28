@@ -469,15 +469,16 @@ matches that ROM slice byte-for-byte (SHA-256
 `eab925408691f34683c6e6abae369f96782b426051f7e34c91a7a965937f2f2a`); the
 ROM and extracted image remain outside Git.
 
-The image is now decoded in its numbered 256-byte FUC4 blocks. EnvyTools' FUC4
-disassembly of the reassembled code contains local `D[]` and Falcon `I[]`
-operations; numeric `D[]` offsets such as `0xd014` are not BAR0 register
-accesses. This pass found no BAR0 read/write helper or target reaching the
-DDC/GPIO register ranges, but opaque PMU interface side effects remain a
-limit, and this specific image's execution on the observed boot is unknown.
-Nouveau's GK104 PMU firmware compiled into the driver is a separate runtime
-firmware path. The block reconstruction, code hash, address-space evidence,
-and limits are recorded in
+The image is now decoded in its numbered 256-byte FUC4 blocks. A follow-up
+address-flow pass found UAS-tagged `D[]` accesses: the IFR prefixes computed
+register offsets with `0x14000000` and uses that path for the PNVIO
+`D010/D014/D008` controller offsets. Its `e320/e32c` RMW sequence is guarded
+by an unsigned `port <= 5` branch and therefore does not run for the failing
+CCB0/port-0 path. The sequence remains unexplained for port indices above 5;
+the exact UAS translation and this image's execution on the observed boot
+remain limits. Nouveau's GK104 PMU firmware compiled into the driver is a
+separate runtime firmware path. The instruction-level analysis and Linux pad
+comparison are recorded in
 [`GK104-FIRMWARE-RESIDUAL-AUDIT.md`](GK104-FIRMWARE-RESIDUAL-AUDIT.md).
 
 ## EXTDEV / ICCSENSE INA3221 bus mapping

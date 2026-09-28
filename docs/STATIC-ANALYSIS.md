@@ -276,10 +276,16 @@ and field values are in
 [BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md). BIT `p` v1
 identifies a 24,564-byte Kepler PMU Init-From-ROM image in this ROM, but its
 container is now reconstructed as 82 numbered FUC4 blocks and its code has
-been disassembled. The apparent `D014`/`D010` offsets are Falcon-local `D[]`
-data operations, not evidence of BAR0 MMIO; this pass identified no PMU IFR
-BAR0 DDC/GPIO helper or target, while leaving opaque firmware-interface
-side effects and whether this image ran on the observed boot unresolved. The
+been disassembled. A follow-up corrected the initial address-space reading:
+the IFR forms UAS-tagged `D[]` addresses with the `0x14000000` prefix and
+accesses the PNVIO controller offsets `D010`, `D014`, and `D008`. It also
+contains an `e320/e32c` read-modify-write sequence, but the interpreter
+branches around it for port indices 0 through 5. Since the failing DVI-I
+CCB0 path is port 0, this sequence does not show a missing CCB0 setup step.
+The meaning of `e320/e32c` remains unknown for ports above 5, and whether
+this image ran on the observed boot is unresolved. The detailed instruction
+and callback analysis is in
+[`GK104-FIRMWARE-RESIDUAL-AUDIT.md`](GK104-FIRMWARE-RESIDUAL-AUDIT.md). The
 INA3221 in
 EXTDEV entry 0 is another concrete table path, but Nouveau maps it to primary
 CCB 2 (`0xd054`), not the failing DVI-I CCB 0 (`0xd014`); its existing
@@ -319,8 +325,9 @@ whether pre-Linux firmware had already executed the conditional GPIO31 pulse.
 See [BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md).
 The remaining hardware uncertainty is whether ACK is lost on the board path
 or reaches the GPU but is hidden by an undocumented pad/input-routing state.
-The decoded PMU IFR body revealed no identified BAR0 DDC/GPIO access, though
-opaque side effects and execution history remain unresolved. The
+The PMU IFR contains a newly identified UAS register path, but its
+`e320/e32c` sequence is skipped for port 0 and therefore does not explain
+CCB0. Opaque PMU side effects and execution history remain unresolved. The
 INA3221/EXTDEV path does not resolve the hardware uncertainty because it
 selects CCB 2 rather than DVI-I's CCB 0.
 
