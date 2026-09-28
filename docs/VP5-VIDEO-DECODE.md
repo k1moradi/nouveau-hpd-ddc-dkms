@@ -119,7 +119,8 @@ to teardown. They did not prevent decoding and are being tracked as a separate
 GR investigation. The earlier empty VAAPI-init kernel log is not a valid
 control because logging stopped before FFmpeg ran; a later overlapping
 driver-initialization-only control was clean, but it did not create an H.264
-decoder or decode surfaces. See
+decoder or decode surfaces. The rerun's exact transcript is recorded in
+[`VAAPI-INIT-CONTROL-20260928.md`](VAAPI-INIT-CONTROL-20260928.md). See
 [`VP5-PGRAPH-TRAPS.md`](VP5-PGRAPH-TRAPS.md) for the source audit, valid
 control details, and current hypothesis. Do not treat the PGRAPH traps as
 evidence that the hardware-decode fixes failed.

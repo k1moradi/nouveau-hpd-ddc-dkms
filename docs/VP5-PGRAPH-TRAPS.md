@@ -55,25 +55,24 @@ that either video fix failed.
 
 ## VA-API initialization control
 
-There are two distinct control records:
+The earlier empty `~/nouveau-vaapi-init-kernel.log` is **invalid**. Its
+journal logger was stopped before FFmpeg started, so it says nothing about
+VA-API initialization.
 
-1. The earlier empty `~/nouveau-vaapi-init-kernel.log` is **invalid**. Its
-   journal logger was stopped before FFmpeg started, so it says nothing about
-   VA-API initialization.
-2. A later control kept `journalctl -kf -n 0 -o short-monotonic` active while
-   this command ran:
+The valid control was rerun on 2026-09-28 and is recorded in
+[`VAAPI-INIT-CONTROL-20260928.md`](VAAPI-INIT-CONTROL-20260928.md). The journal
+logger was started first, confirmed alive, kept active through this command,
+and stopped only after FFmpeg exited:
 
-   ```bash
-   ffmpeg -hide_banner -loglevel verbose \
-       -init_hw_device vaapi=va:/dev/dri/renderD128 \
-       -f lavfi -i 'nullsrc=s=16x16:d=0.1' \
-       -frames:v 1 -f null -
-   ```
+```bash
+ffmpeg -hide_banner -loglevel verbose \
+    -init_hw_device vaapi=va:/dev/dri/renderD128 \
+    -f lavfi -i 'nullsrc=s=16x16:d=0.1' \
+    -frames:v 1 -f null -
+```
 
-   FFmpeg exited 0, opened Mesa `26.0.8-1ubuntu0.3` for NVE4, and the
-   overlapping kernel log `/tmp/nouveau-vaapi-init-control-kernel.log` was
-   zero bytes. A scan for `trap`, `rt_width`, `rt_height`, `fault`, `pte`,
-   `bar2`, `priv`, and `killed` found nothing.
+FFmpeg exited 0 and opened Mesa `26.0.8-1ubuntu0.3` for NVE4. The overlapping
+kernel log was zero bytes, and the trap/fault keyword scan found no matches.
 
 The valid control shows that opening the VA-API driver and running this small
 CPU `lavfi` frame did not produce these traps in that sample. It does **not**
@@ -210,11 +209,25 @@ on the GPU.
 
 For the next hardware capture, apply that patch to the exact Mesa source build,
 build only Mesa userspace, then overlap the kernel logger with both the small
-init control and the same 3000-frame H.264 run. Set
-`NOUVEAU_DIAG_RT_CLEAR=1` only for the FFmpeg process. Matching clear records
-near the kernel trap timestamps would support the startup hypothesis; absence
-of such records would demote it. A functional change should wait until a
-specific emitted method/state and the expected correct dimensions are proven.
+init control and the same 3000-frame H.264 run. Keep the known-good named VA-API
+device setup unchanged; set `NOUVEAU_DIAG_RT_CLEAR=1` only for FFmpeg:
+
+```bash
+set -o pipefail
+NOUVEAU_DIAG_RT_CLEAR=1 ffmpeg -hide_banner -loglevel verbose \
+    -init_hw_device vaapi=va:/dev/dri/renderD128 \
+    -hwaccel vaapi \
+    -hwaccel_device va \
+    -hwaccel_output_format vaapi \
+    -i /home/keivan/test_1080p.mkv \
+    -an -frames:v 3000 -f null - \
+    2>&1 | tee ~/nouveau-pgraph-3000-mesa.log
+```
+
+Matching clear records near the kernel trap timestamps would support the
+startup hypothesis; absence of such records would demote it. A functional
+change should wait until a specific emitted method/state and the expected
+correct dimensions are proven.
 
 The legacy-video fix details remain in
 [`VP5-VIDEO-DECODE.md`](VP5-VIDEO-DECODE.md); the nonstall build experiment is

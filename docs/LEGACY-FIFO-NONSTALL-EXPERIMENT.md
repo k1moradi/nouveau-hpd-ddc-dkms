@@ -73,11 +73,15 @@ state update, and cleanup without needing root or a live DKMS registration:
 bash tests/test-dkms-state-lifecycle.sh
 ```
 
-The patch hunk keeps full surrounding source context. Its context indentation is
-normalized in the tracked patch so `git diff --check` remains clean; DKMS uses
-`patch -l --fuzz=0`, which requires all context lines while treating tabs and
-spaces as equivalent. The source detector then requires the exact fixed event
-index expression before compilation continues.
+The test also statically checks that `dkms-build.sh` writes the initial state
+before `make`, and that it does not publish a final state until after the
+module-existence check, output copy, and vermagic validation. This catches a
+future reordering of the build script's completion marker.
+
+The patch hunk retains the source's tabbed context exactly. DKMS applies it
+with `patch --fuzz=0` and no whitespace-normalizing mode, so every context line
+must match. The source detector then requires the exact fixed event-index
+expression after patching and before compilation continues.
 
 Then repeat the same VA-API reproduction and capture the kernel log from the
 same time window. First test one run; do not start the 20-run reliability
