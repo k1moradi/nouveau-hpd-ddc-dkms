@@ -292,7 +292,7 @@ The generated package and staging tree live under ignored `build/` output.
 pkexec ./uninstall.sh
 ```
 
-This removes all known DKMS revisions from 0.1.0 through 0.1.12, their source
+This removes all known DKMS revisions from 0.1.0 through 0.1.13, their source
 staging directories, and project temporary trees, then refreshes module
 dependencies and initramfs files. Nouveau uses the distribution module after
 reboot.
@@ -303,8 +303,15 @@ The hardware setup and captured evidence are in [docs/BUG-REPORT.md](docs/BUG-RE
 The IBUF experiment remains diagnostic: the K4200 VBIOS setting bit 17 does not
 prove that bit 16 should be enabled, so the patch does not modify `0xe1b8`.
 
-Version 0.1.12 adds the fail-closed GK104 legacy-video context mapping
-backport and its K4200 validation notes. Version 0.1.11 adds the read-only
+Version 0.1.13 adds an opt-in, isolated legacy FIFO nonstall-event index
+experiment for video-decode fence progress. Run it with
+`pkexec env NOUVEAU_DKMS_JOBS=2 ./install.sh --experimental-legacy-nonstall`;
+run `pkexec env NOUVEAU_DKMS_JOBS=2 ./install.sh` without flags to rebuild the
+patch-1-only baseline. See
+[the experiment notes](docs/LEGACY-FIFO-NONSTALL-EXPERIMENT.md) for evidence,
+verification, and rollback. Version 0.1.12 adds the
+fail-closed GK104 legacy-video context mapping backport and its K4200
+validation notes. Version 0.1.11 adds the read-only
 GK104 POST-decision, effective POST-call,
 and conditional GPIO31 interpreter trace. Version 0.1.10 corrects the GOP
 software-line recovery and adds the

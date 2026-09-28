@@ -6,6 +6,8 @@ if [ -z "$kernelver" ]; then
     echo "ERROR: DKMS did not supply kernel version" >&2
     exit 2
 fi
+nonstall_state_file="$PWD/legacy-fifo-nonstall-state-$kernelver"
+printf '%s\n' 'build-incomplete' > "$nonstall_state_file"
 
 kdir="/lib/modules/$kernelver/build"
 if [ ! -d "$kdir" ]; then
@@ -170,6 +172,42 @@ case "$video_ctx_state" in
         ;;
 esac
 
+# Opt-in A/B candidate for legacy FIFO fence progress.  Keep this separate
+# from the GK104 context-map backport so the second behavior can be tested
+# without changing the patch-1-only baseline.  Source matching is fail-closed.
+nonstall_build_state=disabled
+if [ -f "$PWD/experimental-legacy-nonstall.enabled" ]; then
+    nonstall_src="$srcdir/drivers/gpu/drm/nouveau/nvkm/engine/fifo/uchan.c"
+    if [ ! -f "$nonstall_src" ]; then
+        echo "ERROR: Nouveau FIFO channel source missing; refusing to skip nonstall patch" >&2
+        exit 2
+    fi
+    if ! nonstall_state=$(python3 "$PWD/check-legacy-fifo-nonstall.py" "$nonstall_src"); then
+        echo "ERROR: cannot classify legacy FIFO nonstall registration; refusing to guess." >&2
+        exit 2
+    fi
+    case "$nonstall_state" in
+        vulnerable)
+            echo "nouveau-hpd-ddc: applying experimental legacy FIFO nonstall event-index patch"
+            if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/video/legacy-fifo-nonstall-event-index.patch"; then
+                echo "ERROR: legacy FIFO nonstall patch did not apply cleanly; refusing to guess." >&2
+                exit 2
+            fi
+            nonstall_build_state=patched
+            ;;
+        fixed)
+            echo "nouveau-hpd-ddc: legacy FIFO nonstall event registration is already fixed; skipping backport"
+            nonstall_build_state=already-fixed
+            ;;
+        *)
+            echo "ERROR: unexpected legacy FIFO nonstall state '$nonstall_state'; refusing to guess." >&2
+            exit 2
+            ;;
+    esac
+else
+    echo "nouveau-hpd-ddc: experimental legacy FIFO nonstall patch is disabled"
+fi
+
 # Optional read-only PNVIO input-buffer snapshot for the K4200 DDC diagnosis.
 # The installer creates this marker only when invoked with --diag-ibuf.
 if [ -f "$PWD/diagnostic-ibuf.enabled" ]; then
@@ -322,6 +360,7 @@ if [ ! -f "$module" ]; then
     echo "ERROR: build completed without $module" >&2
     exit 2
 fi
+printf '%s\n' "$nonstall_build_state" > "$nonstall_state_file"
 
 cp -f "$module" "$out/nouveau.ko"
 vermagic=$(modinfo -F vermagic "$out/nouveau.ko" 2>/dev/null || true)

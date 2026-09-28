@@ -44,6 +44,38 @@ behavioral change at a time makes the result attributable. If this context-map
 fix removes the channel kill but decode then stalls waiting for fence progress,
 apply/test the nonstall-event fix as a second experiment.
 
+## Patch-1 follow-up evidence
+
+The first K4200 run with patch 1 removed the original channel-kill behavior,
+but later produced a SIGBUS in `nvc0_decoder_bsp_next()` while copying a 1 MiB
+BSP BO. The core shows `dec->bsp_ptr == NULL`; the input chunks were only 3
+and 9 bytes, so their payload size does not explain the huge rounded BO size.
+
+The current evidence points to a possible fence wait timeout before this copy:
+Mesa maps the BSP BO in `nvc0_decoder_bsp_begin()`, Nouveau's BO-map path
+waits through GEM CPU_PREP, and that wait is bounded at 30 seconds. The core
+does not contain the CPU_PREP return value, so the wait timeout remains an
+inference rather than a directly captured result.
+
+The isolated next candidate is the legacy FIFO nonstall event-index change.
+GK104's FIFO interrupt notifies global event index 0, while the shared
+`nvkm_uchan_uevent()` path currently registers nonstall events at
+`runl->id`. The upstream candidate uses the runlist ID only when a FIFO has
+a per-runlist nonstall constructor; legacy FIFOs use index 0. This is a
+specific match for the suspected wait, but K4200 causality still requires an
+A/B run.
+
+Version 0.1.13 carries this as an opt-in build flag so the patch-1-only
+baseline remains available:
+
+```bash
+pkexec env NOUVEAU_DKMS_JOBS=2 ./install.sh --experimental-legacy-nonstall
+```
+
+See [the isolated experiment notes](LEGACY-FIFO-NONSTALL-EXPERIMENT.md) for
+verification, rollback, and result interpretation. Do not count patch 2 as
+validated until the same VA-API reproduction completes without a fault.
+
 ## Build behavior
 
 `dkms/dkms-build.sh` checks the extracted Ubuntu source before applying the

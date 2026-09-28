@@ -2,7 +2,7 @@
 set -u
 
 NAME=nouveau-hpd-ddc
-VER=0.1.12
+VER=0.1.13
 k=$(uname -r)
 dac_ddc_diag_enabled=0
 if [ -f "/usr/src/$NAME-$VER/diagnostic-dac-ddc.enabled" ]; then
@@ -262,6 +262,11 @@ module_vermagic=$(modinfo -F vermagic nouveau 2>/dev/null || true)
 module_srcversion=$(modinfo -F srcversion nouveau 2>/dev/null || true)
 loaded_srcversion=$(cat /sys/module/nouveau/srcversion 2>/dev/null || true)
 dkms_status=$(dkms status -m "$NAME" -v "$VER" 2>/dev/null || true)
+legacy_nonstall_test_enabled=NO
+if [ -f "/usr/src/$NAME-$VER/experimental-legacy-nonstall.enabled" ]; then
+    legacy_nonstall_test_enabled=YES
+fi
+legacy_nonstall_build_state=$(cat "/usr/src/$NAME-$VER/legacy-fifo-nonstall-state-$k" 2>/dev/null || printf 'NOT RECORDED')
 
 echo '=== module ==='
 printf 'kernel: %s\n' "$k"
@@ -294,6 +299,8 @@ else
 fi
 
 echo '=== DKMS ==='
+printf 'experimental legacy FIFO nonstall patch staged: %s\n' "$legacy_nonstall_test_enabled"
+printf 'legacy FIFO nonstall build result: %s\n' "$legacy_nonstall_build_state"
 if [ -n "$dkms_status" ]; then
     printf '%s\n' "$dkms_status"
 else
