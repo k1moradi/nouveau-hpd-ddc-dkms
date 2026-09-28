@@ -378,3 +378,77 @@ UEFIRomExtract source:  a368a0fe0b757c7e234c1d28b1203fbb8f88d9c9
 .03 input SHA-256:      6c768eb2d34ab65bdde6137e66b5fbe750a750f9553aabff51e614e1168c4ed9
 .15 input SHA-256:      c2c030d0acbeb2777bfcaa556052fd5242079da2a5bbcc7c41e6d278e93cd5cc
 ```
+
+## NVIDIA BIT and display-script table audit
+
+EnvyTools reports BIT `U` as unparsed, so this pass decoded the documented
+BIT and display-script structures directly from the hash-verified `.03` ROM
+above. The relevant format references are NVIDIA's [BIT specification](https://nvidia.github.io/open-gpu-doc/BIOS-Information-Table/BIOS-Information-Table.html),
+[BIT display-pointer/display-script specification](https://download.nvidia.com/open-gpu-doc/pascal/1/BIT_DISPLAY_PTRS-U-BIT_DP_PTRS-d.pdf),
+and [DCB 4.x specification](https://nvidia.github.io/open-gpu-doc/DCB/DCB-4.x-Specification.html).
+The ROM binary remains outside Git.
+
+The BIT header is at `0x01c0`. Its documented tokens give these results:
+
+| Token | ROM value | Result |
+|---|---|---|
+| `2`, v1 | data at `0x024e`: `0000 0000` | Both the I2C-script-table pointer and external-hardware-monitor init-script pointer are null. |
+| `B`, v2 | POST callback word `0x0000`; SYSTEM callback word `0x0000` | No BIT `B` callback is selected in either field. |
+| `I`, v1 | private boot-script pointer `0xace4` | The byte at `0xace4` is `0x71`; EnvyTools decodes it as `DONE`, so this pointer does not lead to additional boot-script operations. |
+| `U`, v1 | data at `0x0339`: `e6 4c 00` | Display-script table pointer is `0x4ce6`; flags byte is zero. |
+
+The display-script table at `0x4ce6` has version 2.1, a 5-byte header, 2-byte
+pointer entries, 25 entries, and 12-byte IED records. The non-null entries map
+against the active DCB paths as follows. Resource masks below are the decoded
+DCB output-resource bits; “unmatched” means no active DCB entry has the
+corresponding type/location/resource combination.
+
+| IED index | Key fields: type / location / output-resource mask / heads | DCB mapping |
+|---:|---|---|
+| 0 | CRT / 0 / `0xf` / `0xf` | DCB 1, analog CRT (the DVI-I VGA path) |
+| 6 | TMDS / 0 / `0x1` / `0xf` | DCB 0, DVI-I digital TMDS |
+| 7 | TMDS / 0 / `0x2` / `0xf` | DCB 4, TMDS |
+| 8 | TMDS / 0 / `0x4` / `0xf` | DCB 6, TMDS |
+| 9 | TMDS / 0 / `0x8` / `0xf` | Unmatched |
+| 12 | DisplayPort / 0 / `0x1` / `0xf` | Unmatched |
+| 13 | DisplayPort / 0 / `0x2` / `0xf` | DCB 3, DisplayPort |
+| 14 | DisplayPort / 0 / `0x4` / `0xf` | DCB 5, DisplayPort |
+| 15 | DisplayPort / 0 / `0x8` / `0xf` | Unmatched |
+| 16 | TMDS / 1 / `0xf` / `0xf` | Unmatched |
+
+IED 0 is the sole CRT-keyed row and matches DCB 1 on the applicable fields:
+both are CRT, location 0, and their head/output-resource masks overlap DCB 1's
+head mask and DAC 1 resource. Its key also contains sublink mask `3`, but the
+DCB 4.x specification reserves the CRT-specific information word; sublink
+assignment is specified for digital output types. That value therefore does
+not establish a separate analog route.
+
+The complete script chain for this analog IED is:
+
+| Field | Value | Result |
+|---|---:|---|
+| IED flags | `0x01` | Bit 0 is reserved; the documented driver-skip (`0x02`) and manual-power (`0x04`) bits are clear. |
+| Runtime count | 1 | One runtime selector entry. |
+| InitScript | `0x0000` | No init script. |
+| OffINT1 / OffINT2 | `0x0000` / `0x0000` | No off scripts. |
+| Runtime Protocol / DeviceFlags | `0xff` / `0x00` | Protocol wildcard; no device flags set. |
+| OnINT2 / OnINT3 | `0x52b2` / `0x0000` | One OnINT2 clock-mode list; no OnINT3 list. |
+| SorClkMode at `0x52b2` | frequency `0`, script `0x52b6` | The only, zero-frequency fallback record points to `0x52b6`. |
+| Script at `0x52b6` | opcode `0x71` | EnvyTools decodes `0x71` as `DONE`; no display-script operation follows. |
+
+### Assessment and limits
+
+This closes the previously unparsed, standard BIT `U` path for the analog
+DCB 1 output: it supplies no analog init/off sequence and its only runtime
+script is a `DONE` stub. Together with the null BIT `2` pointers, zero BIT
+`B` callback words, and the BIT `I` private boot-script stub, this audit finds
+no standard-table I2C/display initialization sequence that accounts for the
+missing DDC ACK or identifies a writable DDC enable.
+
+This is a format-aware decode of the recorded ROM, not proof that every
+pre-Linux firmware path executed every table, nor that vendor-private or
+computed-address code contains no relevant operation. It does not change the
+existing safety conclusion: the audit provides no basis for speculative
+GPIO, `e1b8`, `e600–e620`, `0x1590`, or D014 writes. A UEFI EDID-protocol
+query remains a separate dynamic experiment; it is not answered by this
+static table decode.

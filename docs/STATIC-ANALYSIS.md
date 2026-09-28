@@ -252,13 +252,42 @@ candidate ranking above. Hashes, offsets, comparison method, and limitations
 are recorded in [BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md).
 Both ROM binaries remain outside Git.
 
+## NVIDIA BIT `U` / analog display-script audit
+
+Because EnvyTools does not parse BIT `U`, the documented structures were
+decoded directly from the hash-verified K4200 `.03` ROM. BIT `U` points to a
+version 2.1 display-script table. Its sole CRT-keyed IED is the applicable
+match for DCB 1 (DVI-I analog) on type, location, head, and DAC-resource
+fields. DCB 4.x reserves the CRT-specific information word, so the IED's
+sublink mask is not evidence of a distinct analog route.
+
+For that analog IED, `InitScript`, `OffINT1`, and `OffINT2` are null. Its one
+runtime entry has `OnINT2=0x52b2` and no `OnINT3`; the only clock-mode record
+is the zero-frequency fallback to script `0x52b6`, whose `0x71` opcode is
+EnvyTools `DONE`. No standard analog display script is available here to
+explain the missing DDC ACK. The same audit found null BIT `2` I2C-script
+pointers, zero BIT `B` callback words, and a BIT `I` private boot-script
+pointer ending immediately in `DONE`.
+
+This narrows the static conclusion to the **standard documented VBIOS paths
+audited so far**; it does not rule out proprietary/computed-address firmware
+behavior or prove which tables pre-Linux firmware executed. Full table mapping
+and field values are in
+[BOARD-PAD-DDC-INVESTIGATION.md](BOARD-PAD-DDC-INVESTIGATION.md). The remaining
+software investigations are distinct: a whole-GOP computed-address audit,
+a targeted PMU/Falcon firmware scan, and cross-board `e600–e620` comparisons.
+A live pre-`ExitBootServices()` UEFI EDID-protocol query would be a separate
+dynamic discriminator. None of these leads currently justifies a new MMIO
+write experiment.
+
 ## Static-analysis ceiling
 
-The remaining uncertainty is increasingly about undocumented electrical
-behavior inside the GPU/board rather than an identifiable missing Nouveau
-software step. Static analysis cannot determine the PCB destination of GPIO31,
-the D014 input bits' electrical sampling point, or the function of a private
-board-level DDC control.
+The obvious decoded Nouveau/VBIOS/GOP transport path and the standard
+documented BIT/display-script paths audited above have not identified a
+missing software enable. A few bounded static audits and the UEFI protocol
+query remain, but static analysis cannot determine the PCB destination of
+GPIO31, the D014 input bits' electrical sampling point, or the function of a
+private board-level DDC control.
 
 The DAC/load-detect probe failed in both phases, and the D014 drive/sense
 capture is complete. The full ROM was read through Nouveau's read-only debugfs
