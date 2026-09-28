@@ -189,7 +189,7 @@ if [ -f "$PWD/experimental-legacy-nonstall.enabled" ]; then
     case "$nonstall_state" in
         vulnerable)
             echo "nouveau-hpd-ddc: applying experimental legacy FIFO nonstall event-index patch"
-            if ! patch -d "$srcdir" -p1 --forward --batch < "$PWD/patches/video/legacy-fifo-nonstall-event-index.patch"; then
+            if ! patch -l -d "$srcdir" -p1 --forward --batch < "$PWD/patches/video/legacy-fifo-nonstall-event-index.patch"; then
                 echo "ERROR: legacy FIFO nonstall patch did not apply cleanly; refusing to guess." >&2
                 exit 2
             fi
@@ -204,6 +204,15 @@ if [ -f "$PWD/experimental-legacy-nonstall.enabled" ]; then
             exit 2
             ;;
     esac
+
+    if ! nonstall_post_state=$(python3 "$PWD/check-legacy-fifo-nonstall.py" "$nonstall_src"); then
+        echo "ERROR: cannot verify legacy FIFO nonstall source after patching; refusing to build." >&2
+        exit 2
+    fi
+    if [ "$nonstall_post_state" != fixed ]; then
+        echo "ERROR: legacy FIFO nonstall source is '$nonstall_post_state' after patch step; expected fixed." >&2
+        exit 2
+    fi
 else
     echo "nouveau-hpd-ddc: experimental legacy FIFO nonstall patch is disabled"
 fi

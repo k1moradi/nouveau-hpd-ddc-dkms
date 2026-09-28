@@ -266,7 +266,11 @@ legacy_nonstall_test_enabled=NO
 if [ -f "/usr/src/$NAME-$VER/experimental-legacy-nonstall.enabled" ]; then
     legacy_nonstall_test_enabled=YES
 fi
-legacy_nonstall_build_state=$(cat "/usr/src/$NAME-$VER/legacy-fifo-nonstall-state-$k" 2>/dev/null || printf 'NOT RECORDED')
+legacy_nonstall_build_state_file="/var/lib/dkms/$NAME/$VER/build/legacy-fifo-nonstall-state-$k"
+if [ ! -r "$legacy_nonstall_build_state_file" ]; then
+    legacy_nonstall_build_state_file="/usr/src/$NAME-$VER/legacy-fifo-nonstall-state-$k"
+fi
+legacy_nonstall_build_state=$(cat "$legacy_nonstall_build_state_file" 2>/dev/null || printf 'NOT RECORDED')
 
 echo '=== module ==='
 printf 'kernel: %s\n' "$k"
