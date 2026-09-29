@@ -65,6 +65,14 @@ The exact local sources inspected were Mesa `26.0.8-1ubuntu0.3`, libdrm
    fence deadline to `jiffies + 15 * HZ`. On failure, `nouveau_channel_idle()`
    prints `failed to idle channel %d` using the same kernel channel's `chid`.
 
+The scheduler step is a separate possible blocking point. Upstream v7.0's DRM
+scheduler source has `drm_sched_entity_fini()` call
+[`drm_sched_entity_kill()`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/scheduler/sched_entity.c#L329-L347),
+which removes the entity from its run queue and then calls
+[`wait_for_completion(&entity->entity_idle)`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/scheduler/sched_entity.c#L231-L250)
+without an explicit timeout. That happens before Nouveau's channel-idle fence
+wait. The userspace timestamps bracket both stages together.
+
 The earlier Mesa `object-destroy engine=vp` records bracket deletion of the
 VP engine context object; `nouveau_object_subchan_del()` sends that through
 NVIF and it returned quickly. The 15-second span begins later at
@@ -82,10 +90,12 @@ with FFmpeg still exiting successfully.
 
 The whole Mesa VP channel-free interval is `15.001695 s`; the error appears at
 `15.000427 s`. This is a very close match to the kernel's explicit 15-second
-fence deadline. It strongly supports the conclusion that most or all of this
-interval is the `nouveau_channel_idle()` fence wait. The trace did not record
-the exact entry into `nouveau_fence_emit()` or separate scheduler-entity and
-idle durations, so function-graph tracing will confirm that partition.
+fence deadline, making the idle-fence wait a strong candidate for the long
+interval. However, `drm_sched_entity_fini()` has a distinct completion wait
+before the idle-fence call. This capture did not time those stages separately,
+so it does not prove how much time was spent in either one. The prepared
+function-graph trace should show the duration of `drm_sched_entity_fini()` and
+the following `nouveau_channel_idle()` path separately.
 
 `CTXSW_TIMEOUT` is handled separately by the FIFO scheduler interrupt path
 (`gf100_fifo_intr_sched()` -> `gf100_fifo_intr_sched_ctxsw()` -> the FIFO's
