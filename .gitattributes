@@ -1,0 +1,3 @@
+# Nested unified diffs use whitespace as their context/blank-line marker.
+# Their added source lines are checked separately and applied with zero fuzz.
+patches/diagnostic/gk104-vp-idle-fence-ctxsw-trace.patch whitespace=-blank-at-eol,-space-before-tab

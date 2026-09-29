@@ -1,0 +1,263 @@
+From: Nouveau diagnostic preparation
+Subject: [DIAGNOSTIC] drm/nouveau: trace idle fences and GK104 ctxsw engines
+
+This opt-in diagnostic records channel-idle fence emission/progress and the
+engine/context IDs used by the GF100/GK104 CTXSW_TIMEOUT recovery path. It does
+not change fence packets, timeout values, scheduling, or recovery behavior.
+
+Enable the separate Nouveau module parameters diag_fence_wait=1 and
+diag_ctxsw=1 for one capture, then disable them after the run. The NVKM
+CTXSW records are emitted only for the rare timeout path.
+
+---
+--- a/drivers/gpu/drm/nouveau/nouveau_chan.c
++++ b/drivers/gpu/drm/nouveau/nouveau_chan.c
+@@ -70,7 +70,18 @@
+ 		struct nouveau_fence *fence = NULL;
+ 		int ret;
+ 
+-		ret = nouveau_fence_new(&fence, chan);
++		if (unlikely(READ_ONCE(nouveau_diag_fence_wait))) {
++			ret = nouveau_fence_create(&fence, chan);
++			if (!ret) {
++				/* Mark before emit so diagnostics identify this idle fence. */
++				fence->idle = true;
++				ret = nouveau_fence_emit(fence);
++				if (ret)
++					nouveau_fence_unref(&fence);
++			}
++		} else {
++			ret = nouveau_fence_new(&fence, chan);
++		}
+ 		if (!ret) {
+ 			ret = nouveau_fence_wait(fence, false, false);
+ 			nouveau_fence_unref(&fence);
+--- a/drivers/gpu/drm/nouveau/nouveau_fence.c
++++ b/drivers/gpu/drm/nouveau/nouveau_fence.c
+@@ -27,6 +27,7 @@
+ #include <linux/ktime.h>
+ #include <linux/hrtimer.h>
+ #include <linux/sched/signal.h>
++#include <linux/moduleparam.h>
+ #include <trace/events/dma_fence.h>
+ 
+ #include <nvif/if0020.h>
+@@ -34,6 +35,11 @@
+ #include "nouveau_drv.h"
+ #include "nouveau_dma.h"
+ #include "nouveau_fence.h"
++
++bool nouveau_diag_fence_wait;
++module_param_named(diag_fence_wait, nouveau_diag_fence_wait, bool, 0600);
++MODULE_PARM_DESC(diag_fence_wait,
++		 "Enable opt-in Nouveau channel-idle fence diagnostics");
+ 
+ static const struct dma_fence_ops nouveau_fence_ops_uevent;
+ static const struct dma_fence_ops nouveau_fence_ops_legacy;
+@@ -297,9 +303,48 @@
+ static int
+ nouveau_fence_wait_busy(struct nouveau_fence *fence, bool intr)
+ {
++	struct nouveau_channel *chan = fence->channel;
++	struct nouveau_fence_chan *fctx = nouveau_fctx(fence);
++	unsigned long start = 0, next_diag = 0;
++	bool diag = fence->idle && READ_ONCE(nouveau_diag_fence_wait);
+ 	int ret = 0;
+ 
++	if (diag) {
++		u32 value;
++
++		start = jiffies;
++		next_diag = start + HZ;
++		value = fctx->read ? fctx->read(chan) : ~0U;
++
++		dev_info(chan->cli->drm->nvkm->dev,
++			 "NOUVEAU_DIAG_IDLE_FENCE stage=wait-begin "
++			 "client=%s runlist=%d chid=%d seq=%llu gpu_addr=0x%016llx "
++			 "value_before=0x%08x value_now=0x%08x emit_ret=%d "
++			 "dma_put=%d dma_cur=%d dma_free=%d\n",
++			 chan->cli->name, chan->runlist, chan->chid,
++			 (unsigned long long)fence->base.seqno,
++			 (unsigned long long)fence->gpu_addr, fence->value_before,
++			 value, fence->emit_ret, chan->dma.put, chan->dma.cur,
++			 chan->dma.free);
++	}
++
+ 	while (!nouveau_fence_done(fence)) {
++		if (diag && time_after_eq(jiffies, next_diag)) {
++			u32 value = fctx->read ? fctx->read(chan) : ~0U;
++
++			dev_info(chan->cli->drm->nvkm->dev,
++				 "NOUVEAU_DIAG_IDLE_FENCE stage=wait-progress "
++				 "client=%s runlist=%d chid=%d seq=%llu "
++				 "gpu_addr=0x%016llx value_now=0x%08x "
++				 "elapsed_jiffies=%lu dma_put=%d dma_cur=%d dma_free=%d\n",
++				 chan->cli->name, chan->runlist, chan->chid,
++				 (unsigned long long)fence->base.seqno,
++				 (unsigned long long)fence->gpu_addr, value,
++				 jiffies - start, chan->dma.put, chan->dma.cur,
++				 chan->dma.free);
++			next_diag = jiffies + HZ;
++		}
++
+ 		if (time_after_eq(jiffies, fence->timeout)) {
+ 			ret = -EBUSY;
+ 			break;
+@@ -316,6 +361,20 @@
+ 	}
+ 
+ 	__set_current_state(TASK_RUNNING);
++	if (diag) {
++		u32 value = fctx->read ? fctx->read(chan) : ~0U;
++
++		dev_info(chan->cli->drm->nvkm->dev,
++			 "NOUVEAU_DIAG_IDLE_FENCE stage=wait-end "
++			 "client=%s runlist=%d chid=%d seq=%llu "
++			 "gpu_addr=0x%016llx value_now=0x%08x result=%d "
++			 "elapsed_jiffies=%lu dma_put=%d dma_cur=%d dma_free=%d\n",
++			 chan->cli->name, chan->runlist, chan->chid,
++			 (unsigned long long)fence->base.seqno,
++			 (unsigned long long)fence->gpu_addr, value, ret,
++			 jiffies - start, chan->dma.put, chan->dma.cur,
++			 chan->dma.free);
++	}
+ 	return ret;
+ }
+ 
+--- a/drivers/gpu/drm/nouveau/nouveau_fence.h
++++ b/drivers/gpu/drm/nouveau/nouveau_fence.h
+@@ -15,6 +15,11 @@
+ 
+ 	struct nouveau_channel __rcu *channel;
+ 	unsigned long timeout;
++	/* Diagnostic metadata for the channel-idle fence only. */
++	bool idle;
++	u64 gpu_addr;
++	u32 value_before;
++	int emit_ret;
+ };
+ 
+ static inline struct nouveau_fence *
+@@ -22,6 +27,8 @@
+ {
+ 	return container_of(fence, struct nouveau_fence, base);
+ }
++
++extern bool nouveau_diag_fence_wait;
+ 
+ int  nouveau_fence_create(struct nouveau_fence **, struct nouveau_channel *);
+ int  nouveau_fence_new(struct nouveau_fence **, struct nouveau_channel *);
+--- a/drivers/gpu/drm/nouveau/nv84_fence.c
++++ b/drivers/gpu/drm/nouveau/nv84_fence.c
+@@ -82,6 +82,8 @@
+ 	return chan->cli->drm->runl[chan->runlist].chan_id_base + chan->chid;
+ }
+ 
++static u32 nv84_fence_read(struct nouveau_channel *chan);
++
+ static int
+ nv84_fence_emit(struct nouveau_fence *fence)
+ {
+@@ -88,8 +90,27 @@
+ 	struct nouveau_channel *chan = fence->channel;
+ 	struct nv84_fence_chan *fctx = chan->fence;
+ 	u64 addr = fctx->vma->addr + nv84_fence_chid(chan) * 16;
+-
+-	return fctx->base.emit32(chan, addr, fence->base.seqno);
++	bool diag = fence->idle && READ_ONCE(nouveau_diag_fence_wait);
++	int ret;
++
++	if (diag)
++		fence->value_before = nv84_fence_read(chan);
++
++	ret = fctx->base.emit32(chan, addr, fence->base.seqno);
++	if (diag) {
++		fence->gpu_addr = addr;
++		fence->emit_ret = ret;
++		dev_info(chan->cli->drm->nvkm->dev,
++			 "NOUVEAU_DIAG_IDLE_FENCE stage=emit client=%s "
++			 "runlist=%d chid=%d seq=%llu gpu_addr=0x%016llx "
++			 "value_before=0x%08x emit32_ret=%d kick_called=%d "
++			 "dma_put=%d dma_cur=%d dma_free=%d\n",
++			 chan->cli->name, chan->runlist, chan->chid,
++			 (unsigned long long)fence->base.seqno,
++			 (unsigned long long)addr, fence->value_before, ret,
++			 ret == 0, chan->dma.put, chan->dma.cur, chan->dma.free);
++	}
++	return ret;
+ }
+ 
+ static int
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c
+@@ -37,6 +37,13 @@
+ 
+ #include <nvif/class.h>
+ 
++#include <linux/moduleparam.h>
++
++static bool nouveau_diag_ctxsw;
++module_param_named(diag_ctxsw, nouveau_diag_ctxsw, bool, 0600);
++MODULE_PARM_DESC(diag_ctxsw,
++		 "Enable opt-in FIFO context-switch timeout diagnostics");
++
+ void
+ gf100_chan_preempt(struct nvkm_chan *chan)
+ {
+@@ -625,15 +632,43 @@
+ 	nvkm_runl_foreach(runl, fifo) {
+ 		/* Stop the runlist, and go through all engines serving it. */
+ 		nvkm_runl_block(runl);
++		if (READ_ONCE(nouveau_diag_ctxsw))
++			RUNL_ERROR(runl, "NOUVEAU_DIAG_CTXSW stage=runlist "
++				   "runlist=%d engine_mask=0x%08x", runl->id, engm);
+ 		nvkm_runl_foreach_engn_cond(engn, runl, engm & BIT(engn->id)) {
+ 			/* Determine what channel (group) the engine is on. */
+ 			id = engn->func->cxid(engn, &cgid);
++			if (READ_ONCE(nouveau_diag_ctxsw))
++				RUNL_ERROR(runl, "NOUVEAU_DIAG_CTXSW stage=selected "
++					   "runlist=%d engine_mask=0x%08x engine_id=%d "
++					   "engine=%s type=%d inst=%d active_kind=%s "
++					   "active_id=%d active_cgid=%d fault_id=%d",
++					   runl->id, engm, engn->id,
++					   engn->engine ? engn->engine->subdev.name : "none",
++					   engn->engine ? engn->engine->subdev.type : -1,
++					   engn->engine ? engn->engine->subdev.inst : -1,
++					   id >= 0 ? (cgid ? "cgrp" : "chid") : "none",
++					   id, id >= 0 ? cgid : false, engn->fault);
+ 			if (id >= 0) {
+ 				/* Trigger MMU fault on any engine(s) on that channel (group). */
+ 				nvkm_runl_foreach_engn_cond(engn2, runl, engn2->func->cxid) {
+ 					id2 = engn2->func->cxid(engn2, &cgid2);
+-					if (cgid2 == cgid && id2 == id)
++					if (cgid2 == cgid && id2 == id) {
++						if (READ_ONCE(nouveau_diag_ctxsw))
++							RUNL_ERROR(runl, "NOUVEAU_DIAG_CTXSW "
++								   "stage=recovery-target runlist=%d "
++								   "engine_id=%d engine=%s type=%d "
++								   "inst=%d active_id=%d active_cgid=%d "
++								   "fault_id=%d", runl->id, engn2->id,
++								   engn2->engine ?
++								   engn2->engine->subdev.name : "none",
++								   engn2->engine ?
++								   engn2->engine->subdev.type : -1,
++								   engn2->engine ?
++								   engn2->engine->subdev.inst : -1,
++								   id2, cgid2, engn2->fault);
+ 						engn2->func->mmu_fault_trigger(engn2);
++					}
+ 				}
+ 			}
+ 		}
+@@ -660,6 +697,11 @@
+ 
+ 	if (!engm)
+ 		return;
++
++	if (READ_ONCE(nouveau_diag_ctxsw))
++		nvkm_error(&fifo->engine.subdev,
++			   "NOUVEAU_DIAG_CTXSW stage=mask-computed "
++			   "engine_mask=0x%08x\n", engm);
+ 
+ 	fifo->func->intr_ctxsw_timeout(fifo, engm);
+ }

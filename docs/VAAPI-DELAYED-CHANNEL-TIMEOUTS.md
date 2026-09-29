@@ -343,9 +343,9 @@ for BSP, VP, and PPP, and constructs the corresponding engine objects on those
 channels. The capture's `av:h264:df0` client label is consistent with the
 decoder, but does not identify an array entry. Channel 2 in the earlier GR
 trap is a GR channel and is distinct from FIFO channel 5 in the recovery
-record. The native-surface capture's channel 4 is now mapped to the Mesa VP
-channel by the synchronous free-call source path; channel 5 remains unmapped
-pending the opt-in channel-handle trace. See Mesa
+record. The later opt-in Mesa channel-handle trace maps FIFO channel 4 to VP
+and channel 5 to PPP. The recovery target is therefore identified as PPP, but
+the engine bit that first raised `CTXSW_TIMEOUT` remains unknown. See Mesa
 [`nvc0_video.c`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-26.0.8/src/gallium/drivers/nouveau/nvc0/nvc0_video.c#L91-183).
 
 Assessment after the native-surface candidate run:
@@ -353,8 +353,8 @@ Assessment after the native-surface candidate run:
 | Proposition | Assessment |
 | --- | --- |
 | A. PROP traps and FIFO scheduler failure are related | **PLAUSIBLE in the earlier captures, but not required for the timeout.** The native-surface candidate run had a timeout without PROP traps, so the scheduler failure can occur independently of the observed invalid-clear PROP pattern. |
-| B. Timeout is a video-engine teardown/context-switch issue | **STRONGLY SUPPORTED as a VP teardown association, with channel 4 mapped to VP.** Runlist 2/channel 5 recovery began 4.295 s into that synchronous VP channel-free call, which lasted 15.002 s. Source and timestamp brackets map the subsequent `failed to idle channel 4` to the VP channel being freed. Channel 5 is not yet mapped, and neither temporal overlap nor the channel-4 mapping proves that VP deletion caused the separate channel-5 context-switch timeout. |
-| C. BAR2 fault is downstream of channel recovery | **PLAUSIBLE from earlier captures only; causal status UNKNOWN.** The system-Mesa BAR2/PTE fault followed channel recovery and channel-4 idle failure, but the candidate run had no BAR2/PTE record. The timestamps do not prove that recovery caused the fault or that it was secondary. |
+| B. Timeout is a video-engine teardown/context-switch issue | **STRONGLY SUPPORTED as a VP-idle / PPP-recovery temporal association.** The later function-graph capture maps channel 4 to VP and channel 5 to PPP. It measures 15.000303 s in `nouveau_fence_wait()` during the VP channel free; PPP channel recovery begins about 4.301 s into that wait. This proves overlap and channel identity, not that either teardown caused the other's failure. The engine that raised the timeout is not logged yet. |
+| C. BAR2 fault is downstream of channel recovery | **UNKNOWN.** In the function-graph capture, BAR2/PTE follows the VP idle failure by 17.011 ms, but another uncontrolled boot-journal BAR2 record predates the capture and later BAR2 activity has no proven relationship to this timeout. Ordering makes a downstream effect plausible for this occurrence; primary-versus-secondary status and causation remain unresolved. |
 | D. Patch 2/nonstall event-index fix is involved | **UNSUPPORTED as a direct cause.** The nonstall event registration/notification path is distinct from `SCHED_ERROR` `CTXSW_TIMEOUT` recovery. A fence-notification mismatch could indirectly affect wait/teardown timing, so patch 2 could improve that separate issue while this scheduler failure remains. No removal or modification is justified from these captures. |
 
 The older private run also had a BAR2 PTE fault 17.272 ms after its second
@@ -362,20 +362,22 @@ channel kill; the new system-Mesa fault is after recovery as well but has a
 different address and follows a different number of timeouts. Both look
 temporally secondary, while causality remains unproven.
 
-### Prepared teardown trace
+### Completed teardown trace and remaining diagnostic
 
-The next diagnostic uses the existing function-graph tracer in the installed
-kernel plus opt-in Mesa channel identity records. This can map channel 5 to
-BSP/VP/PPP and show whether the 15-second channel-free interval is spent in
-`drm_sched_entity_fini()` or `nouveau_channel_idle()` without rebuilding the
-kernel module. The exact source call chain, 15-second fence deadline, patch-2
-assessment, and one-run procedure are in
-[`VP-CHANNEL-TEARDOWN-TRACE.md`](VP-CHANNEL-TEARDOWN-TRACE.md). No kernel
-diagnostic patch has been created. If runtime ftrace cannot trace the
-channel-free entry point, the fallback is a standalone opt-in, log-only patch
-at `gf100_fifo_intr_sched_ctxsw()` and the FIFO recovery callback. It would log
-existing runlist, engine, channel, and context IDs only; it would not change
-MMIO, timeouts, or recovery.
+The function-graph plus Mesa channel-identity capture is complete. It maps
+BSP/VP/PPP to chids 3/4/5 and shows the VP channel-free interval is almost
+entirely `nouveau_fence_wait()` inside `nouveau_channel_idle()`. During that
+wait, the FIFO recovery targets PPP chid 5. This still does not identify the
+engine mask that raised `CTXSW_TIMEOUT` or whether the VP fence's semaphore
+reached its target sequence. The source call chain and hash-verified timeline
+are in [`VP-CHANNEL-TEARDOWN-TRACE.md`](VP-CHANNEL-TEARDOWN-TRACE.md).
+
+A standalone, default-off kernel diagnostic patch now records idle-fence
+emission/progress and the selected context-switch engine mask/contexts. It is
+outside the DKMS series and is not part of the installed module. Its exact
+Ubuntu-source build and validation status is recorded in the VP teardown
+document below; do not enable it on the existing module because the module
+does not contain those parameters.
 
 The capture harness was not changed. For condition A it recorded the exact
 system plugin path, successful `va_openDriver()`, FFmpeg exit code/status,
@@ -452,8 +454,10 @@ The proposed upstream double-`drm_sched_entity_fini()` correction is not a
 strong candidate for this legacy VP3 path: exact Mesa source uses the legacy
 channel-allocation ioctl, while Linux v7.0 creates `chan->sched` only for the
 UVMM/VM_BIND path. The full source and call-path assessment is recorded in
-[`VP-CHANNEL-TEARDOWN-TRACE.md`](VP-CHANNEL-TEARDOWN-TRACE.md). No DKMS or
-kernel change was made.
+[`VP-CHANNEL-TEARDOWN-TRACE.md`](VP-CHANNEL-TEARDOWN-TRACE.md). That
+function-graph follow-up did not modify or install a DKMS package or running
+kernel; the later standalone diagnostic remains an uninstalled review-tree
+patch.
 
 ## Later uninstrumented activity in the same boot
 

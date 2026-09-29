@@ -34,9 +34,10 @@ free returns. FFmpeg starts at monotonic `8381.104569726`, exits at
 `8437.240749893` with status 0, and the journal logger stops at
 `8452.428219108`, 15.187 seconds after process exit. The capture-file hashes
 in `SHA256SUMS` verify, and Mesa, journal, and harness monotonic values align
-in this capture. This timing alone would only be correlation; the source call
-chain below makes channel 4's identity stronger. Channel 5 remains a different
-question.
+in this capture. The later Mesa channel-handle records map channel 4 to VP and
+channel 5 to PPP. The source call chain below ties the channel-4 idle error to
+the VP free operation; channel 5 is the separate recovery target, while the
+engine that raised the timeout remains unknown.
 
 ## Source-proven call chain
 
@@ -91,13 +92,12 @@ continues after `nouveau_channel_idle()` returns an error, which is consistent
 with FFmpeg still exiting successfully.
 
 The whole Mesa VP channel-free interval is `15.001695 s`; the error appears at
-`15.000427 s`. This is a very close match to the kernel's explicit 15-second
-fence deadline, making the idle-fence wait a strong candidate for the long
-interval. However, `drm_sched_entity_fini()` has a distinct completion wait
-before the idle-fence call. This capture did not time those stages separately,
-so it does not prove how much time was spent in either one. The prepared
-function-graph trace should show the duration of `drm_sched_entity_fini()` and
-the following `nouveau_channel_idle()` path separately.
+`15.000427 s`. This closely matches the kernel's explicit 15-second fence
+deadline. The later function-graph capture measured the individual stages:
+`nouveau_fence_wait()` occupied `15.000303 s`, `nouveau_channel_idle()`
+occupied `15.000630 s`, and the full ABI16 channel-free ioctl occupied
+`15.003396 s`. Only about 2.8 ms of the ioctl was outside the idle call, so
+the scheduler-entity completion wait does not explain the measured stall.
 
 `CTXSW_TIMEOUT` is handled separately by the FIFO scheduler interrupt path
 (`gf100_fifo_intr_sched()` -> `gf100_fifo_intr_sched_ctxsw()` -> the FIFO's
@@ -121,12 +121,12 @@ engine that initiated `CTXSW_TIMEOUT` if multiple engine contexts share that
 channel context. See the upstream v7.0 [GK104 FIFO interrupt handler](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c#L651-L690)
 and [GF100 FIFO timeout/recovery path](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c#L618-L691).
 
-The prepared function-graph trace measures how long the timeout handler and
-channel-free path run; it does not capture the engine mask's contents. If
-mapping chid 5 to a Mesa slot still leaves the initiating engine ambiguous,
-the next diagnostic should be a narrowly scoped, log-only record at the
-`engm` collection point containing runlist ID and each engine's ID/type and
-context ID before recovery. It must not change recovery behavior.
+The function-graph trace measures the timeout-handler and channel-free paths,
+but does not capture the engine mask's contents. The later Mesa identity trace
+maps chid 5 to PPP, so the recovery target is known; the engine that raised the
+timeout remains unknown. The next diagnostic is a narrowly scoped, log-only
+record of the computed `engm` mask and each selected engine's ID/type and
+active context before recovery. It must not change recovery behavior.
 
 ## Channel 5 and patch 2
 
@@ -134,7 +134,8 @@ In the first userspace-only capture, the Mesa binary predated the channel
 identity print, so the channel-5 kill could not be assigned to BSP, VP, or PPP
 from that capture. The later function-graph capture includes the identity
 records and supersedes that limitation: it maps channel 5 to PPP and channel 4
-to VP, as detailed below.
+to VP, as detailed below. This maps the recovery target, not the engine bit
+that first raised `CTXSW_TIMEOUT`.
 
 The new Mesa-only patch
 [`nouveau-vp3-channel-id-diagnostic.patch`](../patches/mesa/nouveau-vp3-channel-id-diagnostic.patch)
@@ -305,79 +306,118 @@ double-fini fix is a valid upstream correction but is strongly unsupported as
 the cause of this particular legacy Mesa VP3 timeout. The cause of the PPP
 context-switch timeout and the unsignaled VP fence remains unresolved.
 
-## Existing tracing and prepared capture
+## Function-graph result and next diagnostic
 
-Kernel `7.0.0-34-generic` has `CONFIG_FTRACE`,
-`CONFIG_FUNCTION_GRAPH_TRACER`, and `CONFIG_DYNAMIC_FTRACE` enabled. Its loaded
-Nouveau symbols include `nouveau_abi16_ioctl_channel_free` and
-`nouveau_channel_idle`. Tracefs at `/sys/kernel/tracing` is root-only, so this
-unprivileged inspection did not read `available_filter_functions` or change
-tracefs state. The helper performs that availability check with privilege at
-run time and refuses to start if an existing trace/tracer/filter is active.
+The function-graph capture above completed the channel mapping and localized
+the 15-second interval to `nouveau_fence_wait()` inside
+`nouveau_channel_idle()`. The existing capture helper remains available for
+later use, but another function-graph-only run would not answer the remaining
+questions.
 
-[`tools/vaapi-channel-free-ftrace.sh`](../tools/vaapi-channel-free-ftrace.sh)
-uses the existing function-graph tracer; no kernel module rebuild or
-diagnostic kernel patch is needed when the runtime filter check succeeds. It
-traces the synchronous Nouveau channel-free ioctl and, when traceable, the
-CTXSW handler. It excludes the frequently polled `nouveau_fence_done()` leaf
-from graph records to keep the trace bounded while retaining the enclosing
-fence-wait duration. It selects the `mono` trace clock when available, runs
-the existing VAAPI capture as the invoking desktop user, attaches
-`function-graph.log` and its metadata to that capture, updates `SHA256SUMS`,
-and restores tracefs settings. Before FFmpeg, it verifies the private plugin's
-symlink and SHA-256 (`defee11f...b56268f`); afterward it records whether the BSP,
-VP, and PPP identity lines all appeared. It aborts rather than replacing a
-running tracer or clearing a non-empty trace buffer. Use `pkexec` for the same
-helper if `sudo` is unavailable in the current privilege context.
-
-The Mesa channel-ID diagnostic was built into a new private prefix only:
+The capture used a private Mesa build at:
 
 ```text
 /home/keivan/.cache/nouveau-vaapi-followup-20260928/private-instrumented-native-surface-fix-channel-id-trace/prefix/lib/x86_64-linux-gnu/dri
 ```
 
-Its `libgallium_drv_video.so` SHA-256 is
-`defee11fcedabc2b81730bfcc0d8d425133cccc76751e5c17652a9420b56268f`; the
-pre-instrumented native-surface candidate remains unchanged at its original
-prefix. The new build contains the existing native-surface fix plus
-opt-in-only identity prints. It has passed a private compile, marker check,
-`ldd` check, and source regression check; it has **not** been run on the GPU.
+Its `libgallium_drv_video.so` SHA-256 was
+`defee11fcedabc2b81730bfcc0d8d425133cccc76751e5c17652a9420b56268f`. It
+contained the native-surface fix and the opt-in channel identity trace. The
+hash-verified capture mapped BSP/VP/PPP to chids 3/4/5 and showed the VP idle
+fence timing above.
 
-Do not run another same-boot GPU test after the prior harness set
-`STOP_A_B=1`. After rebooting into the existing kernel and DKMS module, verify
-that baseline and run exactly one capture:
+### Standalone kernel diagnostic patch
 
-```bash
-sudo reboot
+[`patches/diagnostic/gk104-vp-idle-fence-ctxsw-trace.patch`](../patches/diagnostic/gk104-vp-idle-fence-ctxsw-trace.patch)
+is a separate, opt-in Linux v7.0 diagnostic. It is not listed in the DKMS
+patch series and does not change fence packets, timeouts, scheduler state, or
+recovery behavior.
+
+The patch adds two root-writable module parameters, both defaulting to off:
+
+- `diag_fence_wait=1` marks only fences created by `nouveau_channel_idle()`.
+  For those fences it records the sequence, GPU virtual semaphore address,
+  memory value immediately before emit, `emit32` return value, and kernel
+  push-buffer PUT/current/free cursors. While the idle wait is pending, it
+  samples the semaphore value once per second and records the final value and
+  result at return. The common Nouveau channel wrapper does not expose a
+  trustworthy live GPFIFO GET value here, so the diagnostic deliberately does
+  not read an undocumented USERD offset.
+- `diag_ctxsw=1` records the computed `engm` mask, then logs each selected
+  engine's runlist, engine ID/name/type/instance, active context ID and whether
+  that ID is a channel or channel group. It also records each matching engine
+  context immediately before the existing MMU-fault recovery trigger. These
+  messages are limited to the rare context-switch timeout path.
+
+#### Exact Ubuntu-source build and artifact validation
+
+The standalone patch was built against the installed Ubuntu source package
+`linux-source-7.0.0` version `7.0.0-34.34`, using
+`/lib/modules/7.0.0-34-generic/build`. The source archive SHA-256 is
+`a874e1fb08d2ee695b08e0c8ce6fd2c76a4bf7ffa98882fbabd233380ef8a85a`. The
+diagnostic patch passed `patch --dry-run --fuzz=0 --forward --batch -p1`
+against all five exact Ubuntu source files it changes. The isolated DKMS-style
+build completed with `build_script_exit=0`; Kbuild linked `nouveau.ko` and
+`MODPOST` completed without unresolved-symbol errors.
+
+The built artifact is preserved at:
+
+```text
+/home/keivan/.cache/nouveau-vp-idle-fence-diag-build-20260929/artifacts/nouveau-diag-final.ko
 ```
 
-After reconnecting, verify `uname -r`, `modinfo -n nouveau`, and matching
-`/sys/module/nouveau/srcversion` / `modinfo -F srcversion` as before. Then run:
+Its SHA-256 is
+`8d36b99b595f650a2f8b622879358b32d110bb158f1d0069ec9bd7095bcbc9e6`,
+`modinfo -F vermagic` reports `7.0.0-34-generic SMP preempt mod_unload
+modversions`, and its Nouveau source version is
+`B19B8AAE48467545E652509`. `modinfo -p` exposes both
+`diag_fence_wait` and `diag_ctxsw`. The linked module contains every expected
+`NOUVEAU_DIAG_IDLE_FENCE` and `NOUVEAU_DIAG_CTXSW` marker, including the
+once-per-second `wait-progress` record. Disassembly confirms the fence
+parameter branch is present in `nouveau_fence_wait()` and `nv84_fence_emit()`,
+and the context-switch parameter branch is present in
+`gf100_fifo_intr_ctxsw_timeout()`.
 
-```bash
-cd ~/nouveau-hpd-ddc-dkms
-pkexec "$PWD/tools/vaapi-channel-free-ftrace.sh" \
-  /home/keivan/.cache/nouveau-vaapi-followup-20260928/private-instrumented-native-surface-fix-channel-id-trace/prefix/lib/x86_64-linux-gnu/dri
-```
+The successful build log is preserved at
+`/home/keivan/.cache/nouveau-vp-idle-fence-diag-build-20260929/artifacts/build-final.log`
+with SHA-256
+`2e38d54489f3494804528c54808eae00a9cb865d2f15822cd8cb4fbccbe382fc`.
+`SHA256SUMS-final` in the same artifact directory records the module, log,
+patch, and Ubuntu source-archive hashes. The successful log shows the existing
+HPD/DDC patch, GK104 non-privileged video-context patch, and legacy nonstall
+patch were included. The existing HPD hunk applied with fuzz 1 due to its
+pre-existing build-script behavior; the new diagnostic itself was applied
+strictly with zero fuzz.
 
-Use `pkexec` in this environment; the user's shell has previously run with
-`NoNewPrivs`, which prevents `sudo` from starting the helper.
+The toolchain emitted two non-fatal environment warnings: the `gcc` and
+`x86_64-linux-gnu-gcc` names refer to the same Ubuntu GCC 15.2.0 version, and
+the installed `pahole` is version 0 while the kernel build used version 131.
+Kbuild therefore skipped BTF generation because the matching `vmlinux` is not
+available. Compilation, `MODPOST`, and module linking all succeeded.
 
-Use only the existing `7.0.0-34-generic` plus installed DKMS `0.1.13`
-baseline. Do not install this Mesa prefix system-wide, rebuild/reinstall
-DKMS, or perform another same-boot comparison if the capture reports
-`STOP_A_B=1`.
+This is a private review artifact only. It was not registered with DKMS,
+installed, loaded, or hardware-tested. The running 0.1.13 module remains
+unchanged and does not contain these parameters. Do not install this artifact
+as a replacement for 0.1.13; any later deployment needs a separately versioned
+diagnostic package and its own review. No scheduler backport, Mesa teardown
+reorder, or functional kernel change is included.
 
-## Confidence
+If later approved for a controlled capture, enable the two parameters only on
+the separately installed diagnostic module through
+`/sys/module/nouveau/parameters/diag_fence_wait` and
+`/sys/module/nouveau/parameters/diag_ctxsw`, then reset both to `0`. The next
+hardware test should reuse the private native-surface Mesa candidate and keep
+the existing functional kernel behavior.
 
-- **PROVEN from source and synchronous trace brackets:** channel 4's failed
-  idle is emitted while freeing Mesa's VP channel in this capture.
-- **STRONGLY SUPPORTED by source and timing:** the 15.001695-second VP
-  channel-free interval is dominated by the explicit 15-second Nouveau idle
-  fence wait.
-- **UNRESOLVED:** which decoder channel is chid 5, which engine's context
-  switch timed out, and whether the timeout causes the idle fence not to
-  complete.
-- **UNSUPPORTED as a direct cause:** patch 2/nonstall event indexing causing
-  this non-lazy 15-second busy-poll timeout.
-- **No functional kernel fix or kernel diagnostic patch was created.**
+## Current confidence
+
+- **PROVEN:** Mesa channel identity is BSP chid 3, VP chid 4, PPP chid 5.
+- **PROVEN:** the 15-second VP teardown stall is the Nouveau idle-fence wait.
+- **PROVEN:** the timeout recovery targeted PPP chid 5 while VP chid 4 was
+  waiting; this temporal overlap does not establish causation.
+- **UNKNOWN:** which engine bit or bits formed `engm`, whether the VP semaphore
+  release executed, and why the VP fence did not signal before its deadline.
+- **UNRESOLVED:** whether the BAR2/PTE fault is primary or secondary.
+- **UNSUPPORTED as a direct explanation:** patch 2's nonstall event index for
+  this non-lazy busy-poll fence wait.
+- **No functional Mesa teardown reorder or kernel recovery change was made.**
