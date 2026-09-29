@@ -252,13 +252,31 @@ kill "$logger_pid" 2>/dev/null || true
 wait "$logger_pid" 2>/dev/null || true
 logger_pid=
 
+trace_invalid=0
+if [[ $mode == private-instrumented ]]; then
+    trace_hook_active=0
+    trace_allocate_entry=0
+    if grep -Fq 'NOUVEAU_DIAG_VA_SURFACE hook=active' "$ffmpeg_log"; then
+        trace_hook_active=1
+    fi
+    if grep -Fq 'NOUVEAU_DIAG_VA_SURFACE phase=allocate-entry' "$ffmpeg_log"; then
+        trace_allocate_entry=1
+    fi
+    printf 'instrumented_hook_active=%s\n' "$trace_hook_active"
+    printf 'instrumented_allocate_entry=%s\n' "$trace_allocate_entry"
+    if [[ $trace_hook_active -ne 1 || $trace_allocate_entry -ne 1 ]]; then
+        echo 'capture invalid: instrumented Mesa trace was not positively exercised' >&2
+        trace_invalid=1
+    fi
+fi
+
 if [[ -s $journal_error ]]; then
     printf 'journal_stderr='
     cat "$journal_error"
 fi
 printf 'kernel_log_bytes=%s\n' "$(wc -c < "$kernel_log")"
-if grep -Eiq 'CTXSW_TIMEOUT|errored - disabling channel|channel [0-9]+ killed|fault .*\[BAR2\].*\[PTE\]|PRIV_VIOLATION|SIGBUS|GPU reset' "$kernel_log" "$ffmpeg_log"; then
-    echo 'STOP_A_B=1 critical Nouveau/VAAPI failure signature captured; do not run another condition without a fresh boot'
+if [[ $runner_status -ne 0 ]] || grep -Eiq 'CTXSW_TIMEOUT|errored - disabling channel|channel [0-9]+ killed|fault .*\[BAR2\].*\[PTE\]|PRIV_VIOLATION|SIGBUS|GPU reset' "$kernel_log" "$ffmpeg_log"; then
+    echo 'STOP_A_B=1 nonzero FFmpeg exit or critical Nouveau/VAAPI failure signature; do not run another condition without a fresh boot'
 else
     echo 'STOP_A_B=0 no stop-signature matched in this capture'
 fi
@@ -271,6 +289,10 @@ fi
 sha256sum "$kernel_log" "$ffmpeg_log" "$transcript" > "$run_dir/SHA256SUMS"
 cat "$run_dir/SHA256SUMS"
 printf 'capture_directory=%s\n' "$run_dir"
+
+if [[ $trace_invalid -ne 0 ]]; then
+    exit 4
+fi
 
 if [[ $driver_path_ok -ne 1 || $driver_open_ok -ne 1 ]]; then
     echo 'capture invalid: libva did not prove the expected driver selection' >&2
