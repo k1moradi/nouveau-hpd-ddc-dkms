@@ -256,10 +256,10 @@ trace_invalid=0
 if [[ $mode == private-instrumented ]]; then
     trace_hook_active=0
     trace_allocate_entry=0
-    if grep -Fq 'NOUVEAU_DIAG_VA_SURFACE hook=active' "$ffmpeg_log"; then
+    if grep -Eq 'NOUVEAU_DIAG_VA_SURFACE mono_ns=[0-9]+ hook=active' "$ffmpeg_log"; then
         trace_hook_active=1
     fi
-    if grep -Fq 'NOUVEAU_DIAG_VA_SURFACE phase=allocate-entry' "$ffmpeg_log"; then
+    if grep -Eq 'NOUVEAU_DIAG_VA_SURFACE mono_ns=[0-9]+ phase=allocate-entry' "$ffmpeg_log"; then
         trace_allocate_entry=1
     fi
     printf 'instrumented_hook_active=%s\n' "$trace_hook_active"

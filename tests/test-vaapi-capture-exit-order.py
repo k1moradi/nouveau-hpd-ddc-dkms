@@ -9,8 +9,8 @@ import tempfile
 
 REPO = Path(__file__).resolve().parents[1]
 REAL_HARNESS = REPO / "tools/vaapi-capture.sh"
-TRACE_HOOK = "NOUVEAU_DIAG_VA_SURFACE hook=active point=nvc0_init_surface_functions"
-TRACE_ALLOCATE = "NOUVEAU_DIAG_VA_SURFACE phase=allocate-entry"
+TRACE_HOOK = "NOUVEAU_DIAG_VA_SURFACE mono_ns=123456 hook=active point=nvc0_init_surface_functions"
+TRACE_ALLOCATE = "NOUVEAU_DIAG_VA_SURFACE mono_ns=123457 phase=allocate-entry"
 
 
 def write_executable(path: Path, content: str) -> None:

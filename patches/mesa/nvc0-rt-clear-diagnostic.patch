@@ -1,69 +1,273 @@
 From: Nouveau debugging notes
-Subject: [DIAGNOSTIC] gallium/nouveau: trace VA surface allocation and clears
+Subject: [DIAGNOSTIC] gallium/nouveau: timestamp VA surface and teardown tracing
 
-Opt-in tracing for the VA allocation decision and the NVC0 render-target
-clear callback. Uses stderr directly because Mesa's debug_printf() is compiled
-out when MESA_DEBUG=0 in release builds. No GPU state or behavior is changed.
+Opt-in tracing for VA surface allocation/clears, slow surface-fence waits, and
+VP3 decoder/channel teardown. All records use Mesa's monotonic clock and go to
+stderr. The instrumentation does not issue GPU commands or alter wait behavior.
 
 Enable with: NOUVEAU_DIAG_VA_SURFACE=1
 
 ---
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+@@ -25,0 +26,2 @@
++#include <stdarg.h>
++#include <stdint.h>
+@@ -35,0 +38,2 @@
++#include "util/u_debug.h"
++#include "util/os_time.h"
+@@ -40,0 +45,15 @@
++nouveau_vp3_diag(const char *format, ...)
++{
++   va_list ap;
++
++   if (!debug_get_bool_option("NOUVEAU_DIAG_VA_SURFACE", false))
++      return;
++
++   fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu ",
++           (unsigned long long)os_time_get_nano());
++   va_start(ap, format);
++   vfprintf(stderr, format, ap);
++   va_end(ap);
++}
++
++static void
+@@ -78,0 +98 @@
++   uintptr_t buffer_id = (uintptr_t)buf;
+@@ -81,0 +102,5 @@
++
++   nouveau_vp3_diag("phase=video-buffer-destroy stage=entry buffer_ptr=%p "
++                    "format=%u size=%ux%u interlaced=%u planes=%u\n",
++                    buf, buffer->buffer_format, buffer->width,
++                    buffer->height, buffer->interlaced, buf->num_planes);
+@@ -88,0 +114,2 @@
++   nouveau_vp3_diag("phase=video-buffer-destroy stage=exit buffer_ptr=0x%llx\n",
++                    (unsigned long long)buffer_id);
+@@ -207,0 +235,5 @@
++   static const char *const engine_name[] = { "bsp", "vp", "ppp" };
++   struct nouveau_object *object, *channel;
++   uintptr_t object_id, channel_id, pushbuf_id;
++   uintptr_t decoder_id = (uintptr_t)decoder;
++   bool shared_channel = dec->channel[0] == dec->channel[1];
+@@ -208,0 +241,10 @@
++
++   nouveau_vp3_diag("phase=decoder-destroy stage=entry decoder=%p profile=%u "
++                    "entrypoint=%u size=%ux%u fence_seq=%u "
++                    "channels=%p,%p,%p pushbufs=%p,%p,%p shared=%u\n",
++                    (void *)decoder, dec->base.profile, dec->base.entrypoint,
++                    dec->base.width, dec->base.height, dec->fence_seq,
++                    (void *)dec->channel[0], (void *)dec->channel[1],
++                    (void *)dec->channel[2], (void *)dec->pushbuf[0],
++                    (void *)dec->pushbuf[1], (void *)dec->pushbuf[2],
++                    shared_channel);
+@@ -221,0 +264,6 @@
++   object = dec->bsp;
++   channel = dec->channel[0];
++   object_id = (uintptr_t)object;
++   channel_id = (uintptr_t)channel;
++   nouveau_vp3_diag("phase=object-destroy stage=begin engine=bsp object_ptr=0x%llx channel_ptr=0x%llx\n",
++                    (unsigned long long)object_id, (unsigned long long)channel_id);
+@@ -222,0 +271,8 @@
++   nouveau_vp3_diag("phase=object-destroy stage=end engine=bsp object_ptr=0x%llx channel_ptr=0x%llx\n",
++                    (unsigned long long)object_id, (unsigned long long)channel_id);
++   object = dec->vp;
++   channel = dec->channel[1];
++   object_id = (uintptr_t)object;
++   channel_id = (uintptr_t)channel;
++   nouveau_vp3_diag("phase=object-destroy stage=begin engine=vp object_ptr=0x%llx channel_ptr=0x%llx\n",
++                    (unsigned long long)object_id, (unsigned long long)channel_id);
+@@ -223,0 +280,8 @@
++   nouveau_vp3_diag("phase=object-destroy stage=end engine=vp object_ptr=0x%llx channel_ptr=0x%llx\n",
++                    (unsigned long long)object_id, (unsigned long long)channel_id);
++   object = dec->ppp;
++   channel = dec->channel[2];
++   object_id = (uintptr_t)object;
++   channel_id = (uintptr_t)channel;
++   nouveau_vp3_diag("phase=object-destroy stage=begin engine=ppp object_ptr=0x%llx channel_ptr=0x%llx\n",
++                    (unsigned long long)object_id, (unsigned long long)channel_id);
+@@ -224,0 +289,2 @@
++   nouveau_vp3_diag("phase=object-destroy stage=end engine=ppp object_ptr=0x%llx channel_ptr=0x%llx\n",
++                    (unsigned long long)object_id, (unsigned long long)channel_id);
+@@ -227,0 +294,8 @@
++         struct nouveau_pushbuf *pushbuf = dec->pushbuf[i];
++         channel = dec->channel[i];
++         channel_id = (uintptr_t)channel;
++         pushbuf_id = (uintptr_t)pushbuf;
++         nouveau_vp3_diag("phase=channel-destroy stage=pushbuf-begin index=%d "
++                          "engine=%s channel_ptr=0x%llx pushbuf_ptr=0x%llx\n",
++                          i, engine_name[i], (unsigned long long)channel_id,
++                          (unsigned long long)pushbuf_id);
+@@ -228,0 +303,7 @@
++         nouveau_vp3_diag("phase=channel-destroy stage=pushbuf-end index=%d "
++                          "engine=%s channel_ptr=0x%llx pushbuf_ptr=0x%llx\n",
++                          i, engine_name[i], (unsigned long long)channel_id,
++                          (unsigned long long)pushbuf_id);
++         nouveau_vp3_diag("phase=channel-destroy stage=object-begin index=%d "
++                          "engine=%s channel_ptr=0x%llx\n",
++                          i, engine_name[i], (unsigned long long)channel_id);
+@@ -229,0 +311,3 @@
++         nouveau_vp3_diag("phase=channel-destroy stage=object-end index=%d "
++                          "engine=%s channel_ptr=0x%llx\n",
++                          i, engine_name[i], (unsigned long long)channel_id);
+@@ -231,0 +316,8 @@
++      struct nouveau_pushbuf *pushbuf = dec->pushbuf[0];
++      channel = dec->channel[0];
++      channel_id = (uintptr_t)channel;
++      pushbuf_id = (uintptr_t)pushbuf;
++      nouveau_vp3_diag("phase=channel-destroy stage=pushbuf-begin index=shared "
++                       "engine=shared channel_ptr=0x%llx pushbuf_ptr=0x%llx\n",
++                       (unsigned long long)channel_id,
++                       (unsigned long long)pushbuf_id);
+@@ -232,0 +325,7 @@
++      nouveau_vp3_diag("phase=channel-destroy stage=pushbuf-end index=shared "
++                       "engine=shared channel_ptr=0x%llx pushbuf_ptr=0x%llx\n",
++                       (unsigned long long)channel_id,
++                       (unsigned long long)pushbuf_id);
++      nouveau_vp3_diag("phase=channel-destroy stage=object-begin index=shared "
++                       "engine=shared channel_ptr=0x%llx\n",
++                       (unsigned long long)channel_id);
+@@ -233,0 +333,3 @@
++      nouveau_vp3_diag("phase=channel-destroy stage=object-end index=shared "
++                       "engine=shared channel_ptr=0x%llx\n",
++                       (unsigned long long)channel_id);
+@@ -236,0 +339,2 @@
++   nouveau_vp3_diag("phase=decoder-destroy stage=exit decoder_ptr=0x%llx\n",
++                    (unsigned long long)decoder_id);
 --- a/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c
 +++ b/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c
 @@ -30,0 +31,2 @@
 +#include <stdio.h>
 +
-@@ -34,0 +37 @@
+@@ -34,0 +37,2 @@
 +#include "util/u_debug.h"
-@@ -302,0 +306,10 @@
++#include "util/os_time.h"
+@@ -302,0 +307,10 @@
 +
 +   if (debug_get_bool_option("NOUVEAU_DIAG_RT_CLEAR", false) ||
 +       debug_get_bool_option("NOUVEAU_DIAG_VA_SURFACE", false)) {
-+      fprintf(stderr, "NOUVEAU_DIAG_RT_CLEAR ctx=%p format=%u rt_format=%02x "
++      fprintf(stderr, "NOUVEAU_DIAG_RT_CLEAR mono_ns=%llu ctx=%p format=%u rt_format=%02x "
 +                   "rt=%ux%u clear=%u,%u %ux%u layers=%u..%u\n",
-+                   (void *)nvc0, dst->format,
++                   (unsigned long long)os_time_get_nano(), (void *)nvc0, dst->format,
 +                   nvc0_format_table[dst->format].rt,
 +                   sf->width, sf->height, dstx, dsty, width, height,
 +                   dst->first_layer, dst->last_layer);
 +   }
-@@ -1822,0 +1836,5 @@
+@@ -1822,0 +1837,6 @@
 +   if (debug_get_bool_option("NOUVEAU_DIAG_VA_SURFACE", false))
-+      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE hook=active "
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu hook=active "
 +                   "point=nvc0_init_surface_functions pipe=%p "
 +                   "clear_callback=%p\n",
++                   (unsigned long long)os_time_get_nano(),
 +                   (void *)pipe, (void *)pipe->clear_render_target);
+--- a/src/gallium/frontends/va/context.c
++++ b/src/gallium/frontends/va/context.c
+@@ -33,0 +34,2 @@
++#include "util/u_debug.h"
++#include "util/os_time.h"
+@@ -43,0 +46,2 @@
++#include <stdio.h>
++#include <stdint.h>
+@@ -455,0 +460 @@
++   bool diag = debug_get_bool_option("NOUVEAU_DIAG_VA_SURFACE", false);
+@@ -471,0 +477,10 @@
++
++   if (diag)
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu "
++                   "phase=va-context-destroy stage=entry id=%u context=%p "
++                   "decoder=%p profile=%u entrypoint=%u size=%ux%u\n",
++                   (unsigned long long)os_time_get_nano(), context_id,
++                   (void *)context, (void *)context->decoder,
++                   context->desc.base.profile,
++                   context->templat.entrypoint,
++                   context->templat.width, context->templat.height);
+@@ -545 +560,9 @@
+-   if (context->decoder)
++   if (context->decoder) {
++      struct pipe_video_codec *decoder = context->decoder;
++      uintptr_t decoder_id = (uintptr_t)decoder;
++      if (diag)
++         fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu "
++                      "phase=va-context-destroy stage=decoder-before "
++                      "id=%u context=%p decoder=%p\n",
++                      (unsigned long long)os_time_get_nano(), context_id,
++                      (void *)context, (void *)decoder);
+@@ -546,0 +570,7 @@
++      if (diag)
++         fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu "
++                      "phase=va-context-destroy stage=decoder-after "
++                      "id=%u context=%p decoder_ptr=0x%llx\n",
++                      (unsigned long long)os_time_get_nano(), context_id,
++                      (void *)context, (unsigned long long)decoder_id);
++   }
+@@ -555,0 +586,5 @@
++   if (diag)
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu "
++                   "phase=va-context-destroy stage=exit id=%u context=%p\n",
++                   (unsigned long long)os_time_get_nano(), context_id,
++                   (void *)context);
 --- a/src/gallium/frontends/va/surface.c
 +++ b/src/gallium/frontends/va/surface.c
 @@ -31,0 +32,2 @@
 +#include <stdio.h>
 +
-@@ -36,0 +39,2 @@
+@@ -36,0 +39,3 @@
 +#include "util/u_debug.h"
++#include "util/os_time.h"
 +#include "util/format/u_format.h"
-@@ -950,0 +955,13 @@
+@@ -149,0 +155 @@
++   bool diag = debug_get_bool_option("NOUVEAU_DIAG_VA_SURFACE", false);
+@@ -175 +181,13 @@
+-      if (!pscreen->fence_finish(pscreen, NULL, surf->pipe_fence, timeout_ns)) {
++      uint64_t wait_start_ns = diag ? os_time_get_nano() : 0;
++      bool ready = pscreen->fence_finish(pscreen, NULL, surf->pipe_fence, timeout_ns);
++      uint64_t wait_end_ns = diag ? os_time_get_nano() : 0;
++
++      if (diag && (!ready || wait_end_ns - wait_start_ns >= 100000000))
++         fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu phase=sync-wait "
++                      "kind=pipe-fence surface=%u fence=%p ready=%u "
++                      "duration_ns=%llu timeout_ns=%llu\n",
++                      (unsigned long long)wait_end_ns, render_target,
++                      (void *)surf->pipe_fence, ready,
++                      (unsigned long long)(wait_end_ns - wait_start_ns),
++                      (unsigned long long)timeout_ns);
++      if (!ready) {
+@@ -194,0 +213 @@
++   uint64_t wait_start_ns = diag ? os_time_get_nano() : 0;
+@@ -195,0 +215,9 @@
++   uint64_t wait_end_ns = diag ? os_time_get_nano() : 0;
++   if (diag && (!ret || wait_end_ns - wait_start_ns >= 100000000))
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu phase=sync-wait "
++                   "kind=decoder-fence surface=%u context=%p decoder=%p "
++                   "fence=%p result=%d duration_ns=%llu timeout_ns=%llu\n",
++                   (unsigned long long)wait_end_ns, render_target,
++                   (void *)context, (void *)context->decoder, (void *)fence,
++                   ret, (unsigned long long)(wait_end_ns - wait_start_ns),
++                   (unsigned long long)timeout_ns);
+@@ -950,0 +979,14 @@
 +   unsigned planes = 0;
 +   bool diag = debug_get_bool_option("NOUVEAU_DIAG_VA_SURFACE", false);
 +   bool skip_clear;
 +
 +   if (diag)
-+      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=allocate-entry surface=%p "
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu phase=allocate-entry surface=%p "
 +                   "width=%u height=%u format=%s(%u) interlaced=%u "
 +                   "bind=0x%x modifiers=%u clear_callback=%p\n",
-+                   (void *)surface, templat->width, templat->height,
++                   (unsigned long long)os_time_get_nano(), (void *)surface,
++                   templat->width, templat->height,
 +                   util_format_name(templat->buffer_format),
 +                   templat->buffer_format, templat->interlaced,
 +                   templat->bind, modifiers_count,
 +                   (void *)drv->pipe->clear_render_target);
-@@ -965,4 +982,20 @@
+@@ -965,4 +1007,22 @@
 -   if (drv->pipe->screen->get_video_param(drv->pipe->screen,
 -                                          PIPE_VIDEO_PROFILE_UNKNOWN,
 -                                          PIPE_VIDEO_ENTRYPOINT_UNKNOWN,
 -                                          PIPE_VIDEO_CAP_SKIP_CLEAR_SURFACE))
 +   if (diag)
-+      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=video-buffer result=ok "
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu phase=video-buffer result=ok "
 +                   "buffer=%p format=%s(%u) width=%u height=%u "
 +                   "interlaced=%u\n",
-+                   (void *)surface->buffer,
++                   (unsigned long long)os_time_get_nano(), (void *)surface->buffer,
 +                   util_format_name(surface->buffer->buffer_format),
 +                   surface->buffer->buffer_format,
 +                   surface->buffer->width, surface->buffer->height,
@@ -74,38 +278,43 @@ Enable with: NOUVEAU_DIAG_VA_SURFACE=1
 +                                                    PIPE_VIDEO_ENTRYPOINT_UNKNOWN,
 +                                                    PIPE_VIDEO_CAP_SKIP_CLEAR_SURFACE);
 +   if (diag)
-+      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=skip-clear capability=%u value=%u\n",
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu phase=skip-clear capability=%u value=%u\n",
++                   (unsigned long long)os_time_get_nano(),
 +                   PIPE_VIDEO_CAP_SKIP_CLEAR_SURFACE, skip_clear);
 +   if (skip_clear) {
 +      if (diag)
-+         fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=clear-decision action=skip\n");
-@@ -969,0 +1003 @@
++         fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu phase=clear-decision action=skip\n",
++                      (unsigned long long)os_time_get_nano());
+@@ -969,0 +1030 @@
 +   }
-@@ -971,0 +1006,12 @@
+@@ -971,0 +1033,14 @@
 +   for (i = 0; i < VL_MAX_SURFACES; ++i)
 +      planes += surfaces[i].texture != NULL;
 +
 +   if (diag)
-+      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=planes count=%u slots=%u "
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu phase=planes count=%u slots=%u "
 +                   "buffer_interlaced=%u\n",
-+                   planes, VL_MAX_SURFACES, surface->buffer->interlaced);
++                   (unsigned long long)os_time_get_nano(), planes,
++                   VL_MAX_SURFACES, surface->buffer->interlaced);
 +   if (diag)
-+      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=clear-decision "
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu phase=clear-decision "
 +                   "first_texture=%u plane_count=%u\n",
++                   (unsigned long long)os_time_get_nano(),
 +                   surfaces[0].texture != NULL, planes);
 +
-@@ -979,0 +1026,19 @@
+@@ -979,0 +1055,20 @@
 +         if (diag) {
 +            struct pipe_resource *resource = surfaces[i].texture;
 +            unsigned width, height;
 +
 +            pipe_surface_size(&surfaces[i], &width, &height);
-+            fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=plane index=%u "
++            fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu phase=plane index=%u "
 +                         "surface_format=%s(%u) surface_size=%ux%u "
 +                         "level=%u layers=%u..%u resource_format=%s(%u) "
 +                         "target=%u resource_size=%ux%ux%u array_size=%u "
 +                         "resource_bind=0x%x\n",
-+                         i, util_format_name(surfaces[i].format),
++                         (unsigned long long)os_time_get_nano(), i,
++                         util_format_name(surfaces[i].format),
 +                         surfaces[i].format, width, height,
 +                         surfaces[i].level, surfaces[i].first_layer,
 +                         surfaces[i].last_layer,
@@ -114,14 +323,16 @@ Enable with: NOUVEAU_DIAG_VA_SURFACE=1
 +                         resource->depth0, resource->array_size, resource->bind);
 +         }
 +
-@@ -984,0 +1050,5 @@
+@@ -984,0 +1080,6 @@
 +         if (diag)
-+            fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=clear-before plane=%u "
++            fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu phase=clear-before plane=%u "
 +                         "callback=%p rect=0,0 %ux%u\n",
-+                         i, (void *)drv->pipe->clear_render_target,
++                         (unsigned long long)os_time_get_nano(), i,
++                         (void *)drv->pipe->clear_render_target,
 +                         width, height);
-@@ -987,0 +1058,4 @@
+@@ -987,0 +1089,5 @@
 +         if (diag)
-+            fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=clear-after plane=%u "
++            fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu phase=clear-after plane=%u "
 +                         "callback=%p returned=void\n",
++                         (unsigned long long)os_time_get_nano(),
 +                         i, (void *)drv->pipe->clear_render_target);

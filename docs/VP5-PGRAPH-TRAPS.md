@@ -198,7 +198,7 @@ PLUGIN="$DRI/nouveau_drv_video.so"
 RUN_LOG="$WORK/ffmpeg-3000.log"
 
 set -o pipefail
-env LIBVA_DRIVERS_PATH="$DRI" NOUVEAU_DIAG_RT_CLEAR=1 \
+env LIBVA_DRIVERS_PATH="$DRI" NOUVEAU_DIAG_VA_SURFACE=1 \
     /usr/bin/time -f 'wall_seconds=%e' \
     ffmpeg -hide_banner -loglevel verbose \
     -init_hw_device vaapi=va:/dev/dri/renderD128 \
@@ -342,17 +342,113 @@ VA surface initialization clear:
    for a GR/PROP render-target overrun during initial video-surface clears.
 
 This source path makes surface initialization a plausible static candidate
-for the startup burst. The Mesa-instrumented run above emitted no
-`nvc0_clear_render_target()` records, so this path is not correlated with the
-observed traps at runtime and should not be described as the leading cause.
-The kernel log also does not identify the GR method, active render-target
-dimensions, or userspace call site.
+for the startup burst. The earlier private-Mesa capture emitted no
+`nvc0_clear_render_target()` records, but that build compiled its
+`debug_printf()` hook away. That absence is inconclusive and does not correlate
+or rule out the clear path. The kernel log also does not identify the GR
+method, active render-target dimensions, or userspace call site.
 
 The teardown burst remains less explained. Video-buffer destruction releases
 resource references, and decoder destruction releases video-engine objects
 and buffers; the inspected destructors do not issue a corresponding explicit
 3D clear. The burst may be delayed reporting from earlier queued GR work or a
 different teardown operation. The current capture cannot decide that.
+
+## Timestamped VA and decoder-teardown trace
+
+The standalone diagnostic patch now timestamps every
+`NOUVEAU_DIAG_VA_SURFACE` and `NOUVEAU_DIAG_RT_CLEAR` record with Mesa's
+`os_time_get_nano()` monotonic clock. It remains opt-in through
+`NOUVEAU_DIAG_VA_SURFACE=1`, writes only to stderr, and is not part of the
+DKMS patch series. No GPU command, fence result, or destruction order is
+changed.
+
+The trace covers the VA allocation decision and callback path described
+above, then follows the process teardown path:
+
+- `va-context-destroy` marks entry, the decoder destroy call, and exit from
+  `vlVaDestroyContext()` in `src/gallium/frontends/va/context.c`.
+- `decoder-destroy`, `object-destroy`, and `channel-destroy` mark the shared
+  VP3 decoder destructor in `src/gallium/drivers/nouveau/nouveau_vp3_video.c`.
+  Its array indices are logged as BSP, VP, and PPP, matching the channels
+  created in that order by `nvc0_create_decoder()` in `nvc0/nvc0_video.c`.
+  Logs bracket each engine object deletion, pushbuffer destruction, and FIFO
+  channel object deletion.
+- `video-buffer-destroy` brackets release of the video buffer's resource and
+  sampler-view references.
+- `sync-wait` records a Gallium pipe-fence or decoder-fence wait only when it
+  fails or takes at least 100 ms. The record includes its monotonic completion
+  time and duration, avoiding a line for every fast per-frame synchronization.
+
+The VP3 decoder destructor itself contains no explicit fence wait or idle
+operation. `nouveau_pushbuf_destroy()` in `nouveau_screen.c` frees the
+pushbuffer's userspace bookkeeping and references; these new records show
+whether time is spent inside the existing pushbuffer/object destruction calls
+without attributing an implicit GPU wait to them. The trace does not identify
+the kernel channel ID; that still requires kernel-side correlation.
+
+### Rebuild the existing private instrumented prefix
+
+The source and build below are the already prepared user-owned private Mesa
+tree. This updates only that private VA driver and prefix. The source archive
+hash is rechecked, and the full diagnostic patch has been tested with strict
+zero-fuzz application against the matching source files from that exact
+archive. `-j1` keeps peak build memory low.
+
+```bash
+set -euo pipefail
+ARCHIVE=/home/keivan/.cache/nouveau-mesa-26.0.8-1ubuntu0.3/mesa_26.0.8.orig.tar.xz
+WORK=/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-instrumented
+BUILD="$WORK/build"
+PREFIX="$WORK/prefix"
+DRI="$PREFIX/lib/x86_64-linux-gnu/dri"
+PLUGIN="$DRI/nouveau_drv_video.so"
+
+printf '%s  %s\n' \
+    'caf1c0061a68e88dfa74967a7e780c0e85d65b6c4e334cd69095a5dc54ad78bc' \
+    "$ARCHIVE" | sha256sum --check -
+ninja -C "$BUILD" -j1 src/gallium/targets/va/libgallium_drv_video.so
+meson install -C "$BUILD" --no-rebuild
+
+test -L "$PLUGIN"
+test "$(readlink -f "$PLUGIN")" = "$DRI/libgallium_drv_video.so"
+for marker in \
+    'NOUVEAU_DIAG_VA_SURFACE mono_ns=' \
+    'NOUVEAU_DIAG_RT_CLEAR mono_ns=' \
+    'hook=active' \
+    'phase=allocate-entry' \
+    'phase=sync-wait' \
+    'phase=va-context-destroy' \
+    'phase=decoder-destroy' \
+    'phase=video-buffer-destroy' \
+    'phase=object-destroy' \
+    'phase=channel-destroy'; do
+    strings "$PLUGIN" | grep -F "$marker" >/dev/null || {
+        echo "missing private Mesa diagnostic marker: $marker" >&2
+        exit 1
+    }
+done
+ldd "$PLUGIN" | tee "$WORK/plugin-ldd.txt"
+if grep -Fq 'not found' "$WORK/plugin-ldd.txt"; then
+    echo 'private Mesa plugin has unresolved dependencies' >&2
+    exit 1
+fi
+```
+
+The next hardware run should be made only after a fresh reboot into the
+existing kernel/DKMS baseline. Do not install this prefix system-wide. The
+capture helper verifies the selected plugin and requires both the timestamped
+hook marker and timestamped allocation-entry marker before it considers an
+instrumented run valid:
+
+```bash
+cd /home/keivan/nouveau-hpd-ddc-dkms
+tools/vaapi-capture.sh private-instrumented \
+  /home/keivan/.cache/nouveau-vaapi-followup-20260928/private-instrumented/prefix/lib/x86_64-linux-gnu/dri
+```
+
+No runtime result is claimed for these new timestamped teardown records until
+that capture is actually performed.
 
 ## Trap fields and format limits
 
