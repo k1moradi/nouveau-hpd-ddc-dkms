@@ -430,3 +430,24 @@ the Mesa candidate remains private rather than installed system-wide. The
 capture hashes, complete timestamped trace, and separate PGRAPH/scheduler
 assessment are recorded in
 [`VA-SURFACE-CLEAR-CANDIDATE.md`](VA-SURFACE-CLEAR-CANDIDATE.md).
+
+## Later uninstrumented activity in the same boot
+
+A subsequent read of the full boot journal found another Nouveau H.264 client
+at monotonic `11724.958186` (`ch 6`, client label `av:h264:df0[32589]`) with
+two GR trap headers and eight PROP overrun records ending at `11724.964224`.
+This is well after the native-surface candidate capture's journal tail ended
+at `8452.428219`; the later process has no saved capture transcript, driver
+path, or command line. Its Mesa selection is unknown, so it is not a controlled
+failure of the private candidate. It does mean the boot journal contains
+later H.264-associated PROP activity outside that candidate run.
+
+A BAR2/HOST_CPU PTE fault at monotonic `11870.121049` followed 145.156825
+seconds after those PROP records and occurred 80.015 ms after systemd-coredump
+began processing an `lxqt-session` abort. An earlier BAR2/PTE record is also
+present at `128.002890`, before the VAAPI candidate run. No CTXSW timeout,
+runlist recovery, channel kill, or channel-idle-failure record occurs between
+the later PROP burst and BAR2 fault. These timestamps do not prove that the
+H.264 activity caused the fault or that the desktop-session abort caused it.
+The exact journal excerpt and limits are preserved in
+[`evidence/20260929-post-candidate-uncontrolled-journal.txt`](evidence/20260929-post-candidate-uncontrolled-journal.txt).

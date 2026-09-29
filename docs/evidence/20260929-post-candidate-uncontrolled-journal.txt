@@ -1,0 +1,40 @@
+Uncontrolled Nouveau video activity after the native-surface candidate capture
+Date observed: 2026-09-29
+Kernel: 7.0.0-34-generic
+Boot ID: 9464a55e-6232-45c2-9662-99c510d7bce0
+Source: journalctl -b -k --no-pager -o short-monotonic
+
+The candidate VAAPI capture ended its journal tail at monotonic 8452.428219108.
+These later records are from the same boot, but are not part of that capture.
+The capture's tested FFmpeg process was PID 23646; the later Nouveau video
+client below is PID 32589. No command line, selected Mesa driver path, or
+private/system prefix was recorded for PID 32589.
+
+[11724.958186] nouveau 0000:01:00.0: gr: TRAP ch 6 [00ff554000 av:h264:df0[32589]]
+[11724.958753] nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+[11724.959200] nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+[11724.959588] nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+[11724.959976] nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+[11724.961580] nouveau 0000:01:00.0: gr: TRAP ch 6 [00ff554000 av:h264:df0[32589]]
+[11724.961965] nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+[11724.962564] nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000020 [RT_HEIGHT_OVERRUN] x = 112, y = 288, format = 37, storage type = 0
+[11724.963284] nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1200, y = 336, format = 37, storage type = 0
+[11724.964224] nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1216, y = 384, format = 37, storage type = 0
+
+[11870.041034] systemd-coredump[33865]: Process 29637 (lxqt-session) of user 1000 terminated abnormally with signal 6/ABRT, processing...
+[11870.121049] nouveau 0000:01:00.0: fifo: fault 00 [READ] at 000000000054b000 engine 05 [BAR2] client 07 [HUB/HOST_CPU] reason 02 [PTE] on channel -1 [00ffbb7000 unknown]
+
+An earlier BAR2/HOST_CPU PTE fault also appeared at monotonic 128.002890,
+before the candidate capture. The later BAR2 fault is 145.156825 seconds after
+the last PROP record and 80.015 ms after systemd-coredump began processing the
+lxqt-session abort. The intervening kernel journal has no CTXSW_TIMEOUT,
+runlist-recovery, channel-kill, or channel-idle-failure record.
+
+These are uninstrumented journal observations, not a controlled A/B. The
+H.264 client label identifies a Nouveau video-decoder client but does not
+identify its executable or Mesa driver selection. Consequently this does not
+show that the private native-surface candidate regressed: the later client
+may have used the unchanged system Mesa driver. Likewise, the timing does not
+prove the lxqt-session abort caused the BAR2 fault. Preserve these events as
+separate evidence and do not merge them into the hash-verified candidate
+capture.
