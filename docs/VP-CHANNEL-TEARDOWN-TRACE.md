@@ -71,7 +71,9 @@ scheduler source has `drm_sched_entity_fini()` call
 which removes the entity from its run queue and then calls
 [`wait_for_completion(&entity->entity_idle)`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/scheduler/sched_entity.c#L231-L250)
 without an explicit timeout. That happens before Nouveau's channel-idle fence
-wait. The userspace timestamps bracket both stages together.
+wait. The earlier userspace-only capture bracketed both stages together; a
+later function-graph capture measured the 15-second wait inside
+`nouveau_channel_idle()` itself (see the follow-up below).
 
 The earlier Mesa `object-destroy engine=vp` records bracket deletion of the
 VP engine context object; `nouveau_object_subchan_del()` sends that through
@@ -128,12 +130,11 @@ context ID before recovery. It must not change recovery behavior.
 
 ## Channel 5 and patch 2
 
-The channel-5 kill occurs while the VP-channel-free ioctl is waiting, but the
-capture's Mesa binary predates the new channel-identity print, so it does not
-identify which decoder slot owns chid 5. The shared `av:h264:df0` client label
-identifies the client, not the BSP/VP/PPP slot. Channel 5 could be another
-decoder channel. Do not infer its engine from its number or from temporal
-overlap.
+In the first userspace-only capture, the Mesa binary predated the channel
+identity print, so the channel-5 kill could not be assigned to BSP, VP, or PPP
+from that capture. The later function-graph capture includes the identity
+records and supersedes that limitation: it maps channel 5 to PPP and channel 4
+to VP, as detailed below.
 
 The new Mesa-only patch
 [`nouveau-vp3-channel-id-diagnostic.patch`](../patches/mesa/nouveau-vp3-channel-id-diagnostic.patch)
@@ -178,6 +179,131 @@ This was a bounded source comparison, not an exhaustive search of all kernel
 history. It found no source change in the inspected master snapshot that
 explains or fixes this GK104 VP-channel timeout. The timeout's cause remains
 unresolved.
+
+## 2026-09-29 function-graph and channel-identity capture
+
+The follow-up capture is
+`/home/keivan/nouveau-vaapi-captures/20260929T201613Z-private-instrumented-22129`.
+All five files listed in `SHA256SUMS` verify, including the kernel log, FFmpeg
+log, transcript, function graph, and trace metadata. The run used the private
+native-surface Mesa plugin and the existing `7.0.0-34-generic` / DKMS 0.1.13
+kernel baseline; it did not install or replace a driver.
+
+The decode completed successfully: 3000 output frames, 3002 decoded frames,
+zero decode errors, FFmpeg exit 0. The clear diagnostic reported the expected
+1920x544 and 960x272 render-target dimensions, and this capture had no
+GR/PROP-overrun records. Unlike the earlier native-surface capture, this run
+did contain one BAR2/HOST_CPU PTE fault after the channel-idle failure. Thus
+BAR2 was absent in one candidate run and present in this one; the clear fix
+does not establish that BAR2 failures are eliminated.
+
+Mesa's decoder-destroy identity records establish the kernel channel mapping
+for this process:
+
+| Mesa decoder slot | Kernel chid | Engine class |
+| --- | ---: | ---: |
+| BSP | 3 | `0x95b1` |
+| VP | 4 | `0x95b2` |
+| PPP | 5 | `0x90b3` |
+
+The kernel's runlist-2 recovery record names chid 5, so the recovered and
+killed channel is the PPP channel. The `failed to idle channel 4` line maps to
+the VP channel. This mapping comes from the Mesa channel handles captured
+before destruction, not an inference from numeric channel order. The log still
+does not report which engine bit first raised the context-switch timeout;
+recovering chid 5 identifies the context selected for recovery, not
+necessarily the initiating engine.
+
+The monotonic timeline is:
+
+| Event | Monotonic seconds | From FFmpeg start | Relative to VP channel-free begin |
+| --- | ---: | ---: | ---: |
+| FFmpeg starts | 2502.333211 | 0 | - |
+| Mesa begins freeing VP channel / kernel enters channel-free path | 2543.908084 | +41.574874 s | 0 |
+| `CTXSW_TIMEOUT` | 2548.208884 | +45.875673 s | +4.300800 s |
+| runlist 2, chid 5 recovery scheduled | 2548.210177 | +45.876966 s | +4.302093 s |
+| runlist 2 recovery scheduled | 2548.210940 | +45.877729 s | +4.302856 s |
+| chid 5 disabled | 2548.213810 | +45.880599 s | +4.305726 s |
+| chid 5 killed notification | 2548.214549 | +45.881338 s | +4.306465 s |
+| `failed to idle channel 4` | 2558.909080 | +56.575869 s | +15.000996 s |
+| Mesa VP channel-free call returns | 2558.911095 | +56.577884 s | +15.003011 s |
+| BAR2/HOST_CPU PTE fault | 2558.928106 | +56.594895 s | +15.020022 s |
+| FFmpeg exits, status 0 | 2559.066387 | +56.733177 s | +15.158303 s |
+| journal tail stops | 2574.298847 | +71.965636 s | +30.390763 s |
+
+The last FFmpeg progress line reports 3000 frames at 38.74 seconds of process
+elapsed time; actual process exit is 56.733 seconds after start because
+decoder/channel destruction continues after frame production. The journal
+logger remained active 15.232 seconds after the exact FFmpeg exit timestamp.
+
+The function graph resolves where the long teardown interval is spent:
+
+| Kernel function | Inclusive duration |
+| --- | ---: |
+| `nouveau_fence_wait()` | 15.000303 s |
+| `nouveau_channel_idle()` | 15.000630 s |
+| `nouveau_abi16_ioctl_channel_free()` | 15.003396 s |
+
+The graph therefore puts essentially the entire 15-second delay in
+`nouveau_channel_idle()`'s fence wait. The rest of the channel-free ioctl
+accounts for about 2.766 ms. This is much stronger than timing the userspace
+call alone: it does not support `drm_sched_entity_fini()` as the source of the
+15-second delay in this run. The fence still fails to complete on VP chid 4;
+the PPP chid 5 context-switch recovery occurs about 4.301 seconds into that
+wait. Temporal overlap does not show whether the PPP recovery causes the VP
+fence failure.
+
+The later BAR2/PTE fault is observed 17.011 ms after the VP idle error and
+15.232 seconds before process exit. Its ordering is consistent with it being
+downstream of channel recovery, but neither this trace nor the source proves
+causation. The fact that it recurred in a run with valid surface metadata and
+no PROP overrun makes it a separate unresolved symptom rather than evidence
+that the clear fix failed.
+
+## Assessment of the upstream scheduler-entity teardown backport
+
+The proposed upstream pair is real and narrowly fixes a scheduler-entity
+double-finalization bug:
+
+- [`2f5f05633e2229c8ec379e1d65151165c905671e`](https://github.com/torvalds/linux/commit/2f5f05633e2229c8ec379e1d65151165c905671e)
+  makes `drm_sched_entity_kill()` public and exported for Nouveau to call.
+- [`cac96c8d93faa073456fbb3a504b2a3d15d51841`](https://github.com/torvalds/linux/commit/cac96c8d93faa073456fbb3a504b2a3d15d51841)
+  replaces an early `drm_sched_entity_fini()` with `drm_sched_entity_kill()`;
+  the scheduler is finalized later by `nouveau_sched_destroy()`.
+
+However, this is not currently a good causal candidate for these Mesa VP3
+channels. In Linux v7.0, `nouveau_abi16_chan_alloc()` creates `chan->sched`
+only when `nouveau_cli_uvmm(cli)` is active, and `nouveau_abi16_chan_fini()`
+calls either entity function only under `if (chan->sched)`. The code comments
+identify this scheduler as belonging to the VM_BIND UAPI. The exact Mesa 26.0.8
+VP3 winsys allocates its channels with the legacy
+`DRM_NOUVEAU_CHANNEL_ALLOC` ioctl; its Nouveau Gallium paths contain no
+`DRM_NOUVEAU_VM_INIT` / VM_BIND setup. Mesa's separate `DRM_NOUVEAU_SVM_INIT`
+use is not UVMM initialization. Consequently, source evidence strongly
+indicates `chan->sched` is NULL for these decode channels, so the proposed
+Nouveau replacement is skipped for them.
+
+That conclusion is source-based rather than a direct runtime dump of
+`chan->sched`. Even setting that aside, the function graph attributes about
+15.0006 seconds to `nouveau_channel_idle()` and only 2.766 ms to the rest of
+the ioctl, while the scheduler fix changes entity cleanup semantics. It could
+correct a separate bug for UVMM-backed channels, but there is no evidence it
+will fix this legacy VP fence timeout. Do not build a full kernel solely to
+test this pair against the current VP3 symptom without new evidence that the
+decode channels have an active scheduler entity.
+
+The installed kernel's `Module.symvers` does not export
+`drm_sched_entity_kill()`, and its headers do not declare it. The first patch
+is required for an out-of-tree Nouveau module to link against a kernel carrying
+the second change; both patches require a full kernel source/build change in
+this environment. They cannot be added only to the existing DKMS `nouveau.ko`
+package. No kernel source or installed driver was changed for this assessment.
+
+**Current conclusion:** the function-graph capture proves the VP idle-fence
+wait is the 15-second delay and identifies channel 5 as PPP. The scheduler
+double-fini fix is a valid upstream correction but is strongly unsupported as
+the cause of this particular legacy Mesa VP3 timeout. The cause of the PPP
+context-switch timeout and the unsignaled VP fence remains unresolved.
 
 ## Existing tracing and prepared capture
 

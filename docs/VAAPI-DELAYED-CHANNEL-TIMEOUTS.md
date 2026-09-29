@@ -401,14 +401,13 @@ and are present in the hash-verified log.
   `va_openDriver()` were verified. All 36 render-target clear calls used the
   expected plane dimensions, and this capture had no GR/PROP or BAR2/PTE
   records.
-- **Observed, candidate run:** one `CTXSW_TIMEOUT` on runlist 2 led to recovery
-  and channel 5 being killed. The Mesa VP channel-object deletion interval
-  overlapped the timeout and remained blocked for 15.002 seconds. Channel 4
-  failed to idle 1.268 ms before the VP deletion returned. These timestamps
-  placed the timeout within VP-channel teardown. The source-correlated
-  synchronous channel-free call maps channel 4's idle failure to the Mesa VP
-  channel. Channel 5's decoder slot remains unknown. PPP channel deletion
-  completed in 3.588 ms in this run.
+- **Observed, first candidate run:** one `CTXSW_TIMEOUT` on runlist 2 led to
+  recovery and channel 5 being killed. The Mesa VP channel-object deletion
+  interval overlapped the timeout and remained blocked for 15.002 seconds.
+  Channel 4 failed to idle 1.268 ms before the VP deletion returned. That
+  capture mapped channel 4's idle failure to Mesa's VP channel, but did not
+  yet identify channel 5's decoder slot. PPP channel deletion completed in
+  3.588 ms in that run.
 - **Source-proven / strongly supported:** the earlier VA clear path passed a
   generic `pipe_surface` where NVC0 expected a Nouveau-private `nv50_surface`.
   The candidate creates a native Nouveau surface; its corrected runtime RT
@@ -417,9 +416,10 @@ and are present in the hash-verified log.
   A/B, not broad reproducibility proof.
 - **Unresolved:** the VP context-switch timeout and channel-4 idle failure
   remain despite the corrected clear surfaces. Their root cause is not
-  established. The earlier condition-A BAR2 fault is not present in this
-  candidate capture, and neither its relationship to channel recovery nor
-  causation is established.
+  established. The first native-surface candidate capture had no BAR2/PTE
+  record, but that absence did not generalize to the later function-graph run.
+  Neither the BAR2 fault's relationship to channel recovery nor causation is
+  established.
 
 Condition C (private-instrumented native-surface candidate) has now been run;
 the earlier statements that the clear trace was unexercised and that C was
@@ -430,6 +430,30 @@ the Mesa candidate remains private rather than installed system-wide. The
 capture hashes, complete timestamped trace, and separate PGRAPH/scheduler
 assessment are recorded in
 [`VA-SURFACE-CLEAR-CANDIDATE.md`](VA-SURFACE-CLEAR-CANDIDATE.md).
+
+## Function-graph follow-up — 2026-09-29
+
+A later fresh-boot run of the same private native-surface candidate completed
+3000 output frames, decoded 3002 with zero decode errors, and exited 0. The
+correct RT dimensions remained in use and no PROP overrun records appeared.
+This run did log a BAR2/HOST_CPU PTE fault 17.011 ms after `failed to idle
+channel 4`, so the earlier absence of BAR2 was capture-specific.
+
+The new Mesa channel-identity records map chid 4 to the VP slot and chid 5 to
+the PPP slot. The function graph measures 15.000303 seconds in
+`nouveau_fence_wait()`, 15.000630 seconds in `nouveau_channel_idle()`, and
+15.003396 seconds in the full `nouveau_abi16_ioctl_channel_free()` call.
+`CTXSW_TIMEOUT` and PPP chid 5 recovery occur 4.301 seconds into the VP chid 4
+free; then the VP idle fence expires at 15.001 seconds. FFmpeg exits 0 at
+56.733 seconds after process start. The timeout cause remains unresolved, and
+the BAR2 ordering does not prove whether it is primary or secondary.
+
+The proposed upstream double-`drm_sched_entity_fini()` correction is not a
+strong candidate for this legacy VP3 path: exact Mesa source uses the legacy
+channel-allocation ioctl, while Linux v7.0 creates `chan->sched` only for the
+UVMM/VM_BIND path. The full source and call-path assessment is recorded in
+[`VP-CHANNEL-TEARDOWN-TRACE.md`](VP-CHANNEL-TEARDOWN-TRACE.md). No DKMS or
+kernel change was made.
 
 ## Later uninstrumented activity in the same boot
 
