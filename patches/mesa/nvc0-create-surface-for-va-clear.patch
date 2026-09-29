@@ -1,0 +1,64 @@
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_resource.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_resource.c
+@@ -161,0 +162,2 @@
++   pcontext->create_surface = nvc0_miptree_surface_new;
++   pcontext->surface_destroy = nv50_surface_destroy;
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_miptree.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_miptree.c
+@@ -587,0 +588 @@
++   ns->base.context = pipe;
+--- a/src/gallium/drivers/nouveau/nv50/nv50_resource.c
++++ b/src/gallium/drivers/nouveau/nv50/nv50_resource.c
+@@ -148,0 +149 @@
++   pcontext->create_surface = nv50_miptree_surface_new;
+--- a/src/gallium/drivers/nouveau/nv50/nv50_miptree.c
++++ b/src/gallium/drivers/nouveau/nv50/nv50_miptree.c
+@@ -519,0 +520 @@
++   ns->base.context = pipe;
+--- a/src/gallium/frontends/va/surface.c
++++ b/src/gallium/frontends/va/surface.c
+@@ -34,0 +35 @@
++#include "util/u_inlines.h"
+@@ -1049,0 +1051,3 @@
++         struct pipe_surface *clear_surface = NULL;
++         bool clear_surface_owned = false;
++
+@@ -1079 +1083,19 @@
+-         pipe_surface_size(&surfaces[i], &width, &height);
++         if (drv->pipe->create_surface) {
++            clear_surface = drv->pipe->create_surface(drv->pipe,
++                                                       surfaces[i].texture,
++                                                       &surfaces[i]);
++            if (!clear_surface) {
++               if (diag)
++                  fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE mono_ns=%llu "
++                                  "phase=clear-surface-create failed plane=%u\n",
++                          (unsigned long long)os_time_get_nano(), i);
++               surface->buffer->destroy(surface->buffer);
++               surface->buffer = NULL;
++               return VA_STATUS_ERROR_ALLOCATION_FAILED;
++            }
++            clear_surface_owned = true;
++         } else {
++            clear_surface = &surfaces[i];
++         }
++
++         pipe_surface_size(clear_surface, &width, &height);
+@@ -1082 +1104 @@
+-                         "callback=%p rect=0,0 %ux%u\n",
++                         "surface=%p source_surface=%p owned=%u callback=%p rect=0,0 %ux%u\n",
+@@ -1083,0 +1106,2 @@
++                         (void *)clear_surface, (void *)&surfaces[i],
++                         clear_surface_owned,
+@@ -1086 +1110 @@
+-         drv->pipe->clear_render_target(drv->pipe, &surfaces[i], &c, 0, 0,
++         drv->pipe->clear_render_target(drv->pipe, clear_surface, &c, 0, 0,
+@@ -1091 +1115 @@
+-                         "callback=%p returned=void\n",
++                         "surface=%p callback=%p returned=void\n",
+@@ -1093 +1117,4 @@
+-                         i, (void *)drv->pipe->clear_render_target);
++                         i, (void *)clear_surface,
++                         (void *)drv->pipe->clear_render_target);
++         if (clear_surface_owned)
++            pipe_surface_reference(&clear_surface, NULL);
