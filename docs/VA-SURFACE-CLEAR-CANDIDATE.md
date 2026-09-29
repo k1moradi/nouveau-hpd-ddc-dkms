@@ -5,9 +5,9 @@
 This checkpoint analyzes the private-instrumented capture from 2026-09-29 and
 prepares a standalone Mesa userspace candidate. It does not change the working
 GK104 video-context or legacy FIFO fixes. The candidate is not part of
-`install.sh`, DKMS, or the kernel package, and it has not been run on the GPU.
-No system Mesa package or Nouveau module was installed or replaced for this
-work.
+`install.sh`, DKMS, or the kernel package. It has now been run once on the GPU
+from its private prefix. No system Mesa package or Nouveau module was
+installed or replaced for this work.
 
 Repository base: `dc688643986bdb469000090d8fba54a6b26ef2b6` on
 `review/gk104-vaapi-followup-20260928`.
@@ -133,12 +133,13 @@ The A-G checks are established for the captured clear path:
 
 This is a source-proven object-type/layout mismatch in the VA frontend clear
 call. The emitted NVC0 clear uses those invalid private dimensions while its
-clear rectangle is 1920x544 or 960x272. The first kernel PROP traps follow the
-first clear by about 1.5–2.2 ms; the final clear is followed by the last PROP
-cluster beginning 2.3 ms later. That makes the invalid clear state a
-**strongly supported cause** of this capture's `RT_WIDTH_OVERRUN` /
-`RT_HEIGHT_OVERRUN` traps. It is not called fully hardware-proven until the
-candidate A/B shows the traps disappear with corrected surfaces.
+clear rectangle is 1920x544 or 960x272. In the pre-fix capture, the first
+kernel PROP traps followed the first clear by about 1.5–2.2 ms; the final
+clear was followed by the last PROP cluster beginning 2.3 ms later. That made
+the invalid clear state a strongly supported cause of that capture's
+`RT_WIDTH_OVERRUN` / `RT_HEIGHT_OVERRUN` traps. The candidate A/B below now
+supplies the predicted corrected-surface/no-PROP result, strongly supporting
+that causal explanation in hardware.
 
 ## Scheduler timeout is a separate result
 
@@ -267,21 +268,76 @@ and copied to a separate user-owned prefix:
 `libgallium_drv_video.so`. Candidate plugin SHA-256:
 `512a7b524fca0e403540c1223c0b6f106406fb3b418de6417972bc352f02ef61`.
 The clear-surface creation/failure, timestamp, allocation, and NVC0 clear
-diagnostic markers are present; `ldd` reports no missing dependencies. It
-remains untested on hardware: this build is not installed system-wide or
-included in DKMS.
+diagnostic markers are present; `ldd` reports no missing dependencies. The
+candidate remains private; it is not installed system-wide or included in
+DKMS. The initial static checkpoint preceded its first hardware run, recorded
+below.
 
-The next hardware A/B requires a fresh reboot into the existing kernel and
-DKMS baseline; no software installation is needed. Then run only the private
-instrumented candidate:
+The first candidate A/B used this private DRI directory after a fresh boot:
 
 ```bash
 tools/vaapi-capture.sh private-instrumented \
   /home/keivan/.cache/nouveau-vaapi-followup-20260928/private-instrumented-native-surface-fix-candidate/prefix/lib/x86_64-linux-gnu/dri
 ```
 
-Keep the 3000-frame command and journal capture harness unchanged. The two
-independent acceptance questions are whether the PROP overruns disappear and
-whether the VP/PPP channel-deletion timeouts remain. If only the PROP traps
-disappear, treat the scheduler problem as separate. Do not run this test in
-the current boot, whose capture set `STOP_A_B=1`.
+## Private candidate A/B result — 2026-09-29
+
+Capture directory:
+`/home/keivan/nouveau-vaapi-captures/20260929T164635Z-private-instrumented-23623`.
+The captured `SHA256SUMS` verifies:
+
+| File | SHA-256 |
+| --- | --- |
+| `kernel.log` | `264ada0f829490fc900e25a8c351719dfadcdc9eaff74073387ce3e3d73673a8` |
+| `ffmpeg.log` | `3fca5b1efb1cc5047153d28ec72b7d0e02116923057dedcd43d6520847ff8bf6` |
+| `transcript.txt` | `63271c2266cc623aa3e327ec43756ed5f55d49921b872caf4d25aafebd87cc6f` |
+
+The harness verified the private plugin path, `va_openDriver() returns 0`,
+kernel 7.0.0-34-generic, and matching loaded/on-disk Nouveau `srcversion`
+`57AE1B168D50DB546CD87A1`. The opt-in hook ran. It recorded nine surface
+allocations with `SKIP_CLEAR_SURFACE=0`. The selected `clear_render_target`
+callback pointer was `0x7d1ec44f2760`; all 36 calls entered
+`nvc0_clear_render_target()`. The only RT dimensions were the correct
+`1920x544` and `960x272` plane extents, including the two array layers. There
+were **no GR/PROP traps** in the kernel capture. This is a strong single-run
+A/B confirmation that supplying native Nouveau surfaces fixes the observed
+`RT_WIDTH_OVERRUN` / `RT_HEIGHT_OVERRUN` clear-path failures.
+
+FFmpeg completed 3000 output frames, decoded 3002 frames with zero decode
+errors, and exited 0. The final progress timer was 38.73 seconds; wall time was
+56.28 seconds. The exact process interval was monotonic `8381.104569726` to
+`8437.240749893` (56.136180 s). The logger stopped at `8452.428219108`,
+15.187469 seconds after process exit. The full clear/teardown/kernel timeline
+is in
+[`evidence/20260929-private-native-surface-fix-timeline.tsv`](evidence/20260929-private-native-surface-fix-timeline.tsv).
+
+The scheduler failure remains, with a different shape from the preceding
+unfixed-surface run:
+
+| Monotonic time | Event | Since FFmpeg start | Relative to process exit |
+| ---: | --- | ---: | ---: |
+| `8422.106624806` | VP channel-object deletion begins | `+41.002055 s` | `-15.134125 s` |
+| `8426.401149` | Runlist 2 `CTXSW_TIMEOUT` | `+45.296579 s` | `-10.839601 s` |
+| `8426.458191` | Runlist 2/channel 5 recovery scheduled | `+45.353621 s` | `-10.782559 s` |
+| `8426.458968` | Channel 5 disabled | `+45.354398 s` | `-10.781782 s` |
+| `8426.459304` | Channel 5 killed | `+45.354734 s` | `-10.781446 s` |
+| `8437.107052` | Channel 4 failed to idle | `+56.002482 s` | `-0.133698 s` |
+| `8437.108320209` | VP channel-object deletion returns | `+56.003750 s` | `-0.132430 s` |
+| `8437.108571165` | PPP channel-object deletion begins | `+56.004001 s` | `-0.132179 s` |
+| `8437.112158734` | PPP channel-object deletion returns | `+56.007589 s` | `-0.128591 s` |
+| `8437.240749893` | FFmpeg exits 0 | `+56.136180 s` | `0.000000 s` |
+
+The VP deletion blocks for `15.001695 s`. Its context-switch timeout occurs
+`4.294524 s` after deletion begins, and the channel is killed `4.352679 s`
+after deletion begins; the userspace deletion call then remains blocked for
+about another `10.649 s`. The channel-4 idle error occurs 1.268 ms before the
+VP deletion returns. The PPP deletion takes 3.588 ms and has no matching
+timeout. Timing strongly associates runlist 2/channel 5 with the VP deletion
+for this run; it does not map channel 4 to a decoder engine. Runlist IDs and
+channel numbers are runtime observations, not fixed engine identities.
+
+There is no BAR2/PTE fault in this capture. The scheduler timeout and idle
+failure occur with corrected RT dimensions and no PROP traps, so the two
+failure classes are experimentally separated in this run. The reason for the
+VP context-switch timeout remains unresolved. The harness set `STOP_A_B=1`;
+do not run another GPU condition in this boot.

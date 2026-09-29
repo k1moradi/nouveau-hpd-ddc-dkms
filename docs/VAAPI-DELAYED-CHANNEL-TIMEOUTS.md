@@ -348,13 +348,13 @@ cannot safely map global channel IDs without a recorded allocation/object
 mapping. See Mesa
 [`nvc0_video.c`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-26.0.8/src/gallium/drivers/nouveau/nvc0/nvc0_video.c#L91-183).
 
-Assessment of the four candidate relationships:
+Assessment before the native-surface candidate run:
 
 | Proposition | Assessment |
 | --- | --- |
-| A. PROP traps and FIFO scheduler failure are related | **PLAUSIBLE.** Both independent Mesa runs show a similar PROP pattern and a timeout about 4.33 s after the final PROP, within the same FFmpeg workload. GR channel 2 and the video-client recovery channel differ; timing does not prove causation. |
-| B. Timeout is a video-engine teardown/context-switch issue | **PLAUSIBLE as a combined claim.** The timeout is source-proven to enter context-switch recovery, and the affected logged channel belongs to the `av:h264` client. The precise engine is unknown, and the first timeout is 10.8 s before FFmpeg exit, so teardown-specific causation is not established. |
-| C. BAR2 fault is downstream of channel recovery | **PLAUSIBLE as a causal claim; temporal order is PROVEN.** It follows channel 5 kill by 10.715 s and the channel-4 idle failure by 20.111 ms, but is still before FFmpeg exit. It is a channel-`-1`/unknown HOST_CPU PTE fault; logs do not prove it was caused by recovery or establish it as primary. Secondary/recovery-related is the more likely interpretation, not a confirmed one. |
+| A. PROP traps and FIFO scheduler failure are related | **PLAUSIBLE in the earlier captures, but not required for the timeout.** The native-surface candidate run had a timeout without PROP traps, so the scheduler failure can occur independently of the observed invalid-clear PROP pattern. |
+| B. Timeout is a video-engine teardown/context-switch issue | **STRONGLY SUPPORTED as a temporal association with VP channel deletion.** In the native-surface run, runlist 2/channel 5 recovery began 4.295 s into the Mesa VP channel-object deletion, and VP deletion remained blocked for 15.002 s. The log does not prove channel 5 is that VP channel or that deletion caused the timeout. |
+| C. BAR2 fault is downstream of channel recovery | **PLAUSIBLE from earlier captures only; causal status UNKNOWN.** The system-Mesa BAR2/PTE fault followed channel recovery and channel-4 idle failure, but the candidate run had no BAR2/PTE record. The timestamps do not prove that recovery caused the fault or that it was secondary. |
 | D. Patch 2/nonstall event-index fix is involved | **UNSUPPORTED as a direct cause.** The nonstall event registration/notification path is distinct from `SCHED_ERROR` `CTXSW_TIMEOUT` recovery. A fence-notification mismatch could indirectly affect wait/teardown timing, so patch 2 could improve that separate issue while this scheduler failure remains. No removal or modification is justified from these captures. |
 
 The older private run also had a BAR2 PTE fault 17.272 ms after its second
@@ -388,38 +388,45 @@ does not persist a separate `journalctl` follower exit status; that does not
 block analysis of this capture because the decisive events precede FFmpeg exit
 and are present in the hash-verified log.
 
-## Current conclusion
+## Updated conclusion after native-surface candidate — 2026-09-29
 
-- **Observed:** both the previous private-instrumented Mesa run and fresh
-  system-Mesa condition A completed 3000 H.264 output frames, 3003 decoded,
-  zero decode errors, and FFmpeg exit 0. The original video-engine
-  PRIV_VIOLATION/SIGBUS chain did not recur. Both runs did show PROP traps and
-  later FIFO recovery/BAR2 signatures. Condition A's scheduler/channel/idle/
-  BAR2 events all preceded the exact FFmpeg process exit.
-- **Observed:** condition A verified the distro plugin path and current
-  DKMS/module `srcversion`; no condition B/C was run because `STOP_A_B=1`.
-- **Source-proven:** the process has both a 3D GR context and separate video
-  engine channels. The PROP records identify error bits, not the offending GR
-  method or RT dimensions. GK104 runlist membership comes from runtime TOP
-  data; the captured numeric runlists and channel IDs do not identify engines.
-- **Still HYPOTHESIS:** whether the PROP traps trigger or merely accompany the
-  context-switch timeout, whether timeout is teardown-related, and whether the
-  unknown-channel BAR2 fault is secondary remain unresolved. No functional GR
-  fix was created.
+- **Observed, earlier runs:** the pre-candidate private-instrumented Mesa run
+  and system-Mesa condition A both completed the 3000-frame decode but showed
+  PROP traps and FIFO recovery; condition A also showed an idle failure and
+  BAR2/PTE fault. The conditions were captured on separate boots. Their
+  differing event counts and fault details do not establish identical failure
+  sequences.
+- **Observed, candidate run:** after a fresh boot, the private Mesa
+  native-surface candidate completed 3000 output frames, decoded 3002 with zero
+  decode errors, and exited 0. The exact private plugin path and successful
+  `va_openDriver()` were verified. All 36 render-target clear calls used the
+  expected plane dimensions, and this capture had no GR/PROP or BAR2/PTE
+  records.
+- **Observed, candidate run:** one `CTXSW_TIMEOUT` on runlist 2 led to recovery
+  and channel 5 being killed. The Mesa VP channel-object deletion interval
+  overlapped the timeout and remained blocked for 15.002 seconds. Channel 4
+  failed to idle 1.268 ms before the VP deletion returned. These timestamps
+  strongly associate the timeout with VP-channel teardown but do not prove
+  that channel 5 is the Mesa VP channel, nor identify channel 4's engine.
+  PPP channel deletion completed in 3.588 ms in this run.
+- **Source-proven / strongly supported:** the earlier VA clear path passed a
+  generic `pipe_surface` where NVC0 expected a Nouveau-private `nv50_surface`.
+  The candidate creates a native Nouveau surface; its corrected runtime RT
+  dimensions and absence of the prior PROP overrun signatures strongly
+  support this mismatch as the cause of those traps. This is one hardware
+  A/B, not broad reproducibility proof.
+- **Unresolved:** the VP context-switch timeout and channel-4 idle failure
+  remain despite the corrected clear surfaces. Their root cause is not
+  established. The earlier condition-A BAR2 fault is not present in this
+  candidate capture, and neither its relationship to channel recovery nor
+  causation is established.
 
-The next highest-value condition is private-instrumented Mesa after a fresh
-reboot into the unchanged kernel/module. It can provide the runtime VA
-surface-allocation, `SKIP_CLEAR_SURFACE`, clear callback, and NVC0 clear state
-that condition A cannot show. Defer private-uninstrumented Mesa: A already
-proves the delayed failure is not exclusive to the diagnostic plugin, while B
-would not expose those clear-path details. Stop after any critical signature;
-do not alter the working kernel fixes from the present evidence.
-
-The next private-instrumented run was captured on 2026-09-29. It positively
-exercised the clear trace and localized both scheduler timeouts to distinct VP
-and PPP channel-destruction windows. See
-[`VA-SURFACE-CLEAR-CANDIDATE.md`](VA-SURFACE-CLEAR-CANDIDATE.md) for the
-hash-verified capture, exact event timing, source proof, and the separate Mesa
-candidate. This supersedes the earlier statement that clear-path execution
-was unknown; it does not supersede the conclusion that the scheduler timeout
-cause remains unresolved.
+Condition C (private-instrumented native-surface candidate) has now been run;
+the earlier statements that the clear trace was unexercised and that C was
+the next condition are historical. The harness set `STOP_A_B=1` because the
+kernel reported a timeout/channel-recovery signature. Do not run another GPU
+condition in the same boot. No functional kernel/FIFO fix was created, and
+the Mesa candidate remains private rather than installed system-wide. The
+capture hashes, complete timestamped trace, and separate PGRAPH/scheduler
+assessment are recorded in
+[`VA-SURFACE-CLEAR-CANDIDATE.md`](VA-SURFACE-CLEAR-CANDIDATE.md).

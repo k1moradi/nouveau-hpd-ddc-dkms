@@ -501,31 +501,31 @@ unknown. VA surface clears are a plausible source-level path, but the
 instrumented run produced no corresponding clear records. The later video
 channel timeouts and BAR2 PTE fault also need separate correlation.
 
-**Root cause status: still HYPOTHESIS.** No functional PGRAPH fix was created.
+At this earlier checkpoint, the PGRAPH root cause was still a hypothesis and
+no functional fix had been tested.
 
 The small opt-in trace in
 [`patches/mesa/nvc0-rt-clear-diagnostic.patch`](../patches/mesa/nvc0-rt-clear-diagnostic.patch)
 prints the NVC0 context, pipe format, RT format value, RT dimensions, clear
 rectangle, and layer range immediately before `nvc0_clear_render_target()`
 emits the state. It is standalone Mesa instrumentation: it is not included in
-`install.sh`, DKMS, or the kernel package. It was built and selected for the
-capture above, but yielded no records; a positive-control test of the hook has
-not yet been performed.
+`install.sh`, DKMS, or the kernel package. The initial capture yielded no
+records; the later candidate capture below positively exercised the hook.
 
 The expanded opt-in surface-allocation and callback trace, plus a reproducible
 three-mode capture helper, is documented in
-[`VAAPI-DELAYED-CHANNEL-TIMEOUTS.md`](VAAPI-DELAYED-CHANNEL-TIMEOUTS.md). The
-runtime trace has not yet been positively exercised on hardware. A functional
-change should wait until a specific emitted method/state and the expected
-correct dimensions are proven.
+[`VAAPI-DELAYED-CHANNEL-TIMEOUTS.md`](VAAPI-DELAYED-CHANNEL-TIMEOUTS.md). At
+that point the runtime trace had not yet been positively exercised. A
+functional change was deferred until the expected surface dimensions could be
+verified.
 
 The later timestamped private-instrumented capture did positively exercise the
 clear callback and exposed a generic `pipe_surface` / Nouveau-private
 `nv50_surface` layout mismatch. The exact source/runtime correlation, full
 monotonic event timeline, and a standalone Mesa candidate are documented in
 [`VA-SURFACE-CLEAR-CANDIDATE.md`](VA-SURFACE-CLEAR-CANDIDATE.md). The PGRAPH
-clear defect is now source-proven; its relationship to the observed PROP
-overruns is strongly supported but still needs a private Mesa hardware A/B.
+clear defect is source-proven. The later private Mesa candidate A/B strongly
+supports that it caused the earlier PROP overrun pattern.
 
 The legacy-video fix details remain in
 [`VP5-VIDEO-DECODE.md`](VP5-VIDEO-DECODE.md); the nonstall build experiment is
@@ -548,8 +548,9 @@ plugin, while the different number of timeouts and BAR2 address mean the two
 captures are similar rather than identical. It does not prove that PROP traps
 caused the scheduler timeout or that channel recovery caused the BAR2 fault.
 
-Conditions B and C were not run in that boot. After another clean reboot, the
-next useful condition is private-instrumented Mesa to positively exercise the
-VA allocation/clear trace. The full hash-verified timeline, source boundary,
-and runlist/channel mapping limits are in
+Conditions B and C were not run in that boot. A later fresh-boot run tested
+the private-instrumented native-surface candidate; its results are recorded
+in [`VA-SURFACE-CLEAR-CANDIDATE.md`](VA-SURFACE-CLEAR-CANDIDATE.md). The full
+hash-verified system-Mesa timeline, source boundary, and runlist/channel
+mapping limits are in
 [`VAAPI-DELAYED-CHANNEL-TIMEOUTS.md`](VAAPI-DELAYED-CHANNEL-TIMEOUTS.md).
