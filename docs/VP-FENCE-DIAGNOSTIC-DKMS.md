@@ -52,6 +52,29 @@ command files were not preserved. The corrected diagnostic remains **built,
 not installed**. At this checkpoint the running and on-disk production module
 remain `0.1.13`, with `srcversion` `57AE1B168D50DB546CD87A1`.
 
+## On-disk install checkpoint (2026-09-29)
+
+After the corrected build passed the provenance checks, DKMS installed the
+existing `0.1.13-diag1` build. The fresh-install helper was not rerun because
+the earlier guarded attempt had already registered and populated that version;
+the existing build was checked directly before running `dkms install`. Its
+declared post-install hook completed the initramfs refresh.
+
+The pre-reboot verifier passed with:
+
+```text
+kernel=7.0.0-34-generic
+module_path=/lib/modules/7.0.0-34-generic/updates/dkms/nouveau.ko.zst
+disk_srcversion=B19B8AAE48467545E652509
+DKMS 0.1.13-diag1: installed
+loaded_srcversion=57AE1B168D50DB546CD87A1
+```
+
+Thus the diagnostic is installed on disk, but the original `0.1.13` module
+remains loaded until reboot. The `.13` DKMS build is preserved as a built
+version, and the pre-install module is saved in the install evidence directory
+for rollback. No module reload or GPU test was performed after installation.
+
 ## Install and verify
 
 Run from the repository on the existing `.13` baseline:
