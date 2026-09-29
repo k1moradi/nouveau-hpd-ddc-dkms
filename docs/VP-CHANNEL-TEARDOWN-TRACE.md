@@ -122,6 +122,33 @@ Scheduler entity teardown runs earlier and could be indirectly affected by
 event-driven job progress, but this capture does not show that. Do not remove
 or change patch 2 from this evidence.
 
+## Bounded current-upstream source comparison
+
+On 2026-09-29, the inspected `torvalds/linux` master head was
+`6f8319e3e9a44dd537d17f41565a8453c560a581`. Its
+[`nouveau_channel_idle()`](https://github.com/torvalds/linux/blob/6f8319e3e9a44dd537d17f41565a8453c560a581/drivers/gpu/drm/nouveau/nouveau_chan.c#L65-L86)
+still emits a fence, calls `nouveau_fence_wait(fence, false, false)`, and logs
+`failed to idle channel` if the wait fails. The corresponding
+[`nouveau_fence_emit()` and busy-wait code](https://github.com/torvalds/linux/blob/6f8319e3e9a44dd537d17f41565a8453c560a581/drivers/gpu/drm/nouveau/nouveau_fence.c#L208-L331)
+set the per-fence deadline to 15 seconds and poll completion until that
+deadline. This current-source comparison is consistent with the Linux 7.0
+source analysis above; it does not identify why the VP fence fails to
+complete on this K4200.
+
+Master also moves destruction of the channel kill-event subscription ahead of
+fence-context teardown in
+[`nouveau_channel_del()`](https://github.com/torvalds/linux/blob/6f8319e3e9a44dd537d17f41565a8453c560a581/drivers/gpu/drm/nouveau/nouveau_chan.c#L88-L120).
+The code comment explains that the event handler dereferences `chan->fence`,
+which context teardown frees. Linux v7.0 destroys that event later in channel
+deletion. This is a separate lifetime/UAF ordering change; it does not change
+the idle-fence wait, its deadline, or the FIFO context-switch recovery path,
+so it is not evidence of a fix for the observed timeout.
+
+This was a bounded source comparison, not an exhaustive search of all kernel
+history. It found no source change in the inspected master snapshot that
+explains or fixes this GK104 VP-channel timeout. The timeout's cause remains
+unresolved.
+
 ## Existing tracing and prepared capture
 
 Kernel `7.0.0-34-generic` has `CONFIG_FTRACE`,
@@ -173,9 +200,12 @@ After reconnecting, verify `uname -r`, `modinfo -n nouveau`, and matching
 
 ```bash
 cd ~/nouveau-hpd-ddc-dkms
-sudo tools/vaapi-channel-free-ftrace.sh \
+pkexec tools/vaapi-channel-free-ftrace.sh \
   /home/keivan/.cache/nouveau-vaapi-followup-20260928/private-instrumented-native-surface-fix-channel-id-trace/prefix/lib/x86_64-linux-gnu/dri
 ```
+
+Use `pkexec` in this environment; the user's shell has previously run with
+`NoNewPrivs`, which prevents `sudo` from starting the helper.
 
 Use only the existing `7.0.0-34-generic` plus installed DKMS `0.1.13`
 baseline. Do not install this Mesa prefix system-wide, rebuild/reinstall
