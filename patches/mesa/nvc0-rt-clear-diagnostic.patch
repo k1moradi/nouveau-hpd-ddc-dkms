@@ -1,30 +1,127 @@
 From: Nouveau debugging notes
-Subject: [DIAGNOSTIC] gallium/nouveau: trace NVC0 render-target clears
+Subject: [DIAGNOSTIC] gallium/nouveau: trace VA surface allocation and clears
 
-Opt-in trace for the NVC0 render-target state emitted by
-nvc0_clear_render_target(). This is diagnostic only and is not integrated
-into the Nouveau DKMS build.
+Opt-in tracing for the VA allocation decision and the NVC0 render-target
+clear callback. Uses stderr directly because Mesa's debug_printf() is compiled
+out when MESA_DEBUG=0 in release builds. No GPU state or behavior is changed.
 
-Enable for one Mesa test process with:
-  NOUVEAU_DIAG_RT_CLEAR=1
+Enable with: NOUVEAU_DIAG_VA_SURFACE=1
 
+---
 --- a/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c
 +++ b/src/gallium/drivers/nouveau/nvc0/nvc0_surface.c
-@@ -34,2 +34,3 @@
- #include "util/u_surface.h"
-+#include "util/u_debug.h"
- #include "util/u_thread.h"
-@@ -302,3 +302,12 @@
-    assert(dst->texture->target != PIPE_BUFFER);
--
+@@ -30,0 +31,2 @@
++#include <stdio.h>
 +
-+   if (debug_get_bool_option("NOUVEAU_DIAG_RT_CLEAR", false)) {
-+      debug_printf("NOUVEAU_DIAG_RT_CLEAR ctx=%p format=%u rt_format=%02x "
+@@ -34,0 +37 @@
++#include "util/u_debug.h"
+@@ -302,0 +306,10 @@
++
++   if (debug_get_bool_option("NOUVEAU_DIAG_RT_CLEAR", false) ||
++       debug_get_bool_option("NOUVEAU_DIAG_VA_SURFACE", false)) {
++      fprintf(stderr, "NOUVEAU_DIAG_RT_CLEAR ctx=%p format=%u rt_format=%02x "
 +                   "rt=%ux%u clear=%u,%u %ux%u layers=%u..%u\n",
 +                   (void *)nvc0, dst->format,
 +                   nvc0_format_table[dst->format].rt,
 +                   sf->width, sf->height, dstx, dsty, width, height,
 +                   dst->first_layer, dst->last_layer);
 +   }
+@@ -1822,0 +1836,5 @@
++   if (debug_get_bool_option("NOUVEAU_DIAG_VA_SURFACE", false))
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE hook=active "
++                   "point=nvc0_init_surface_functions pipe=%p "
++                   "clear_callback=%p\n",
++                   (void *)pipe, (void *)pipe->clear_render_target);
+--- a/src/gallium/frontends/va/surface.c
++++ b/src/gallium/frontends/va/surface.c
+@@ -31,0 +32,2 @@
++#include <stdio.h>
 +
-    if (!PUSH_SPACE(push, 32 + sf->depth))
+@@ -36,0 +39,2 @@
++#include "util/u_debug.h"
++#include "util/format/u_format.h"
+@@ -950,0 +955,13 @@
++   unsigned planes = 0;
++   bool diag = debug_get_bool_option("NOUVEAU_DIAG_VA_SURFACE", false);
++   bool skip_clear;
++
++   if (diag)
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=allocate-entry surface=%p "
++                   "width=%u height=%u format=%s(%u) interlaced=%u "
++                   "bind=0x%x modifiers=%u clear_callback=%p\n",
++                   (void *)surface, templat->width, templat->height,
++                   util_format_name(templat->buffer_format),
++                   templat->buffer_format, templat->interlaced,
++                   templat->bind, modifiers_count,
++                   (void *)drv->pipe->clear_render_target);
+@@ -965,4 +982,20 @@
+-   if (drv->pipe->screen->get_video_param(drv->pipe->screen,
+-                                          PIPE_VIDEO_PROFILE_UNKNOWN,
+-                                          PIPE_VIDEO_ENTRYPOINT_UNKNOWN,
+-                                          PIPE_VIDEO_CAP_SKIP_CLEAR_SURFACE))
++   if (diag)
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=video-buffer result=ok "
++                   "buffer=%p format=%s(%u) width=%u height=%u "
++                   "interlaced=%u\n",
++                   (void *)surface->buffer,
++                   util_format_name(surface->buffer->buffer_format),
++                   surface->buffer->buffer_format,
++                   surface->buffer->width, surface->buffer->height,
++                   surface->buffer->interlaced);
++
++   skip_clear = drv->pipe->screen->get_video_param(drv->pipe->screen,
++                                                    PIPE_VIDEO_PROFILE_UNKNOWN,
++                                                    PIPE_VIDEO_ENTRYPOINT_UNKNOWN,
++                                                    PIPE_VIDEO_CAP_SKIP_CLEAR_SURFACE);
++   if (diag)
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=skip-clear capability=%u value=%u\n",
++                   PIPE_VIDEO_CAP_SKIP_CLEAR_SURFACE, skip_clear);
++   if (skip_clear) {
++      if (diag)
++         fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=clear-decision action=skip\n");
+@@ -969,0 +1003 @@
++   }
+@@ -971,0 +1006,12 @@
++   for (i = 0; i < VL_MAX_SURFACES; ++i)
++      planes += surfaces[i].texture != NULL;
++
++   if (diag)
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=planes count=%u slots=%u "
++                   "buffer_interlaced=%u\n",
++                   planes, VL_MAX_SURFACES, surface->buffer->interlaced);
++   if (diag)
++      fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=clear-decision "
++                   "first_texture=%u plane_count=%u\n",
++                   surfaces[0].texture != NULL, planes);
++
+@@ -979,0 +1026,19 @@
++         if (diag) {
++            struct pipe_resource *resource = surfaces[i].texture;
++            unsigned width, height;
++
++            pipe_surface_size(&surfaces[i], &width, &height);
++            fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=plane index=%u "
++                         "surface_format=%s(%u) surface_size=%ux%u "
++                         "level=%u layers=%u..%u resource_format=%s(%u) "
++                         "target=%u resource_size=%ux%ux%u array_size=%u "
++                         "resource_bind=0x%x\n",
++                         i, util_format_name(surfaces[i].format),
++                         surfaces[i].format, width, height,
++                         surfaces[i].level, surfaces[i].first_layer,
++                         surfaces[i].last_layer,
++                         util_format_name(resource->format), resource->format,
++                         resource->target, resource->width0, resource->height0,
++                         resource->depth0, resource->array_size, resource->bind);
++         }
++
+@@ -984,0 +1050,5 @@
++         if (diag)
++            fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=clear-before plane=%u "
++                         "callback=%p rect=0,0 %ux%u\n",
++                         i, (void *)drv->pipe->clear_render_target,
++                         width, height);
+@@ -987,0 +1058,4 @@
++         if (diag)
++            fprintf(stderr, "NOUVEAU_DIAG_VA_SURFACE phase=clear-after plane=%u "
++                         "callback=%p returned=void\n",
++                         i, (void *)drv->pipe->clear_render_target);
