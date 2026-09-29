@@ -95,20 +95,141 @@ the private plugin is an upstream-source build and reports
 `Mesa Gallium driver 26.0.8 for NVE4`, without Ubuntu's package revision
 suffix.
 
-The logger overlapped both tests. The init-only command loaded the private
-driver, exited 0, and produced a zero-byte kernel log. The 3000-frame run
-kept the known-good named VA-API device invocation unchanged apart from the
-private driver path and diagnostic environment variable:
+### Rebuild the instrumented driver in a private prefix
+
+The following recipe starts from a fresh extraction and keeps the build,
+installed driver, and sysroot under the user's cache. It does not install or
+replace system Mesa packages. The sysroot is the prepared, user-owned build
+sysroot used for the captured Mesa build; `-j1` keeps peak build memory low.
 
 ```bash
-LIBVA_DRIVERS_PATH=/home/keivan/.cache/nouveau-mesa-diag-20260928/prefix/lib/x86_64-linux-gnu/dri \
-NOUVEAU_DIAG_RT_CLEAR=1 ffmpeg -hide_banner -loglevel verbose \
+set -euo pipefail
+REPO=/home/keivan/nouveau-hpd-ddc-dkms
+CACHE=/home/keivan/.cache/nouveau-mesa-diag-20260928
+ARCHIVE=/home/keivan/.cache/nouveau-mesa-26.0.8-1ubuntu0.3/mesa_26.0.8.orig.tar.xz
+WORK="$CACHE/rebuild-rt-clear"
+SYSROOT="$CACHE/sysroot"
+SRCROOT="$WORK/source"
+SRC="$SRCROOT/mesa-26.0.8"
+BUILD="$WORK/build"
+PREFIX="$WORK/prefix"
+DRI="$PREFIX/lib/x86_64-linux-gnu/dri"
+
+if [ -e "$WORK" ]; then
+    echo "choose a fresh WORK directory; refusing to reuse $WORK" >&2
+    exit 1
+fi
+printf '%s  %s\n' \
+    'caf1c0061a68e88dfa74967a7e780c0e85d65b6c4e334cd69095a5dc54ad78bc' \
+    "$ARCHIVE" | sha256sum --check -
+mkdir -p "$SRCROOT"
+tar -xf "$ARCHIVE" -C "$SRCROOT"
+cd "$SRC"
+patch --dry-run --batch --fuzz=0 -p1 \
+    < "$REPO/patches/mesa/nvc0-rt-clear-diagnostic.patch"
+patch --batch --fuzz=0 -p1 \
+    < "$REPO/patches/mesa/nvc0-rt-clear-diagnostic.patch"
+
+PYTHONPATH="$SYSROOT/usr/lib/python3/dist-packages" \
+PKG_CONFIG_PATH="$SYSROOT/usr/lib/x86_64-linux-gnu/pkgconfig:$SYSROOT/usr/share/pkgconfig" \
+PKG_CONFIG_SYSROOT_DIR="$SYSROOT" \
+meson setup "$BUILD" "$SRC" \
+    --prefix="$PREFIX" \
+    --buildtype=release \
+    --wrap-mode=nodownload \
+    -Dplatforms=[] \
+    -Dgallium-drivers=nouveau \
+    -Dvulkan-drivers=[] \
+    -Dgallium-va=enabled \
+    -Dvideo-codecs=h264dec \
+    -Dllvm=disabled \
+    -Dbuild-tests=false \
+    -Dopengl=false \
+    -Dglx=disabled \
+    -Degl=disabled \
+    -Dgbm=disabled \
+    -Dgles1=disabled \
+    -Dgles2=disabled
+ninja -C "$BUILD" -j1 src/gallium/targets/va/libgallium_drv_video.so
+meson install -C "$BUILD" --no-rebuild
+```
+
+Check that the private DRI entry is the just-built Gallium plugin, contains
+the diagnostic string, and has no unresolved shared-library dependencies:
+
+```bash
+set -euo pipefail
+CACHE=/home/keivan/.cache/nouveau-mesa-diag-20260928
+WORK="$CACHE/rebuild-rt-clear"
+PREFIX="$WORK/prefix"
+DRI="$PREFIX/lib/x86_64-linux-gnu/dri"
+PLUGIN="$DRI/nouveau_drv_video.so"
+test -L "$PLUGIN"
+test "$(readlink -f "$PLUGIN")" = "$DRI/libgallium_drv_video.so"
+strings "$PLUGIN" | grep -F 'NOUVEAU_DIAG_RT_CLEAR'
+ldd "$PLUGIN" | tee "$WORK/plugin-ldd.txt"
+if grep -Fq 'not found' "$WORK/plugin-ldd.txt"; then
+    echo 'private Mesa plugin has unresolved dependencies' >&2
+    exit 1
+fi
+```
+
+For this build, the private plugin's dependencies resolve against the host
+libraries, so `LD_LIBRARY_PATH` is not needed. `LIBVA_DRIVERS_PATH` below is
+the selection mechanism that points libva at the private DRI directory.
+
+### Run and verify the selected driver
+
+The logger overlapped both tests. The init-only command loaded the private
+driver, exited 0, and produced a zero-byte kernel log. The 3000-frame run
+kept the known-good FFmpeg options and named VA-API device unchanged. For a
+fresh build from the recipe above, this command selects that build's private
+plugin and enables the trace; `/usr/bin/time` and `tee` capture duration,
+output, and exit status. This is a repeatable command template; the recorded
+2026-09-28 capture used the earlier private prefix shown in its loader proof
+below, and the results that follow are from that recorded run:
+
+```bash
+CACHE=/home/keivan/.cache/nouveau-mesa-diag-20260928
+WORK="$CACHE/rebuild-rt-clear"
+PREFIX="$WORK/prefix"
+DRI="$PREFIX/lib/x86_64-linux-gnu/dri"
+PLUGIN="$DRI/nouveau_drv_video.so"
+RUN_LOG="$WORK/ffmpeg-3000.log"
+
+set -o pipefail
+env LIBVA_DRIVERS_PATH="$DRI" NOUVEAU_DIAG_RT_CLEAR=1 \
+    /usr/bin/time -f 'wall_seconds=%e' \
+    ffmpeg -hide_banner -loglevel verbose \
     -init_hw_device vaapi=va:/dev/dri/renderD128 \
     -hwaccel vaapi \
     -hwaccel_device va \
     -hwaccel_output_format vaapi \
     -i /home/keivan/test_1080p.mkv \
-    -an -frames:v 3000 -f null -
+    -an -frames:v 3000 -f null - 2>&1 | tee "$RUN_LOG"
+ffmpeg_status=${PIPESTATUS[0]}
+printf 'FFmpeg exit=%s\n' "$ffmpeg_status"
+
+grep -F "Trying to open $PLUGIN" "$RUN_LOG"
+grep -F 'va_openDriver() returns 0' "$RUN_LOG"
+grep -F 'VAAPI driver: Mesa Gallium driver 26.0.8 for NVE4.' "$RUN_LOG"
+test "$ffmpeg_status" -eq 0
+```
+
+The first grep is the loader-path check: the verbose libva log must name the
+private `$PLUGIN` path, and `va_openDriver() returns 0` must confirm the open
+succeeded. If those checks fail, do not interpret the diagnostic environment
+variable or absence of trace records; FFmpeg may have used another driver or
+failed to load the private one. Keep the kernel logger running concurrently
+with FFmpeg, as in the recorded capture procedure.
+
+For the recorded 2026-09-28 capture, the verbose FFmpeg log contains the
+following loader evidence for the then-current private prefix:
+
+```text
+libva: Trying to open /home/keivan/.cache/nouveau-mesa-diag-20260928/prefix/lib/x86_64-linux-gnu/dri/nouveau_drv_video.so
+libva: va_openDriver() returns 0
+VAAPI driver: Mesa Gallium driver 26.0.8 for NVE4.
 ```
 
 FFmpeg selected the private plugin, used `pixfmt:vaapi` surfaces, output 3000
