@@ -325,6 +325,22 @@ else
     echo "nouveau-hpd-ddc: GK104 POST/GPIO31 trace is disabled"
 fi
 
+# Optional observational trace for channel-idle fence progress and GK104 FIFO
+# context-switch timeout engine attribution. This marker is staged only by the
+# uniquely versioned diagnostic installer; the normal installer never enables
+# this patch. Keep the patch strict so an unexpected Ubuntu source layout fails
+# closed instead of moving the trace to a different code path.
+if [ -f "$PWD/diagnostic-vp-fence.enabled" ]; then
+    echo "nouveau-hpd-ddc: applying opt-in VP idle-fence/CTXSW diagnostics"
+    if ! patch --fuzz=0 -d "$srcdir" -p1 --forward --batch \
+        < "$PWD/patches/diagnostic/gk104-vp-idle-fence-ctxsw-trace.patch"; then
+        echo "ERROR: VP idle-fence/CTXSW diagnostic patch did not apply strictly; refusing to build." >&2
+        exit 2
+    fi
+else
+    echo "nouveau-hpd-ddc: VP idle-fence/CTXSW diagnostics are disabled"
+fi
+
 # Force the GNU C compiler even on systems where Clang is the interactive
 # default.  Remove inherited LLVM/Kbuild tool-selection variables first so a
 # shell/profile setting such as LLVM=1 cannot silently switch this DKMS build
