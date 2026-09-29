@@ -200,7 +200,7 @@ After reconnecting, verify `uname -r`, `modinfo -n nouveau`, and matching
 
 ```bash
 cd ~/nouveau-hpd-ddc-dkms
-pkexec tools/vaapi-channel-free-ftrace.sh \
+pkexec "$PWD/tools/vaapi-channel-free-ftrace.sh" \
   /home/keivan/.cache/nouveau-vaapi-followup-20260928/private-instrumented-native-surface-fix-channel-id-trace/prefix/lib/x86_64-linux-gnu/dri
 ```
 

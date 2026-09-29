@@ -29,7 +29,7 @@ if (($# != 1)); then
     exit 2
 fi
 if [[ $EUID -ne 0 ]]; then
-    fail 'run this helper with sudo so it can use tracefs'
+    fail 'invoke this helper with sudo or pkexec so it can use tracefs'
 fi
 capture_user=${SUDO_USER:-}
 if [[ -z $capture_user && ${PKEXEC_UID:-} =~ ^[0-9]+$ ]]; then
