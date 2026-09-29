@@ -120,6 +120,9 @@ cp -a "$HERE/patches/video/gk104-legacy-video-context-nonpriv.patch" "$SRC_DIR/p
 cp -a "$HERE/patches/video/legacy-fifo-nonstall-event-index.patch" "$SRC_DIR/patches/video/"
 cp -a "$HERE/patches/diagnostic/gk104-vp-idle-fence-ctxsw-trace.patch" "$SRC_DIR/patches/diagnostic/"
 touch "$SRC_DIR/diagnostic-vp-fence.enabled"
+# Preserve both already-installed video fixes. The active .13 build includes
+# the legacy nonstall patch, so the diagnostic must carry its marker too.
+touch "$SRC_DIR/experimental-legacy-nonstall.enabled"
 
 version_count=$(grep -Fc 'PACKAGE_VERSION="0.1.13"' "$SRC_DIR/dkms.conf")
 if [[ $version_count -ne 1 ]]; then

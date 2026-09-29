@@ -10,8 +10,10 @@ timeouts, scheduling, or recovery.
 The normal installer remains on DKMS version `0.1.13`. The diagnostic installer
 uses the separate version `0.1.13-diag1`, refuses to overwrite an existing
 diagnostic version, and preserves the `.13` source and built module for
-rollback. It is restricted to the reviewed `7.0.0-34-generic` kernel and source
-version.
+rollback. It carries both existing video fixes (GK104 non-privileged legacy
+contexts and the experimental legacy nonstall event index) alongside the
+observational trace. It is restricted to the reviewed `7.0.0-34-generic`
+kernel and source version.
 
 ## Install and verify
 
