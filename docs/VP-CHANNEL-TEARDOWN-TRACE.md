@@ -106,6 +106,26 @@ requiring a second post-kill timeout: the approximately 10.648 seconds from
 channel-5 kill to channel-4 idle error are the remaining portion of the same
 VP channel-free interval.
 
+There is a further distinction between the channel being recovered and the
+engine that first reported the context-switch timeout. In Linux v7.0,
+`gf100_fifo_intr_sched_ctxsw()` scans engine context-switch status and builds
+an engine mask, then passes that mask to the runlist recovery callback. The
+recovery code looks up active channel/group IDs on affected runlists and logs
+the channel it recovers. That log identifies the recovered context; it does
+not print which engine set the original timeout bit. Thus, even if the new
+Mesa identity record maps chid 5 to the VP slot, that would identify the VP
+channel whose context was recovered, but would not alone prove that VP was the
+engine that initiated `CTXSW_TIMEOUT` if multiple engine contexts share that
+channel context. See the upstream v7.0 [GK104 FIFO interrupt handler](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c#L651-L690)
+and [GF100 FIFO timeout/recovery path](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c#L618-L691).
+
+The prepared function-graph trace measures how long the timeout handler and
+channel-free path run; it does not capture the engine mask's contents. If
+mapping chid 5 to a Mesa slot still leaves the initiating engine ambiguous,
+the next diagnostic should be a narrowly scoped, log-only record at the
+`engm` collection point containing runlist ID and each engine's ID/type and
+context ID before recovery. It must not change recovery behavior.
+
 ## Channel 5 and patch 2
 
 The channel-5 kill occurs while the VP-channel-free ioctl is waiting, but the
