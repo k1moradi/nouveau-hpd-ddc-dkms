@@ -519,6 +519,14 @@ runtime trace has not yet been positively exercised on hardware. A functional
 change should wait until a specific emitted method/state and the expected
 correct dimensions are proven.
 
+The later timestamped private-instrumented capture did positively exercise the
+clear callback and exposed a generic `pipe_surface` / Nouveau-private
+`nv50_surface` layout mismatch. The exact source/runtime correlation, full
+monotonic event timeline, and a standalone Mesa candidate are documented in
+[`VA-SURFACE-CLEAR-CANDIDATE.md`](VA-SURFACE-CLEAR-CANDIDATE.md). The PGRAPH
+clear defect is now source-proven; its relationship to the observed PROP
+overruns is strongly supported but still needs a private Mesa hardware A/B.
+
 The legacy-video fix details remain in
 [`VP5-VIDEO-DECODE.md`](VP5-VIDEO-DECODE.md); the nonstall build experiment is
 in [`LEGACY-FIFO-NONSTALL-EXPERIMENT.md`](LEGACY-FIFO-NONSTALL-EXPERIMENT.md).

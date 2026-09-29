@@ -1,0 +1,352 @@
+mono_seconds	since_ffmpeg_start_s	relative_to_ffmpeg_exit_s	source	event	details
+387.033178508	+0.000000000	-49.960562209	harness	FFMPEG_START	-
+388.891809532	+1.858631024	-48.101931185	mesa	hook-active	hook=active point=nvc0_init_surface_functions pipe=<address> clear_callback=<address>
+389.417257228	+2.384078720	-47.576483489	mesa	allocate-entry	phase=allocate-entry width=1920 height=1088 format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) interlaced=1 bind=0x0 modifiers=0 clear_callback=<address>
+389.417579563	+2.384401055	-47.576161154	mesa	video-buffer	phase=video-buffer result=ok format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) width=1920 height=1088 interlaced=1
+389.417584012	+2.384405504	-47.576156705	mesa	skip-clear	phase=skip-clear capability=12 value=0
+389.417585466	+2.384406958	-47.576155251	mesa	planes	phase=planes count=4 slots=6 buffer_interlaced=1
+389.417586771	+2.384408263	-47.576153946	mesa	clear-decision	phase=clear-decision first_texture=1 plane_count=4
+389.417588510	+2.384410002	-47.576152207	mesa	plane	phase=plane index=0 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.417592149	+2.384413641	-47.576148568	mesa	clear-before	phase=clear-before plane=0 callback=<address> rect=0,0 1920x544
+389.417595153	+2.384416645	-47.576145564	mesa	RT_CLEAR	format=81 rt_format=f3 rt=81x1 clear=0,0 layers=0..0
+389.417599877	+2.384421369	-47.576140840	mesa	clear-after	phase=clear-after plane=0 callback=<address> returned=void
+389.417601167	+2.384422659	-47.576139550	mesa	plane	phase=plane index=1 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.417604401	+2.384425893	-47.576136316	mesa	clear-before	phase=clear-before plane=1 callback=<address> rect=0,0 1920x544
+389.417606265	+2.384427757	-47.576134452	mesa	RT_CLEAR	format=81 rt_format=f3 rt=82x0 clear=0,0 layers=1..1
+389.417608474	+2.384429966	-47.576132243	mesa	clear-after	phase=clear-after plane=1 callback=<address> returned=void
+389.417609724	+2.384431216	-47.576130993	mesa	plane	phase=plane index=2 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.417612943	+2.384434435	-47.576127774	mesa	clear-before	phase=clear-before plane=2 callback=<address> rect=0,0 960x272
+389.417614672	+2.384436164	-47.576126045	mesa	RT_CLEAR	format=82 rt_format=ea rt=82x1 clear=0,0 layers=0..0
+389.417616732	+2.384438224	-47.576123985	mesa	clear-after	phase=clear-after plane=2 callback=<address> returned=void
+389.417617991	+2.384439483	-47.576122726	mesa	plane	phase=plane index=3 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.417621110	+2.384442602	-47.576119607	mesa	clear-before	phase=clear-before plane=3 callback=<address> rect=0,0 960x272
+389.417622815	+2.384444307	-47.576117902	mesa	RT_CLEAR	format=82 rt_format=ea rt=0x0 clear=0,0 layers=1..1
+389.417624894	+2.384446386	-47.576115823	mesa	clear-after	phase=clear-after plane=3 callback=<address> returned=void
+389.419057000	+2.385878492	-47.574683717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.419832000	+2.386653492	-47.573908717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+389.420304000	+2.387125492	-47.573436717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+389.420679000	+2.387500492	-47.573061717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+389.421682000	+2.388503492	-47.572058717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+389.422159000	+2.388980492	-47.571581717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.422537000	+2.389358492	-47.571203717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1824, y = 464, format = 37, storage type = 0
+389.422873000	+2.389694492	-47.570867717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 288, y = 272, format = 37, storage type = 0
+389.423277000	+2.390098492	-47.570463717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1584, y = 336, format = 37, storage type = 0
+389.423616000	+2.390437492	-47.570124717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 768, y = 384, format = 37, storage type = 0
+389.423951000	+2.390772492	-47.569789717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.424352000	+2.391173492	-47.569388717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 256, y = 256, format = 2e, storage type = 0
+389.438616322	+2.405437814	-47.555124395	mesa	allocate-entry	phase=allocate-entry width=1920 height=1088 format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) interlaced=1 bind=0x0 modifiers=0 clear_callback=<address>
+389.438860691	+2.405682183	-47.554880026	mesa	video-buffer	phase=video-buffer result=ok format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) width=1920 height=1088 interlaced=1
+389.438865759	+2.405687251	-47.554874958	mesa	skip-clear	phase=skip-clear capability=12 value=0
+389.438867224	+2.405688716	-47.554873493	mesa	planes	phase=planes count=4 slots=6 buffer_interlaced=1
+389.438868508	+2.405690000	-47.554872209	mesa	clear-decision	phase=clear-decision first_texture=1 plane_count=4
+389.438870363	+2.405691855	-47.554870354	mesa	plane	phase=plane index=0 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.438874092	+2.405695584	-47.554866625	mesa	clear-before	phase=clear-before plane=0 callback=<address> rect=0,0 1920x544
+389.438877281	+2.405698773	-47.554863436	mesa	RT_CLEAR	format=81 rt_format=f3 rt=81x1 clear=0,0 layers=0..0
+389.438883649	+2.405705141	-47.554857068	mesa	clear-after	phase=clear-after plane=0 callback=<address> returned=void
+389.438884963	+2.405706455	-47.554855754	mesa	plane	phase=plane index=1 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.438888232	+2.405709724	-47.554852485	mesa	clear-before	phase=clear-before plane=1 callback=<address> rect=0,0 1920x544
+389.438890052	+2.405711544	-47.554850665	mesa	RT_CLEAR	format=81 rt_format=f3 rt=82x0 clear=0,0 layers=1..1
+389.438892241	+2.405713733	-47.554848476	mesa	clear-after	phase=clear-after plane=1 callback=<address> returned=void
+389.438893536	+2.405715028	-47.554847181	mesa	plane	phase=plane index=2 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.438896865	+2.405718357	-47.554843852	mesa	clear-before	phase=clear-before plane=2 callback=<address> rect=0,0 960x272
+389.438898654	+2.405720146	-47.554842063	mesa	RT_CLEAR	format=82 rt_format=ea rt=82x1 clear=0,0 layers=0..0
+389.438900823	+2.405722315	-47.554839894	mesa	clear-after	phase=clear-after plane=2 callback=<address> returned=void
+389.438902123	+2.405723615	-47.554838594	mesa	plane	phase=plane index=3 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.438905372	+2.405726864	-47.554835345	mesa	clear-before	phase=clear-before plane=3 callback=<address> rect=0,0 960x272
+389.438907066	+2.405728558	-47.554833651	mesa	RT_CLEAR	format=82 rt_format=ea rt=0x0 clear=0,0 layers=1..1
+389.438909146	+2.405730638	-47.554831571	mesa	clear-after	phase=clear-after plane=3 callback=<address> returned=void
+389.440228000	+2.407049492	-47.553512717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.440776000	+2.407597492	-47.552964717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+389.441169000	+2.407990492	-47.552571717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+389.441563000	+2.408384492	-47.552177717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+389.441567221	+2.408388713	-47.552173496	mesa	allocate-entry	phase=allocate-entry width=1920 height=1088 format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) interlaced=1 bind=0x0 modifiers=0 clear_callback=<address>
+389.442148491	+2.408969983	-47.551592226	mesa	video-buffer	phase=video-buffer result=ok format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) width=1920 height=1088 interlaced=1
+389.442171084	+2.408992576	-47.551569633	mesa	skip-clear	phase=skip-clear capability=12 value=0
+389.442172968	+2.408994460	-47.551567749	mesa	planes	phase=planes count=4 slots=6 buffer_interlaced=1
+389.442174288	+2.408995780	-47.551566429	mesa	clear-decision	phase=clear-decision first_texture=1 plane_count=4
+389.442175987	+2.408997479	-47.551564730	mesa	plane	phase=plane index=0 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.442179801	+2.409001293	-47.551560916	mesa	clear-before	phase=clear-before plane=0 callback=<address> rect=0,0 1920x544
+389.442185244	+2.409006736	-47.551555473	mesa	RT_CLEAR	format=81 rt_format=f3 rt=81x1 clear=0,0 layers=0..0
+389.442190013	+2.409011505	-47.551550704	mesa	clear-after	phase=clear-after plane=0 callback=<address> returned=void
+389.442194077	+2.409015569	-47.551546640	mesa	plane	phase=plane index=1 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.442197430	+2.409018922	-47.551543287	mesa	clear-before	phase=clear-before plane=1 callback=<address> rect=0,0 1920x544
+389.442199335	+2.409020827	-47.551541382	mesa	RT_CLEAR	format=81 rt_format=f3 rt=82x0 clear=0,0 layers=1..1
+389.442201549	+2.409023041	-47.551539168	mesa	clear-after	phase=clear-after plane=1 callback=<address> returned=void
+389.442202854	+2.409024346	-47.551537863	mesa	plane	phase=plane index=2 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.442206113	+2.409027605	-47.551534604	mesa	clear-before	phase=clear-before plane=2 callback=<address> rect=0,0 960x272
+389.442207887	+2.409029379	-47.551532830	mesa	RT_CLEAR	format=82 rt_format=ea rt=82x1 clear=0,0 layers=0..0
+389.442210087	+2.409031579	-47.551530630	mesa	clear-after	phase=clear-after plane=2 callback=<address> returned=void
+389.442211356	+2.409032848	-47.551529361	mesa	plane	phase=plane index=3 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.442214525	+2.409036017	-47.551526192	mesa	clear-before	phase=clear-before plane=3 callback=<address> rect=0,0 960x272
+389.442216235	+2.409037727	-47.551524482	mesa	RT_CLEAR	format=82 rt_format=ea rt=0x0 clear=0,0 layers=1..1
+389.442218279	+2.409039771	-47.551522438	mesa	clear-after	phase=clear-after plane=3 callback=<address> returned=void
+389.442589000	+2.409410492	-47.551151717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+389.442989000	+2.409810492	-47.550751717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.443350000	+2.410171492	-47.550390717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+389.443680000	+2.410501492	-47.550060717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 480, y = 416, format = 37, storage type = 0
+389.444027000	+2.410848492	-47.549713717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 784, y = 464, format = 37, storage type = 0
+389.444359000	+2.411180492	-47.549381717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1648, y = 512, format = 37, storage type = 0
+389.444685000	+2.411506492	-47.549055717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.445020000	+2.411841492	-47.548720717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+389.445374000	+2.412195492	-47.548366717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+389.445696000	+2.412517492	-47.548044717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+389.446016000	+2.412837492	-47.547724717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+389.446331000	+2.413152492	-47.547409717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.446650000	+2.413471492	-47.547090717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 256, y = 464, format = 37, storage type = 0
+389.446979000	+2.413800492	-47.546761717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 496, y = 288, format = 37, storage type = 0
+389.447338000	+2.414159492	-47.546402717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 800, y = 336, format = 37, storage type = 0
+389.447702000	+2.414523492	-47.546038717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1776, y = 384, format = 37, storage type = 0
+389.448089000	+2.414910492	-47.545651717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.448423009	+2.415244501	-47.545317708	mesa	allocate-entry	phase=allocate-entry width=1920 height=1088 format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) interlaced=1 bind=0x0 modifiers=0 clear_callback=<address>
+389.448609336	+2.415430828	-47.545131381	mesa	video-buffer	phase=video-buffer result=ok format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) width=1920 height=1088 interlaced=1
+389.448619798	+2.415441290	-47.545120919	mesa	skip-clear	phase=skip-clear capability=12 value=0
+389.448621427	+2.415442919	-47.545119290	mesa	planes	phase=planes count=4 slots=6 buffer_interlaced=1
+389.448622752	+2.415444244	-47.545117965	mesa	clear-decision	phase=clear-decision first_texture=1 plane_count=4
+389.448624751	+2.415446243	-47.545115966	mesa	plane	phase=plane index=0 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.448628445	+2.415449937	-47.545112272	mesa	clear-before	phase=clear-before plane=0 callback=<address> rect=0,0 1920x544
+389.448631664	+2.415453156	-47.545109053	mesa	RT_CLEAR	format=81 rt_format=f3 rt=81x1 clear=0,0 layers=0..0
+389.448638612	+2.415460104	-47.545102105	mesa	clear-after	phase=clear-after plane=0 callback=<address> returned=void
+389.448640072	+2.415461564	-47.545100645	mesa	plane	phase=plane index=1 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.448644945	+2.415466437	-47.545095772	mesa	clear-before	phase=clear-before plane=1 callback=<address> rect=0,0 1920x544
+389.448648379	+2.415469871	-47.545092338	mesa	RT_CLEAR	format=81 rt_format=f3 rt=82x0 clear=0,0 layers=1..1
+389.448650648	+2.415472140	-47.545090069	mesa	clear-after	phase=clear-after plane=1 callback=<address> returned=void
+389.448653468	+2.415474960	-47.545087249	mesa	plane	phase=plane index=2 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.448658591	+2.415480083	-47.545082126	mesa	clear-before	phase=clear-before plane=2 callback=<address> rect=0,0 960x272
+389.448662145	+2.415483637	-47.545078572	mesa	RT_CLEAR	format=82 rt_format=ea rt=82x1 clear=0,0 layers=0..0
+389.448664419	+2.415485911	-47.545076298	mesa	clear-after	phase=clear-after plane=2 callback=<address> returned=void
+389.448667563	+2.415489055	-47.545073154	mesa	plane	phase=plane index=3 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.448672342	+2.415493834	-47.545068375	mesa	clear-before	phase=clear-before plane=3 callback=<address> rect=0,0 960x272
+389.448676081	+2.415497573	-47.545064636	mesa	RT_CLEAR	format=82 rt_format=ea rt=0x0 clear=0,0 layers=1..1
+389.448680364	+2.415501856	-47.545060353	mesa	clear-after	phase=clear-after plane=3 callback=<address> returned=void
+389.449230000	+2.416051492	-47.544510717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+389.449676000	+2.416497492	-47.544064717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 944, y = 64, format = 2e, storage type = 0
+389.450039000	+2.416860492	-47.543701717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 256, y = 160, format = 2e, storage type = 0
+389.450409000	+2.417230492	-47.543331717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.451113000	+2.417934492	-47.542627717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+389.451471000	+2.418292492	-47.542269717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+389.451787000	+2.418608492	-47.541953717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+389.452170000	+2.418991492	-47.541570717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+389.452494000	+2.419315492	-47.541246717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.452817000	+2.419638492	-47.540923717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 608, y = 0, format = 2e, storage type = 0
+389.453151000	+2.419972492	-47.540589717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1200, y = 320, format = 37, storage type = 0
+389.453587000	+2.420408492	-47.540153717	kernel	PROP_TRAP	00000020 [RT_HEIGHT_OVERRUN] x = 32, y = 384, format = 37, storage type = 0
+389.453913000	+2.420734492	-47.539827717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1008, y = 432, format = 37, storage type = 0
+389.454263000	+2.421084492	-47.539477717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.454581000	+2.421402492	-47.539159717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 528, y = 256, format = 2e, storage type = 0
+389.458498248	+2.425319740	-47.535242469	mesa	allocate-entry	phase=allocate-entry width=1920 height=1088 format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) interlaced=1 bind=0x0 modifiers=0 clear_callback=<address>
+389.458708338	+2.425529830	-47.535032379	mesa	video-buffer	phase=video-buffer result=ok format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) width=1920 height=1088 interlaced=1
+389.458712572	+2.425534064	-47.535028145	mesa	skip-clear	phase=skip-clear capability=12 value=0
+389.458714216	+2.425535708	-47.535026501	mesa	planes	phase=planes count=4 slots=6 buffer_interlaced=1
+389.458715541	+2.425537033	-47.535025176	mesa	clear-decision	phase=clear-decision first_texture=1 plane_count=4
+389.458717390	+2.425538882	-47.535023327	mesa	plane	phase=plane index=0 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.458720919	+2.425542411	-47.535019798	mesa	clear-before	phase=clear-before plane=0 callback=<address> rect=0,0 1920x544
+389.458724128	+2.425545620	-47.535016589	mesa	RT_CLEAR	format=81 rt_format=f3 rt=81x1 clear=0,0 layers=0..0
+389.458728772	+2.425550264	-47.535011945	mesa	clear-after	phase=clear-after plane=0 callback=<address> returned=void
+389.458730096	+2.425551588	-47.535010621	mesa	plane	phase=plane index=1 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.458733340	+2.425554832	-47.535007377	mesa	clear-before	phase=clear-before plane=1 callback=<address> rect=0,0 1920x544
+389.458735165	+2.425556657	-47.535005552	mesa	RT_CLEAR	format=81 rt_format=f3 rt=82x0 clear=0,0 layers=1..1
+389.458737334	+2.425558826	-47.535003383	mesa	clear-after	phase=clear-after plane=1 callback=<address> returned=void
+389.458738599	+2.425560091	-47.535002118	mesa	plane	phase=plane index=2 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.458741833	+2.425563325	-47.534998884	mesa	clear-before	phase=clear-before plane=2 callback=<address> rect=0,0 960x272
+389.458743597	+2.425565089	-47.534997120	mesa	RT_CLEAR	format=82 rt_format=ea rt=82x1 clear=0,0 layers=0..0
+389.458745841	+2.425567333	-47.534994876	mesa	clear-after	phase=clear-after plane=2 callback=<address> returned=void
+389.458747111	+2.425568603	-47.534993606	mesa	plane	phase=plane index=3 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.458750320	+2.425571812	-47.534990397	mesa	clear-before	phase=clear-before plane=3 callback=<address> rect=0,0 960x272
+389.458752030	+2.425573522	-47.534988687	mesa	RT_CLEAR	format=82 rt_format=ea rt=0x0 clear=0,0 layers=1..1
+389.458754064	+2.425575556	-47.534986653	mesa	clear-after	phase=clear-after plane=3 callback=<address> returned=void
+389.459106000	+2.425927492	-47.534634717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.459760000	+2.426581492	-47.533980717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+389.460101000	+2.426922492	-47.533639717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+389.460419000	+2.427240492	-47.533321717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+389.460732000	+2.427553492	-47.533008717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+389.461205000	+2.428026492	-47.532535717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.462779000	+2.429600492	-47.530961717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 592, y = 464, format = 37, storage type = 0
+389.463135000	+2.429956492	-47.530605717	kernel	PROP_TRAP	00000020 [RT_HEIGHT_OVERRUN] x = 48, y = 288, format = 37, storage type = 0
+389.463454000	+2.430275492	-47.530286717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1424, y = 336, format = 37, storage type = 0
+389.463997000	+2.430818492	-47.529743717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 768, y = 384, format = 37, storage type = 0
+389.464336000	+2.431157492	-47.529404717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.464654000	+2.431475492	-47.529086717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+389.465097000	+2.431918492	-47.528643717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 720, y = 16, format = 2e, storage type = 0
+389.465456000	+2.432277492	-47.528284717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 176, y = 128, format = 2e, storage type = 0
+389.465938000	+2.432759492	-47.527802717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 704, y = 224, format = 2e, storage type = 0
+389.473815661	+2.440637153	-47.519925056	mesa	allocate-entry	phase=allocate-entry width=1920 height=1088 format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) interlaced=1 bind=0x0 modifiers=0 clear_callback=<address>
+389.474061480	+2.440882972	-47.519679237	mesa	video-buffer	phase=video-buffer result=ok format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) width=1920 height=1088 interlaced=1
+389.474069572	+2.440891064	-47.519671145	mesa	skip-clear	phase=skip-clear capability=12 value=0
+389.474071552	+2.440893044	-47.519669165	mesa	planes	phase=planes count=4 slots=6 buffer_interlaced=1
+389.474072841	+2.440894333	-47.519667876	mesa	clear-decision	phase=clear-decision first_texture=1 plane_count=4
+389.474074801	+2.440896293	-47.519665916	mesa	plane	phase=plane index=0 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.474078470	+2.440899962	-47.519662247	mesa	clear-before	phase=clear-before plane=0 callback=<address> rect=0,0 1920x544
+389.474082448	+2.440903940	-47.519658269	mesa	RT_CLEAR	format=81 rt_format=f3 rt=81x1 clear=0,0 layers=0..0
+389.474089606	+2.440911098	-47.519651111	mesa	clear-after	phase=clear-after plane=0 callback=<address> returned=void
+389.474090921	+2.440912413	-47.519649796	mesa	plane	phase=plane index=1 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.474094190	+2.440915682	-47.519646527	mesa	clear-before	phase=clear-before plane=1 callback=<address> rect=0,0 1920x544
+389.474096024	+2.440917516	-47.519644693	mesa	RT_CLEAR	format=81 rt_format=f3 rt=82x0 clear=0,0 layers=1..1
+389.474098194	+2.440919686	-47.519642523	mesa	clear-after	phase=clear-after plane=1 callback=<address> returned=void
+389.474099473	+2.440920965	-47.519641244	mesa	plane	phase=plane index=2 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.474102717	+2.440924209	-47.519638000	mesa	clear-before	phase=clear-before plane=2 callback=<address> rect=0,0 960x272
+389.474104442	+2.440925934	-47.519636275	mesa	RT_CLEAR	format=82 rt_format=ea rt=82x1 clear=0,0 layers=0..0
+389.474106586	+2.440928078	-47.519634131	mesa	clear-after	phase=clear-after plane=2 callback=<address> returned=void
+389.474107891	+2.440929383	-47.519632826	mesa	plane	phase=plane index=3 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.474111055	+2.440932547	-47.519629662	mesa	clear-before	phase=clear-before plane=3 callback=<address> rect=0,0 960x272
+389.474112749	+2.440934241	-47.519627968	mesa	RT_CLEAR	format=82 rt_format=ea rt=0x0 clear=0,0 layers=1..1
+389.474114858	+2.440936350	-47.519625859	mesa	clear-after	phase=clear-after plane=3 callback=<address> returned=void
+389.475042000	+2.441863492	-47.518698717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.475609000	+2.442430492	-47.518131717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+389.475945000	+2.442766492	-47.517795717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+389.476333000	+2.443154492	-47.517407717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+389.476649000	+2.443470492	-47.517091717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+389.477091000	+2.443912492	-47.516649717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.477418000	+2.444239492	-47.516322717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+389.477733000	+2.444554492	-47.516007717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 528, y = 368, format = 37, storage type = 0
+389.478068000	+2.444889492	-47.515672717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1664, y = 432, format = 37, storage type = 0
+389.478398000	+2.445219492	-47.515342717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1120, y = 480, format = 37, storage type = 0
+389.504553170	+2.471374662	-47.489187547	mesa	allocate-entry	phase=allocate-entry width=1920 height=1088 format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) interlaced=1 bind=0x0 modifiers=0 clear_callback=<address>
+389.504747824	+2.471569316	-47.488992893	mesa	video-buffer	phase=video-buffer result=ok format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) width=1920 height=1088 interlaced=1
+389.504751983	+2.471573475	-47.488988734	mesa	skip-clear	phase=skip-clear capability=12 value=0
+389.504753398	+2.471574890	-47.488987319	mesa	planes	phase=planes count=4 slots=6 buffer_interlaced=1
+389.504754697	+2.471576189	-47.488986020	mesa	clear-decision	phase=clear-decision first_texture=1 plane_count=4
+389.504756687	+2.471578179	-47.488984030	mesa	plane	phase=plane index=0 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.504760336	+2.471581828	-47.488980381	mesa	clear-before	phase=clear-before plane=0 callback=<address> rect=0,0 1920x544
+389.504764044	+2.471585536	-47.488976673	mesa	RT_CLEAR	format=81 rt_format=f3 rt=81x1 clear=0,0 layers=0..0
+389.504773322	+2.471594814	-47.488967395	mesa	clear-after	phase=clear-after plane=0 callback=<address> returned=void
+389.504774696	+2.471596188	-47.488966021	mesa	plane	phase=plane index=1 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.504778050	+2.471599542	-47.488962667	mesa	clear-before	phase=clear-before plane=1 callback=<address> rect=0,0 1920x544
+389.504779900	+2.471601392	-47.488960817	mesa	RT_CLEAR	format=81 rt_format=f3 rt=82x0 clear=0,0 layers=1..1
+389.504782104	+2.471603596	-47.488958613	mesa	clear-after	phase=clear-after plane=1 callback=<address> returned=void
+389.504783373	+2.471604865	-47.488957344	mesa	plane	phase=plane index=2 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.504786527	+2.471608019	-47.488954190	mesa	clear-before	phase=clear-before plane=2 callback=<address> rect=0,0 960x272
+389.504788272	+2.471609764	-47.488952445	mesa	RT_CLEAR	format=82 rt_format=ea rt=82x1 clear=0,0 layers=0..0
+389.504790486	+2.471611978	-47.488950231	mesa	clear-after	phase=clear-after plane=2 callback=<address> returned=void
+389.504798639	+2.471620131	-47.488942078	mesa	plane	phase=plane index=3 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.504802058	+2.471623550	-47.488938659	mesa	clear-before	phase=clear-before plane=3 callback=<address> rect=0,0 960x272
+389.504803957	+2.471625449	-47.488936760	mesa	RT_CLEAR	format=82 rt_format=ea rt=0x0 clear=0,0 layers=1..1
+389.504806121	+2.471627613	-47.488934596	mesa	clear-after	phase=clear-after plane=3 callback=<address> returned=void
+389.505124000	+2.471945492	-47.488616717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.505685000	+2.472506492	-47.488055717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+389.506040000	+2.472861492	-47.487700717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+389.506369000	+2.473190492	-47.487371717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+389.506720000	+2.473541492	-47.487020717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+389.507191000	+2.474012492	-47.486549717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.507593000	+2.474414492	-47.486147717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+389.508042000	+2.474863492	-47.485698717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 176, y = 384, format = 37, storage type = 0
+389.508463000	+2.475284492	-47.485277717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1040, y = 432, format = 37, storage type = 0
+389.508824000	+2.475645492	-47.484916717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1296, y = 480, format = 37, storage type = 0
+389.563101945	+2.529923437	-47.430638772	mesa	allocate-entry	phase=allocate-entry width=1920 height=1088 format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) interlaced=1 bind=0x0 modifiers=0 clear_callback=<address>
+389.563863259	+2.530684751	-47.429877458	mesa	video-buffer	phase=video-buffer result=ok format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) width=1920 height=1088 interlaced=1
+389.563879974	+2.530701466	-47.429860743	mesa	skip-clear	phase=skip-clear capability=12 value=0
+389.563883877	+2.530705369	-47.429856840	mesa	planes	phase=planes count=4 slots=6 buffer_interlaced=1
+389.563890246	+2.530711738	-47.429850471	mesa	clear-decision	phase=clear-decision first_texture=1 plane_count=4
+389.563894009	+2.530715501	-47.429846708	mesa	plane	phase=plane index=0 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.563905261	+2.530726753	-47.429835456	mesa	clear-before	phase=clear-before plane=0 callback=<address> rect=0,0 1920x544
+389.563913513	+2.530735005	-47.429827204	mesa	RT_CLEAR	format=81 rt_format=f3 rt=81x1 clear=0,0 layers=0..0
+389.563924575	+2.530746067	-47.429816142	mesa	clear-after	phase=clear-after plane=0 callback=<address> returned=void
+389.563930583	+2.530752075	-47.429810134	mesa	plane	phase=plane index=1 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+389.563941270	+2.530762762	-47.429799447	mesa	clear-before	phase=clear-before plane=1 callback=<address> rect=0,0 1920x544
+389.563946228	+2.530767720	-47.429794489	mesa	RT_CLEAR	format=81 rt_format=f3 rt=82x0 clear=0,0 layers=1..1
+389.563954381	+2.530775873	-47.429786336	mesa	clear-after	phase=clear-after plane=1 callback=<address> returned=void
+389.563957855	+2.530779347	-47.429782862	mesa	plane	phase=plane index=2 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.563968281	+2.530789773	-47.429772436	mesa	clear-before	phase=clear-before plane=2 callback=<address> rect=0,0 960x272
+389.563975339	+2.530796831	-47.429765378	mesa	RT_CLEAR	format=82 rt_format=ea rt=82x1 clear=0,0 layers=0..0
+389.563981217	+2.530802709	-47.429759500	mesa	clear-after	phase=clear-after plane=2 callback=<address> returned=void
+389.563986921	+2.530808413	-47.429753796	mesa	plane	phase=plane index=3 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+389.563997237	+2.530818729	-47.429743480	mesa	clear-before	phase=clear-before plane=3 callback=<address> rect=0,0 960x272
+389.564019735	+2.530841227	-47.429720982	mesa	RT_CLEAR	format=82 rt_format=ea rt=0x0 clear=0,0 layers=1..1
+389.564029647	+2.530851139	-47.429711070	mesa	clear-after	phase=clear-after plane=3 callback=<address> returned=void
+389.565041000	+2.531862492	-47.428699717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.566045000	+2.532866492	-47.427695717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+389.566838000	+2.533659492	-47.426902717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+389.567813000	+2.534634492	-47.425927717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+389.568661000	+2.535482492	-47.425079717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+389.569461000	+2.536282492	-47.424279717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+389.570381000	+2.537202492	-47.423359717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+389.571296000	+2.538117492	-47.422444717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1824, y = 368, format = 37, storage type = 0
+389.572188000	+2.539009492	-47.421552717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 144, y = 432, format = 37, storage type = 0
+389.573072000	+2.539893492	-47.420668717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1424, y = 512, format = 37, storage type = 0
+428.209104624	+41.175926116	-8.784636093	mesa	allocate-entry	phase=allocate-entry width=1920 height=1088 format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) interlaced=1 bind=0x0 modifiers=0 clear_callback=<address>
+428.209772957	+41.176594449	-8.783967760	mesa	video-buffer	phase=video-buffer result=ok format=PIPE_FORMAT_Y8_U8V8_420_UNORM(134) width=1920 height=1088 interlaced=1
+428.209784788	+41.176606280	-8.783955929	mesa	skip-clear	phase=skip-clear capability=12 value=0
+428.209788547	+41.176610039	-8.783952170	mesa	planes	phase=planes count=4 slots=6 buffer_interlaced=1
+428.209791796	+41.176613288	-8.783948921	mesa	clear-decision	phase=clear-decision first_texture=1 plane_count=4
+428.209795400	+41.176616892	-8.783945317	mesa	plane	phase=plane index=0 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+428.209804102	+41.176625594	-8.783936615	mesa	clear-before	phase=clear-before plane=0 callback=<address> rect=0,0 1920x544
+428.209811705	+41.176633197	-8.783929012	mesa	RT_CLEAR	format=81 rt_format=f3 rt=81x1 clear=0,0 layers=0..0
+428.209820167	+41.176641659	-8.783920550	mesa	clear-after	phase=clear-after plane=0 callback=<address> returned=void
+428.209823386	+41.176644878	-8.783917331	mesa	plane	phase=plane index=1 surface_format=PIPE_FORMAT_R8_UNORM(81) surface_size=1920x544 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8_UNORM(81) target=7 resource_size=1920x544x1 array_size=2 resource_bind=0xa
+428.209831569	+41.176653061	-8.783909148	mesa	clear-before	phase=clear-before plane=1 callback=<address> rect=0,0 1920x544
+428.209836062	+41.176657554	-8.783904655	mesa	RT_CLEAR	format=81 rt_format=f3 rt=82x0 clear=0,0 layers=1..1
+428.209841485	+41.176662977	-8.783899232	mesa	clear-after	phase=clear-after plane=1 callback=<address> returned=void
+428.209844625	+41.176666117	-8.783896092	mesa	plane	phase=plane index=2 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=0..0 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+428.209852667	+41.176674159	-8.783888050	mesa	clear-before	phase=clear-before plane=2 callback=<address> rect=0,0 960x272
+428.209856991	+41.176678483	-8.783883726	mesa	RT_CLEAR	format=82 rt_format=ea rt=82x1 clear=0,0 layers=0..0
+428.209862234	+41.176683726	-8.783878483	mesa	clear-after	phase=clear-after plane=2 callback=<address> returned=void
+428.209865408	+41.176686900	-8.783875309	mesa	plane	phase=plane index=3 surface_format=PIPE_FORMAT_R8G8_UNORM(82) surface_size=960x272 level=0 layers=1..1 resource_format=PIPE_FORMAT_R8G8_UNORM(82) target=7 resource_size=960x272x1 array_size=2 resource_bind=0xa
+428.209873321	+41.176694813	-8.783867396	mesa	clear-before	phase=clear-before plane=3 callback=<address> rect=0,0 960x272
+428.209877654	+41.176699146	-8.783863063	mesa	RT_CLEAR	format=82 rt_format=ea rt=0x0 clear=0,0 layers=1..1
+428.209882813	+41.176704305	-8.783857904	mesa	clear-after	phase=clear-after plane=3 callback=<address> returned=void
+428.211045000	+41.177866492	-8.782695717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+428.212197000	+41.179018492	-8.781543717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+428.213056000	+41.179877492	-8.780684717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+428.213865000	+41.180686492	-8.779875717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+428.214714000	+41.181535492	-8.779026717	kernel	PROP_TRAP	00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+428.215545000	+41.182366492	-8.778195717	kernel	GR_TRAP	chid=4 client=ffmpeg[2086]
+428.216404000	+41.183225492	-8.777336717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+428.217257000	+41.184078492	-8.776483717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 928, y = 368, format = 37, storage type = 0
+428.218111000	+41.184932492	-8.775629717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1248, y = 448, format = 37, storage type = 0
+428.218923000	+41.185744492	-8.774817717	kernel	PROP_TRAP	00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1632, y = 528, format = 37, storage type = 0
+428.253876999	+41.220698491	-8.739863718	mesa	va-context-destroy	phase=va-context-destroy stage=entry id=3 profile=11 entrypoint=1 size=1920x1088
+428.253906194	+41.220727686	-8.739834523	mesa	va-context-destroy	phase=va-context-destroy stage=decoder-before id=3
+428.253917646	+41.220739138	-8.739823071	mesa	decoder-destroy	phase=decoder-destroy stage=entry profile=11 entrypoint=1 size=1920x1088 fence_seq=3007 shared=0
+428.254200243	+41.221021735	-8.739540474	mesa	object-destroy	phase=object-destroy stage=begin engine=bsp
+428.254525442	+41.221346934	-8.739215275	mesa	object-destroy	phase=object-destroy stage=end engine=bsp
+428.254552904	+41.221374396	-8.739187813	mesa	object-destroy	phase=object-destroy stage=begin engine=vp
+428.254763009	+41.221584501	-8.738977708	mesa	object-destroy	phase=object-destroy stage=end engine=vp
+428.254866866	+41.221688358	-8.738873851	mesa	object-destroy	phase=object-destroy stage=begin engine=ppp
+428.256226974	+41.223048466	-8.737513743	mesa	object-destroy	phase=object-destroy stage=end engine=ppp
+428.256244529	+41.223066021	-8.737496188	mesa	channel-destroy	phase=channel-destroy stage=pushbuf-begin index=0 engine=bsp
+428.256650698	+41.223472190	-8.737090019	mesa	channel-destroy	phase=channel-destroy stage=pushbuf-end index=0 engine=bsp
+428.256668233	+41.223489725	-8.737072484	mesa	channel-destroy	phase=channel-destroy stage=object-begin index=0 engine=bsp
+428.264176163	+41.230997655	-8.729564554	mesa	channel-destroy	phase=channel-destroy stage=object-end index=0 engine=bsp
+428.264194088	+41.231015580	-8.729546629	mesa	channel-destroy	phase=channel-destroy stage=pushbuf-begin index=1 engine=vp
+428.264448544	+41.231270036	-8.729292173	mesa	channel-destroy	phase=channel-destroy stage=pushbuf-end index=1 engine=vp
+428.264473491	+41.231294983	-8.729267226	mesa	channel-destroy	phase=channel-destroy stage=object-begin index=1 engine=vp
+432.552107000	+45.518928492	-4.441633717	kernel	SCHED_ERROR	SCHED_ERROR 0a [CTXSW_TIMEOUT]
+432.552628000	+45.519449492	-4.441112717	kernel	RC_SCHEDULED	nouveau 0000:01:00.0: fifo:000001:0006:[av:h264:df0[2090]] rc scheduled
+432.552957000	+45.519778492	-4.440783717	kernel	RC_SCHEDULED	runlist=000001
+432.553318000	+45.520139492	-4.440422717	kernel	CHANNEL_DISABLE	nouveau 0000:01:00.0: fifo:000001:0006:0006:[av:h264:df0[2090]] errored - disabling channel
+432.553666000	+45.520487492	-4.440074717	kernel	CHANNEL_KILLED	chid=6
+432.558199107	+45.525020599	-4.435541610	mesa	channel-destroy	phase=channel-destroy stage=object-end index=1 engine=vp
+432.558221705	+45.525043197	-4.435519012	mesa	channel-destroy	phase=channel-destroy stage=pushbuf-begin index=2 engine=ppp
+432.558457177	+45.525278669	-4.435283540	mesa	channel-destroy	phase=channel-destroy stage=pushbuf-end index=2 engine=ppp
+432.558471947	+45.525293439	-4.435268770	mesa	channel-destroy	phase=channel-destroy stage=object-begin index=2 engine=ppp
+436.848090000	+49.814911492	-0.145650717	kernel	SCHED_ERROR	SCHED_ERROR 0a [CTXSW_TIMEOUT]
+436.848625000	+49.815446492	-0.145115717	kernel	RC_SCHEDULED	nouveau 0000:01:00.0: fifo:000002:0007:[av:h264:df0[2090]] rc scheduled
+436.848957000	+49.815778492	-0.144783717	kernel	RC_SCHEDULED	runlist=000002
+436.849317000	+49.816138492	-0.144423717	kernel	CHANNEL_DISABLE	nouveau 0000:01:00.0: fifo:000002:0007:0007:[av:h264:df0[2090]] errored - disabling channel
+436.849636000	+49.816457492	-0.144104717	kernel	CHANNEL_KILLED	chid=7
+436.853225472	+49.820046964	-0.140515245	mesa	channel-destroy	phase=channel-destroy stage=object-end index=2 engine=ppp
+436.853243297	+49.820064789	-0.140497420	mesa	decoder-destroy	phase=decoder-destroy stage=exit decoder_ptr=<address>
+436.853246016	+49.820067508	-0.140494701	mesa	va-context-destroy	phase=va-context-destroy stage=decoder-after id=3 decoder_ptr=<address>
+436.853253233	+49.820074725	-0.140487484	mesa	va-context-destroy	phase=va-context-destroy stage=exit id=3
+436.853265410	+49.820086902	-0.140475307	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=entry buffer_ptr=<address> format=134 size=1920x1088 interlaced=1 planes=2
+436.853357661	+49.820179153	-0.140383056	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=exit buffer_ptr=<address>
+436.853401013	+49.820222505	-0.140339704	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=entry buffer_ptr=<address> format=134 size=1920x1088 interlaced=1 planes=2
+436.853470266	+49.820291758	-0.140270451	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=exit buffer_ptr=<address>
+436.853507640	+49.820329132	-0.140233077	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=entry buffer_ptr=<address> format=134 size=1920x1088 interlaced=1 planes=2
+436.853592293	+49.820413785	-0.140148424	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=exit buffer_ptr=<address>
+436.853686904	+49.820508396	-0.140053813	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=entry buffer_ptr=<address> format=134 size=1920x1088 interlaced=1 planes=2
+436.853800984	+49.820622476	-0.139939733	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=exit buffer_ptr=<address>
+436.853842741	+49.820664233	-0.139897976	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=entry buffer_ptr=<address> format=134 size=1920x1088 interlaced=1 planes=2
+436.853915388	+49.820736880	-0.139825329	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=exit buffer_ptr=<address>
+436.853993044	+49.820814536	-0.139747673	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=entry buffer_ptr=<address> format=134 size=1920x1088 interlaced=1 planes=2
+436.854105274	+49.820926766	-0.139635443	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=exit buffer_ptr=<address>
+436.854186574	+49.821008066	-0.139554143	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=entry buffer_ptr=<address> format=134 size=1920x1088 interlaced=1 planes=2
+436.854299859	+49.821121351	-0.139440858	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=exit buffer_ptr=<address>
+436.854636800	+49.821458292	-0.139103917	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=entry buffer_ptr=<address> format=134 size=1920x1088 interlaced=1 planes=2
+436.854705868	+49.821527360	-0.139034849	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=exit buffer_ptr=<address>
+436.854761491	+49.821582983	-0.138979226	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=entry buffer_ptr=<address> format=134 size=1920x1088 interlaced=1 planes=2
+436.854862435	+49.821683927	-0.138878282	mesa	video-buffer-destroy	phase=video-buffer-destroy stage=exit buffer_ptr=<address>
+436.862118000	+49.828939492	-0.131622717	kernel	BAR2_PTE_FAULT	00 [READ] at 000000000046f000 engine 05 [BAR2] client 07 [HUB/HOST_CPU] reason 02 [PTE] on channel -1 [00ffbb7000 unknown]
+436.993740717	+49.960562209	+0.000000000	harness	FFMPEG_EXIT	realtime=2026-09-29T06:57:12,886813939-07:00 monotonic=436.993740717 status=0
+437.117622718	+50.084444210	+0.123882001	harness	JOURNAL_TAIL_START	-
+452.170786119	+65.137607611	+15.177045402	harness	JOURNAL_LOGGER_STOP	-
+			ffmpeg	PROGRESS_UNTIMED	frame= 3000 fps= 77 q=-0.0 Lsize=N/A time=00:02:05.04 bitrate=N/A speed=3.22x elapsed=0:00:38.82

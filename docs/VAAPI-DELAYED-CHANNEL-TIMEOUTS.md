@@ -414,3 +414,12 @@ that condition A cannot show. Defer private-uninstrumented Mesa: A already
 proves the delayed failure is not exclusive to the diagnostic plugin, while B
 would not expose those clear-path details. Stop after any critical signature;
 do not alter the working kernel fixes from the present evidence.
+
+The next private-instrumented run was captured on 2026-09-29. It positively
+exercised the clear trace and localized both scheduler timeouts to distinct VP
+and PPP channel-destruction windows. See
+[`VA-SURFACE-CLEAR-CANDIDATE.md`](VA-SURFACE-CLEAR-CANDIDATE.md) for the
+hash-verified capture, exact event timing, source proof, and the separate Mesa
+candidate. This supersedes the earlier statement that clear-path execution
+was unknown; it does not supersede the conclusion that the scheduler timeout
+cause remains unresolved.
