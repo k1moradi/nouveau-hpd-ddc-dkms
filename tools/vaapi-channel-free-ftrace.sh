@@ -81,6 +81,9 @@ has_function() {
     awk -v name="$1" '$1 == name { found = 1 } END { exit !found }' \
         "$tracefs/available_filter_functions"
 }
+filter_contains_function() {
+    awk -v name="$2" '$1 == name { found = 1 } END { exit !found }' "$1"
+}
 has_function nouveau_abi16_ioctl_channel_free ||
     fail 'nouveau_abi16_ioctl_channel_free is not function-graph traceable in this kernel'
 
@@ -158,11 +161,11 @@ fi
 printf 'function_graph\n' > "$tracefs/current_tracer"
 
 for root in "${trace_roots[@]}"; do
-    grep -Fxq "$root" "$tracefs/set_graph_function" ||
+    filter_contains_function "$tracefs/set_graph_function" "$root" ||
         fail "tracefs did not accept graph root $root"
 done
 for function in "${trace_notrace[@]}"; do
-    grep -Fxq "$function" "$tracefs/set_graph_notrace" ||
+    filter_contains_function "$tracefs/set_graph_notrace" "$function" ||
         fail "tracefs did not accept hot-leaf exclusion $function"
 done
 
