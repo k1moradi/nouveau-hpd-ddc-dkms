@@ -290,10 +290,6 @@ sha256sum "$kernel_log" "$ffmpeg_log" "$transcript" > "$run_dir/SHA256SUMS"
 cat "$run_dir/SHA256SUMS"
 printf 'capture_directory=%s\n' "$run_dir"
 
-if [[ $trace_invalid -ne 0 ]]; then
-    exit 4
-fi
-
 if [[ $driver_path_ok -ne 1 || $driver_open_ok -ne 1 ]]; then
     echo 'capture invalid: libva did not prove the expected driver selection' >&2
     exit 4
@@ -304,6 +300,9 @@ if [[ $tee_status != 0 ]]; then
 fi
 if [[ $runner_status -ne 0 ]]; then
     exit "$runner_status"
+fi
+if [[ $trace_invalid -ne 0 ]]; then
+    exit 4
 fi
 if grep -Eiq 'CTXSW_TIMEOUT|errored - disabling channel|channel [0-9]+ killed|fault .*\[BAR2\].*\[PTE\]|PRIV_VIOLATION|SIGBUS|GPU reset' "$kernel_log" "$ffmpeg_log"; then
     exit 5
