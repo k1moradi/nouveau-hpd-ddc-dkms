@@ -243,20 +243,25 @@ stream appeared.
 
 The opt-in Mesa trace emitted **zero** `NOUVEAU_DIAG_RT_CLEAR` records even
 though FFmpeg loaded the private driver and was launched with the environment
-flag.
-This does not support the hypothesis that the observed traps came from
-`nvc0_clear_render_target()` in this run. It demotes the static VA-surface
-clear candidate, but is not a conclusive negative until the trace hook is
-positively exercised or the VA allocation/callback path is logged directly.
+flag. A later build audit found that this private Mesa build used
+`buildtype=release`, which defines `MESA_DEBUG=0`; Mesa's
+[`debug_printf()`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-26.0.8/src/util/u_debug.h)
+then compiles to a no-op. Therefore the old zero-record result is **not
+evidence** that allocation or clear was absent, and it does not demote the
+surface-clear candidate. The expanded trace described below uses opt-in
+`fprintf(stderr, ...)` records so it remains active in a release build.
 
 The same kernel capture had two later FIFO `CTXSW_TIMEOUT` scheduler errors,
-video channels 4 and 5 killed, and a BAR2/HOST_CPU PTE fault. These appeared
-after the successful FFmpeg output and are separate from the earlier
+video channels 4 and 5 killed, and a BAR2/HOST_CPU PTE fault. The precise
+monotonic event sequence and the missing exact FFmpeg process-exit timestamp
+are documented in
+[`VAAPI-DELAYED-CHANNEL-TIMEOUTS.md`](VAAPI-DELAYED-CHANNEL-TIMEOUTS.md).
+These appeared after the successful FFmpeg output and are separate from the earlier
 MSVLD `PRIV_VIOLATION`/Mesa SIGBUS failure chain; they do mean that this
 follow-up must not be summarized as free of all channel or BAR2 faults. This
 capture still had no MSVLD `PRIV_VIOLATION` and FFmpeg itself returned 0. The
-two scheduler errors were logged at 16:34:56 and 16:35:00 -07:00; the BAR2
-fault followed at 16:35:00 -07:00.
+old transcript records FFmpeg exit status but not its exact timestamp, so the
+delays from process exit cannot be stated exactly from this capture.
 
 The exact local records are outside Git at:
 
@@ -411,10 +416,12 @@ emits the state. It is standalone Mesa instrumentation: it is not included in
 capture above, but yielded no records; a positive-control test of the hook has
 not yet been performed.
 
-A next diagnostic should positively validate the trace hook or log VA surface
-allocation and the callback selected at `vlVaHandleSurfaceAllocate()` before
-adding more kernel instrumentation. A functional change should wait until a
-specific emitted method/state and the expected correct dimensions are proven.
+The expanded opt-in surface-allocation and callback trace, plus a reproducible
+three-mode capture helper, is documented in
+[`VAAPI-DELAYED-CHANNEL-TIMEOUTS.md`](VAAPI-DELAYED-CHANNEL-TIMEOUTS.md). The
+runtime trace has not yet been positively exercised on hardware. A functional
+change should wait until a specific emitted method/state and the expected
+correct dimensions are proven.
 
 The legacy-video fix details remain in
 [`VP5-VIDEO-DECODE.md`](VP5-VIDEO-DECODE.md); the nonstall build experiment is
