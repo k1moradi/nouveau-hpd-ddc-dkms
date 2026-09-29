@@ -1,0 +1,34 @@
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video.c b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+@@ -238,7 +238,29 @@
+    uintptr_t decoder_id = (uintptr_t)decoder;
+    bool shared_channel = dec->channel[0] == dec->channel[1];
+    int i;
+-
++   /* Log the Nouveau channel IDs for the BSP, VP, and PPP decoder slots. */
++   for (i = 0; i < 3; ++i) {
++      struct nouveau_object *identity_channel = dec->channel[i];
++      struct nouveau_object *identity_engine = i == 0 ? dec->bsp :
++                                               i == 1 ? dec->vp : dec->ppp;
++      if (!identity_channel) {
++         nouveau_vp3_diag("phase=channel-identity index=%d engine=%s "
++                          "channel_ptr=(nil) kernel_chid=unavailable\n",
++                          i, engine_name[i]);
++         continue;
++      }
++      nouveau_vp3_diag("phase=channel-identity index=%d engine=%s "
++                       "channel_ptr=%p kernel_chid=%u channel_class=0x%08x "
++                       "engine_object_ptr=%p engine_handle=0x%llx "
++                       "engine_class=0x%08x\n",
++                       i, engine_name[i], (void *)identity_channel,
++                       (unsigned int)identity_channel->handle,
++                       identity_channel->oclass, (void *)identity_engine,
++                       (unsigned long long)(identity_engine ?
++                                            identity_engine->handle : 0),
++                       identity_engine ? identity_engine->oclass : 0);
++   }
++   /* Emit the ordinary decoder-destroy record after channel IDs. */
+    nouveau_vp3_diag("phase=decoder-destroy stage=entry decoder=%p profile=%u "
+                     "entrypoint=%u size=%ux%u fence_seq=%u "
+                     "channels=%p,%p,%p pushbufs=%p,%p,%p shared=%u\n",

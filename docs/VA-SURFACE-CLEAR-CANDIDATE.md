@@ -332,9 +332,12 @@ The VP deletion blocks for `15.001695 s`. Its context-switch timeout occurs
 after deletion begins; the userspace deletion call then remains blocked for
 about another `10.649 s`. The channel-4 idle error occurs 1.268 ms before the
 VP deletion returns. The PPP deletion takes 3.588 ms and has no matching
-timeout. Timing strongly associates runlist 2/channel 5 with the VP deletion
-for this run; it does not map channel 4 to a decoder engine. Runlist IDs and
-channel numbers are runtime observations, not fixed engine identities.
+timeout. Source tracing shows the failed-idle record is printed inside the
+synchronous channel-free ioctl for the VP slot, so channel 4 is the VP channel
+in this run. Runlist 2/channel 5's decoder slot remains unknown; channel
+numbers are runtime identities, not fixed engine identities. The source chain
+and next trace procedure are recorded in
+[`VP-CHANNEL-TEARDOWN-TRACE.md`](VP-CHANNEL-TEARDOWN-TRACE.md).
 
 There is no BAR2/PTE fault in this capture. The scheduler timeout and idle
 failure occur with corrected RT dimensions and no PROP traps, so the two

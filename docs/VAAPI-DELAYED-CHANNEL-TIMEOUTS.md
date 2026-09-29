@@ -341,19 +341,19 @@ and [`fifo/gk104.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm
 Mesa 26.0.8 creates three separate Kepler decoder FIFO channels in array order
 for BSP, VP, and PPP, and constructs the corresponding engine objects on those
 channels. The capture's `av:h264:df0` client label is consistent with the
-decoder, but neither that label nor numeric channel IDs 4 and 5 identify the
-array entry/engine. Channel 2 in the GR trap is the GR channel and is distinct
-from the FIFO channel 5 named in the recovery record. The source creation order
-cannot safely map global channel IDs without a recorded allocation/object
-mapping. See Mesa
+decoder, but does not identify an array entry. Channel 2 in the earlier GR
+trap is a GR channel and is distinct from FIFO channel 5 in the recovery
+record. The native-surface capture's channel 4 is now mapped to the Mesa VP
+channel by the synchronous free-call source path; channel 5 remains unmapped
+pending the opt-in channel-handle trace. See Mesa
 [`nvc0_video.c`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-26.0.8/src/gallium/drivers/nouveau/nvc0/nvc0_video.c#L91-183).
 
-Assessment before the native-surface candidate run:
+Assessment after the native-surface candidate run:
 
 | Proposition | Assessment |
 | --- | --- |
 | A. PROP traps and FIFO scheduler failure are related | **PLAUSIBLE in the earlier captures, but not required for the timeout.** The native-surface candidate run had a timeout without PROP traps, so the scheduler failure can occur independently of the observed invalid-clear PROP pattern. |
-| B. Timeout is a video-engine teardown/context-switch issue | **STRONGLY SUPPORTED as a temporal association with VP channel deletion.** In the native-surface run, runlist 2/channel 5 recovery began 4.295 s into the Mesa VP channel-object deletion, and VP deletion remained blocked for 15.002 s. The log does not prove channel 5 is that VP channel or that deletion caused the timeout. |
+| B. Timeout is a video-engine teardown/context-switch issue | **STRONGLY SUPPORTED as a VP teardown association, with channel 4 mapped to VP.** Runlist 2/channel 5 recovery began 4.295 s into that synchronous VP channel-free call, which lasted 15.002 s. Source and timestamp brackets map the subsequent `failed to idle channel 4` to the VP channel being freed. Channel 5 is not yet mapped, and neither temporal overlap nor the channel-4 mapping proves that VP deletion caused the separate channel-5 context-switch timeout. |
 | C. BAR2 fault is downstream of channel recovery | **PLAUSIBLE from earlier captures only; causal status UNKNOWN.** The system-Mesa BAR2/PTE fault followed channel recovery and channel-4 idle failure, but the candidate run had no BAR2/PTE record. The timestamps do not prove that recovery caused the fault or that it was secondary. |
 | D. Patch 2/nonstall event-index fix is involved | **UNSUPPORTED as a direct cause.** The nonstall event registration/notification path is distinct from `SCHED_ERROR` `CTXSW_TIMEOUT` recovery. A fence-notification mismatch could indirectly affect wait/teardown timing, so patch 2 could improve that separate issue while this scheduler failure remains. No removal or modification is justified from these captures. |
 
@@ -362,21 +362,20 @@ channel kill; the new system-Mesa fault is after recovery as well but has a
 different address and follows a different number of timeouts. Both look
 temporally secondary, while causality remains unproven.
 
-### Channel mapping diagnostic if another capture is needed
+### Prepared teardown trace
 
-The smallest useful kernel diagnostic would be a standalone, opt-in log-only
-patch at the existing `gf100_fifo_intr_sched_ctxsw()` /
-`gf100_fifo_intr_ctxsw_timeout()` decision points. For each engine already
-reported as switching, log runlist ID, engine subdevice name/type/instance,
-engine ID, `cxid()` result and whether it is a channel or group; at recovery,
-log the affected channel IDs and their existing channel/client names before
-the current error/removal calls. Include GK104's already-read context-switch
-status fields (`prev`, `next`, `save/load`, and selected active ID) when
-available. Gate every added record behind an explicit diagnostic parameter or
-existing debug option, add no MMIO writes, and do not alter recovery behavior.
-This would map the timeout engine and the killed channel to BSP/VP/PPP or GR
-without guessing from IDs. It is not yet implemented; no kernel diagnostic
-patch was created for this update.
+The next diagnostic uses the existing function-graph tracer in the installed
+kernel plus opt-in Mesa channel identity records. This can map channel 5 to
+BSP/VP/PPP and show whether the 15-second channel-free interval is spent in
+`drm_sched_entity_fini()` or `nouveau_channel_idle()` without rebuilding the
+kernel module. The exact source call chain, 15-second fence deadline, patch-2
+assessment, and one-run procedure are in
+[`VP-CHANNEL-TEARDOWN-TRACE.md`](VP-CHANNEL-TEARDOWN-TRACE.md). No kernel
+diagnostic patch has been created. If runtime ftrace cannot trace the
+channel-free entry point, the fallback is a standalone opt-in, log-only patch
+at `gf100_fifo_intr_sched_ctxsw()` and the FIFO recovery callback. It would log
+existing runlist, engine, channel, and context IDs only; it would not change
+MMIO, timeouts, or recovery.
 
 The capture harness was not changed. For condition A it recorded the exact
 system plugin path, successful `va_openDriver()`, FFmpeg exit code/status,
@@ -406,9 +405,10 @@ and are present in the hash-verified log.
   and channel 5 being killed. The Mesa VP channel-object deletion interval
   overlapped the timeout and remained blocked for 15.002 seconds. Channel 4
   failed to idle 1.268 ms before the VP deletion returned. These timestamps
-  strongly associate the timeout with VP-channel teardown but do not prove
-  that channel 5 is the Mesa VP channel, nor identify channel 4's engine.
-  PPP channel deletion completed in 3.588 ms in this run.
+  placed the timeout within VP-channel teardown. The source-correlated
+  synchronous channel-free call maps channel 4's idle failure to the Mesa VP
+  channel. Channel 5's decoder slot remains unknown. PPP channel deletion
+  completed in 3.588 ms in this run.
 - **Source-proven / strongly supported:** the earlier VA clear path passed a
   generic `pipe_surface` where NVC0 expected a Nouveau-private `nv50_surface`.
   The candidate creates a native Nouveau surface; its corrected runtime RT
