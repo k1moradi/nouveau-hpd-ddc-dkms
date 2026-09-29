@@ -15,6 +15,43 @@ contexts and the experimental legacy nonstall event index) alongside the
 observational trace. It is restricted to the reviewed `7.0.0-34-generic`
 kernel and source version.
 
+## Build provenance check (2026-09-29)
+
+The first isolated DKMS build was correctly blocked before installation because
+its `srcversion` was `04E9CC457A2BA367431330B`, while the reviewed private
+diagnostic build was `B19B8AAE48467545E652509`. This was a real source-set
+difference, not a reason to relax the expected `srcversion`: the first DKMS
+build log said the legacy FIFO nonstall patch was disabled. The diagnostic
+staging code had copied the patch file but omitted its
+`experimental-legacy-nonstall.enabled` marker, so `nvkm/engine/fifo/uchan.c`
+did not contain the already-tested nonstall fix.
+
+The package staging was corrected to include that marker. After rebuilding
+the existing, not-yet-installed `0.1.13-diag1` entry, the DKMS log showed all
+four expected patches applied, including the legacy FIFO nonstall patch and
+the VP fence/CTXSW diagnostic. The rebuilt module reports the reviewed
+`B19B8AAE48467545E652509` `srcversion`; the expected value was not changed.
+
+The corrected DKMS source/header manifest and the reviewed private build
+manifest each contain 1,211 entries and have the same SHA-256:
+`b2be9c2206cce6ce3c9ef908129af2b7d03b53f9d73958752a791d52a42f5b68`. The
+builds also used the same Ubuntu kernel headers, `.config`, `Module.symvers`,
+generated configuration headers, GCC 15.2.0, and two parallel jobs. Their
+compiled Nouveau object-target lists match. Hashes of the linked loadable
+sections (`.text`, `.rodata`, `.data`, init/exit text and data, and
+`.data..read_mostly`) match between the reviewed private artifact and the
+corrected DKMS artifact. Their complete `.ko` file hashes differ because the
+private artifact retains debug sections while the DKMS output is stripped;
+this does not change the matching code/data section contents or `srcversion`.
+
+DKMS deletes its temporary build tree after a successful build, so that tree's
+`nouveau.mod` and per-object `.cmd` files are not available for a later
+file-by-file comparison. The retained logs show matching patch application,
+compiler version, job count, and object-target list; the exact transient
+command files were not preserved. The corrected diagnostic remains **built,
+not installed**. At this checkpoint the running and on-disk production module
+remain `0.1.13`, with `srcversion` `57AE1B168D50DB546CD87A1`.
+
 ## Install and verify
 
 Run from the repository on the existing `.13` baseline:
