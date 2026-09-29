@@ -426,3 +426,26 @@ correct dimensions are proven.
 The legacy-video fix details remain in
 [`VP5-VIDEO-DECODE.md`](VP5-VIDEO-DECODE.md); the nonstall build experiment is
 in [`LEGACY-FIFO-NONSTALL-EXPERIMENT.md`](LEGACY-FIFO-NONSTALL-EXPERIMENT.md).
+
+## Fresh system-Mesa capture — 2026-09-29
+
+A fresh-boot condition-A run selected the distro plugin at
+`/usr/lib/x86_64-linux-gnu/dri/nouveau_drv_video.so` and verified
+`va_openDriver() returns 0`. With kernel `7.0.0-34-generic` and the existing
+`nouveau-hpd-ddc/0.1.13` module, FFmpeg completed the same 3000-frame H.264
+decode: 3000 output frames, 3003 decoded, zero decode errors, exit 0.
+
+This system-Mesa run also recorded startup and completion-adjacent GR/PROP
+traps, then `CTXSW_TIMEOUT`, recovery/killing of channel 5 on runlist 2, a
+channel-4 idle failure, and a BAR2/HOST_CPU PTE fault. All were timestamped
+before FFmpeg process exit; the harness therefore set `STOP_A_B=1`. This
+confirms the delayed failure is not exclusive to the private diagnostic Mesa
+plugin, while the different number of timeouts and BAR2 address mean the two
+captures are similar rather than identical. It does not prove that PROP traps
+caused the scheduler timeout or that channel recovery caused the BAR2 fault.
+
+Conditions B and C were not run in that boot. After another clean reboot, the
+next useful condition is private-instrumented Mesa to positively exercise the
+VA allocation/clear trace. The full hash-verified timeline, source boundary,
+and runlist/channel mapping limits are in
+[`VAAPI-DELAYED-CHANNEL-TIMEOUTS.md`](VAAPI-DELAYED-CHANNEL-TIMEOUTS.md).

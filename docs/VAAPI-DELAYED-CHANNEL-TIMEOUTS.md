@@ -7,10 +7,11 @@ context or legacy FIFO fixes, and it does not create a PGRAPH workaround. Mesa
 builds are private and selected with `LIBVA_DRIVERS_PATH`; they are not part of
 DKMS or `install.sh`.
 
-No DKMS installation, module reload, system Mesa replacement, or reboot was
-performed for this work. No hardware A/B decode was run while preparing the
-instrumentation. The current kernel/module and GPU state therefore remain the
-baseline from the prior run until the user chooses to reboot and test.
+No DKMS installation, module reload, or system Mesa replacement was performed
+for this follow-up. The user rebooted into the existing kernel/module before
+condition A; this document records that system-Mesa capture below. It triggered
+`STOP_A_B=1`, so do not use the current boot for another Mesa condition. No
+additional GPU workload was run while preparing this analysis.
 
 ## Mesa trace: make the clear path positively testable
 
@@ -131,18 +132,14 @@ run. If a run reports `STOP_A_B=1` or exits 5 due to a timeout, channel kill,
 BAR2/PTE fault, PRIV_VIOLATION, SIGBUS, or GPU reset, do not run another
 condition until after another clean reboot.
 
-The planned first matrix is one run per condition:
+The first matrix condition, system Mesa, ran after a fresh reboot on
+2026-09-29 and is recorded below. It reproduced critical kernel signatures,
+so `STOP_A_B=1`; conditions B and C were not run in that boot. The earlier
+basic VA-init control remains valid only for driver initialization: it did not
+allocate H.264 surfaces or exercise video engines, and is not a clean
+decode-surface control.
 
-1. system Mesa;
-2. private uninstrumented Mesa 26.0.8;
-3. private instrumented Mesa 26.0.8.
-
-No A/B run has yet been performed with this new harness. The earlier basic
-VA-init control is valid for its narrow scope, but it does not allocate H.264
-surfaces or exercise video engines. Do not interpret that control as a clean
-decode-surface result.
-
-## Existing delayed-failure capture: exact and missing timing
+## Previous private-Mesa capture: exact and missing timing
 
 The existing capture is
 `/home/keivan/nouveau-pgraph-3000-mesa-diag-20260928-kernel.log`, with the
@@ -173,9 +170,11 @@ not exact exit-to-event delays.
 | `19469.366163` | FFmpeg PID 28135 reports `channel 5 killed!` | 4.078 ms after timeout. |
 | `19469.383435` | BAR2/HOST_CPU READ PTE fault at `0x49d000`, channel `-1` / unknown | 17.272 ms after channel 5 kill; 8.656547 s after last PROP. |
 
-**Observed:** the scheduler errors and channel kills are distinct from the
-successful FFmpeg exit. The BAR2 fault follows the second kill in the log by
-17.272 ms and is reported on channel `-1` with an unknown instance.
+**Observed:** FFmpeg returned 0, and the scheduler errors/channel kills follow
+the final progress record in the logs. The old transcript does not timestamp
+the FFmpeg process exit, so their ordering relative to process exit is unknown.
+The BAR2 fault follows the second kill in the kernel log by 17.272 ms and is
+reported on channel `-1` with an unknown instance.
 
 **Source-proven:** Linux v7.0
 [`gk104.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c)
@@ -211,7 +210,7 @@ The legacy nonstall fix adjusts the event index used for nonstall/fence
 notification on FIFOs without a per-runlist constructor. The observed
 `CTXSW_TIMEOUT` path is a separate FIFO scheduler interrupt/recovery path.
 The event fix could affect outstanding waits or when teardown occurs, but
-this capture does not show it causing or fixing the context-switch timeout.
+these captures do not show it causing or fixing the context-switch timeout.
 
 The upstream Linux v4.11 Nouveau recovery series already included GK104 FIFO
 changes to ACK `SCHED_ERROR` before recovery, trigger MMU fault handling, and
@@ -222,20 +221,196 @@ no such fix exists. The v4.11 series summary is recorded in the
 [Linux DRM pull archive](https://lkml.rescloud.iu.edu/1702.2/05124.html), and
 the current handler is in the linked v7.0 `gk104.c` source above.
 
+## Fresh system-Mesa condition A — 2026-09-29
+
+### Capture integrity and result
+
+The user ran condition A after a clean reboot. The capture directory is
+`/home/keivan/nouveau-vaapi-captures/20260929T103651Z-system-4106`. Its
+`SHA256SUMS` verification passed for `kernel.log`, `ffmpeg.log`, and
+`transcript.txt`. The recorded hashes are:
+
+| File | SHA-256 |
+| --- | --- |
+| `kernel.log` | `3024ebb5efa6a4f2d592628566e7ce828f441bc3910da68e63ee00a1e66f34b3` |
+| `ffmpeg.log` | `5498bc50e07d8fcd9a08dff4dc0fee916e605458a295b7f72e3de8c75f5e6256` |
+| `transcript.txt` | `4c9a311acddad0e43ef6a50ac16be3245061041d638f097bd3a0dbe6b94eb81b` |
+
+The capture verified kernel `7.0.0-34-generic`, DKMS
+`nouveau-hpd-ddc/0.1.13`, and matching loaded/on-disk Nouveau `srcversion`
+`57AE1B168D50DB546CD87A1`. Libva opened the exact system plugin
+`/usr/lib/x86_64-linux-gnu/dri/nouveau_drv_video.so`; it reported Mesa
+`26.0.8-1ubuntu0.3` for NVE4 and `va_openDriver() returns 0`.
+
+FFmpeg PID 4230 used the same named-device 3000-frame H.264 invocation and
+input as the previous run. It output 3000 frames, decoded 3003 frames with
+zero decode errors, and exited 0. Its final progress record says
+`elapsed=0:00:38.73`; `/usr/bin/time` recorded 56.36 seconds wall time. The
+exact process-exit timestamp is monotonic `1029.808282701`, status 0. The
+capture harness set `STOP_A_B=1` because of the Nouveau failure records. No
+private-uninstrumented or private-instrumented condition was run afterward.
+
+### Exact monotonic timeline
+
+All offsets below use the harness's monotonic FFmpeg start (`973.572587112`)
+and exact process exit (`1029.808282701`). A negative exit offset means the
+event occurred before FFmpeg exited. The final progress line itself has no
+wall-clock/monotonic stamp, so only its FFmpeg-reported elapsed time is known.
+
+| Monotonic time | Event | Since FFmpeg start | Relative to FFmpeg exit |
+| ---: | --- | ---: | ---: |
+| `973.572587112` | FFmpeg start, PID 4230 | `+0.000000 s` | `-56.235696 s` |
+| `975.946112` | First GR `TRAP`, GR channel 2, FFmpeg PID 4230 | `+2.373525 s` | `-53.862171 s` |
+| `975.946746` | First PROP trap, `RT_WIDTH_OVERRUN`, format `0x37` | `+2.374159 s` | `-53.861537 s` |
+| `976.052410` | Last PROP in startup burst; 53 startup PROP records total | `+2.479823 s` | `-53.755873 s` |
+| `976.052410`–`1014.639808` | Quiet interval between startup burst and next GR trap | `38.587398 s` | — |
+| `1014.639808` | Completion-adjacent GR `TRAP`, channel 2 | `+41.067221 s` | `-15.168475 s` |
+| `1014.640447`–`1014.641472` | Four completion-adjacent PROP traps, all `RT_WIDTH_OVERRUN`, format `0x37` | `+41.067860`–`+41.068885 s` | `-15.167836`–`-15.166811 s` |
+| `1018.985696` | FIFO `SCHED_ERROR 0a [CTXSW_TIMEOUT]` | `+45.413109 s` | `-10.822587 s` |
+| `1018.986604` | Runlist 2, channel 5 (`av:h264:df0[4234]`): `rc scheduled` | `+45.414017 s` | `-10.821679 s` |
+| `1018.989141` | Runlist 2: generic `rc scheduled` record | `+45.416554 s` | `-10.819142 s` |
+| `1018.989973` | Runlist 2/channel 5: `errored - disabling channel` | `+45.417386 s` | `-10.818310 s` |
+| `1018.991223` | FFmpeg PID 4230 reports `channel 5 killed!` | `+45.418636 s` | `-10.817060 s` |
+| `1029.686075` | FFmpeg PID 4230 reports `failed to idle channel 4` | `+56.113488 s` | `-0.122208 s` |
+| `1029.706186` | BAR2/HOST_CPU READ PTE fault at `0x377000`, channel `-1` / unknown | `+56.133599 s` | `-0.102097 s` |
+| `1029.808283` | FFmpeg process exit, status 0 | `+56.235696 s` | `0.000000 s` |
+| `1029.940455` | Post-FFmpeg journal tail begins | `+56.367867 s` | `+0.132172 s` |
+| `1044.995956` | Journal follower stopped | `+71.423369 s` | `+15.187673 s` |
+
+The kernel log contains 15 GR `TRAP` records and 57 PROP records: 49 use
+format `0x37`, 8 use `0x2e`; 56 report width overrun and 21 height overrun
+(the error-bit counts overlap). Four PROP records are in the final burst; the
+other 53 are in the startup burst. The final FFmpeg progress says all 3000
+frames were output at elapsed 38.73 s, while the exact process exit is at
+56.24 s after start. The kernel records establish that the timeout, channel
+recovery, idle failure, and BAR2 fault all happened before that process exit.
+
+### Comparison with the previous private-Mesa capture
+
+The previous private diagnostic capture is
+`/home/keivan/nouveau-pgraph-3000-mesa-diag-20260928-{kernel.log,ffmpeg.log,transcript.txt}`.
+Its kernel log SHA-256 is
+`1df7bbd0a6e652402ab0b08ca2ce5259bd0884ac03d01fc1d1457b2d98d89a77`; the
+FFmpeg log and transcript hashes are recorded below. Both runs used the same
+decode workload; one selected the system Mesa plugin, the other a private
+instrumented VA plugin. Condition A verifies the DKMS module and matching
+`srcversion`; the earlier capture transcript does not record kernel/module
+provenance, so its exact Nouveau `srcversion` cannot be verified from the
+saved artifacts.
+
+| Evidence | 2026-09-29 system Mesa | 2026-09-28 private diagnostic Mesa |
+| --- | --- | --- |
+| Kernel/module provenance | Kernel `7.0.0-34-generic`, DKMS `0.1.13`, loaded/disk `srcversion` match | Transcript does not record `uname`, `modinfo`, or `srcversion`; exact binary match unverified |
+| GR trap channel | `ch 2`, FFmpeg PID 4230 | `ch 2`, FFmpeg PID 28135 |
+| PROP records | 57 total: 49 format `0x37`, 8 format `0x2e`; width 56, height 21 | 43 total: 40 format `0x37`, 3 format `0x2e`; width 43, height 7 |
+| PROP timing | startup `975.946746`–`976.052410`; final burst `1014.640447`–`1014.641472` | startup `19422.024614`–`19422.179315`; final burst `19460.725861`–`19460.726888` |
+| Timeout/recovery | one timeout; runlist 2/channel 5 recovery and kill | two timeouts; first runlist 1/channel 4, then runlist 2/channel 5 |
+| Idle failure | channel 4 at `1029.686075` | none in the capture |
+| BAR2 fault | READ PTE `0x377000`, HOST_CPU, channel `-1` / unknown | READ PTE `0x49d000`, HOST_CPU, channel `-1` / unknown |
+| Relative to FFmpeg exit | all listed failures before exact exit by 102 ms or more | exact process-exit time was not recorded; relation is unknown |
+
+Both logs show startup PROP bursts, a long quiet interval during the 3000-frame
+decode, a completion-adjacent PROP burst, and a FIFO timeout about 4.33–4.34 s
+after the final PROP record. They are a similar recurring pattern, not identical
+events: the new capture has one timeout/kill rather than two, and its BAR2
+address and channel-4 idle failure differ. Two runs are insufficient to call
+the pattern deterministic.
+
+### Source interpretation and confidence
+
+**SOURCE-PROVEN:** Linux v7.0 decodes scheduler code `0x0a` as
+`CTXSW_TIMEOUT`. The scheduler handler scans engines reporting a context-switch
+wait, obtains the active channel/group ID, and requests recovery; runlist
+recovery disables/removes channels in the flagged group and may reset engines
+still associated with it. The current FIFO log does not print the triggering
+engine mask or its engine names. See the v7.0
+[`gf100.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c#L579-L650),
+[`runl.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/engine/fifo/runl.c#L58-L170),
+and [`chan.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/engine/fifo/chan.c#L227-L245).
+
+GK104 does not assign a universal engine list to runlist numbers in a static
+source table. `gk104_top_parse()` reads the hardware TOP table, and
+`gk104_fifo_runl_ctor()` groups each engine using its runtime `tdev->runlist`
+value. Thus `runlist 2` identifies the runtime queue, but this capture cannot
+say which GK104 engine(s) belong to it. No TOP engine/runlist debug dump is
+present in the capture; the read-only boot-journal inspection also surfaced no
+topology records. See
+[`top/gk104.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/subdev/top/gk104.c#L35-L100)
+and [`fifo/gk104.c`](https://github.com/torvalds/linux/blob/v7.0/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c#L713-L751).
+
+Mesa 26.0.8 creates three separate Kepler decoder FIFO channels in array order
+for BSP, VP, and PPP, and constructs the corresponding engine objects on those
+channels. The capture's `av:h264:df0` client label is consistent with the
+decoder, but neither that label nor numeric channel IDs 4 and 5 identify the
+array entry/engine. Channel 2 in the GR trap is the GR channel and is distinct
+from the FIFO channel 5 named in the recovery record. The source creation order
+cannot safely map global channel IDs without a recorded allocation/object
+mapping. See Mesa
+[`nvc0_video.c`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/mesa-26.0.8/src/gallium/drivers/nouveau/nvc0/nvc0_video.c#L91-183).
+
+Assessment of the four candidate relationships:
+
+| Proposition | Assessment |
+| --- | --- |
+| A. PROP traps and FIFO scheduler failure are related | **PLAUSIBLE.** Both independent Mesa runs show a similar PROP pattern and a timeout about 4.33 s after the final PROP, within the same FFmpeg workload. GR channel 2 and the video-client recovery channel differ; timing does not prove causation. |
+| B. Timeout is a video-engine teardown/context-switch issue | **PLAUSIBLE as a combined claim.** The timeout is source-proven to enter context-switch recovery, and the affected logged channel belongs to the `av:h264` client. The precise engine is unknown, and the first timeout is 10.8 s before FFmpeg exit, so teardown-specific causation is not established. |
+| C. BAR2 fault is downstream of channel recovery | **PLAUSIBLE as a causal claim; temporal order is PROVEN.** It follows channel 5 kill by 10.715 s and the channel-4 idle failure by 20.111 ms, but is still before FFmpeg exit. It is a channel-`-1`/unknown HOST_CPU PTE fault; logs do not prove it was caused by recovery or establish it as primary. Secondary/recovery-related is the more likely interpretation, not a confirmed one. |
+| D. Patch 2/nonstall event-index fix is involved | **UNSUPPORTED as a direct cause.** The nonstall event registration/notification path is distinct from `SCHED_ERROR` `CTXSW_TIMEOUT` recovery. A fence-notification mismatch could indirectly affect wait/teardown timing, so patch 2 could improve that separate issue while this scheduler failure remains. No removal or modification is justified from these captures. |
+
+The older private run also had a BAR2 PTE fault 17.272 ms after its second
+channel kill; the new system-Mesa fault is after recovery as well but has a
+different address and follows a different number of timeouts. Both look
+temporally secondary, while causality remains unproven.
+
+### Channel mapping diagnostic if another capture is needed
+
+The smallest useful kernel diagnostic would be a standalone, opt-in log-only
+patch at the existing `gf100_fifo_intr_sched_ctxsw()` /
+`gf100_fifo_intr_ctxsw_timeout()` decision points. For each engine already
+reported as switching, log runlist ID, engine subdevice name/type/instance,
+engine ID, `cxid()` result and whether it is a channel or group; at recovery,
+log the affected channel IDs and their existing channel/client names before
+the current error/removal calls. Include GK104's already-read context-switch
+status fields (`prev`, `next`, `save/load`, and selected active ID) when
+available. Gate every added record behind an explicit diagnostic parameter or
+existing debug option, add no MMIO writes, and do not alter recovery behavior.
+This would map the timeout engine and the killed channel to BSP/VP/PPP or GR
+without guessing from IDs. It is not yet implemented; no kernel diagnostic
+patch was created for this update.
+
+The capture harness was not changed. For condition A it recorded the exact
+system plugin path, successful `va_openDriver()`, FFmpeg exit code/status,
+`STOP_A_B=1`, journal follower start/stop times, empty journal-stderr file,
+and a non-empty kernel log containing the full failure sequence. These records
+are sufficient to distinguish successful decode plus kernel failure from an
+FFmpeg crash, wrong VA driver, or startup logger error in this run. The harness
+does not persist a separate `journalctl` follower exit status; that does not
+block analysis of this capture because the decisive events precede FFmpeg exit
+and are present in the hash-verified log.
+
 ## Current conclusion
 
-- **Observed:** the video-engine PRIV_VIOLATION/SIGBUS chain did not recur in
-  the successful 3000-frame run; the decode crossed the old 30-second
-  failure interval. The later CTXSW_TIMEOUT/channel-kill/BAR2 sequence did
-  occur.
+- **Observed:** both the previous private-instrumented Mesa run and fresh
+  system-Mesa condition A completed 3000 H.264 output frames, 3003 decoded,
+  zero decode errors, and FFmpeg exit 0. The original video-engine
+  PRIV_VIOLATION/SIGBUS chain did not recur. Both runs did show PROP traps and
+  later FIFO recovery/BAR2 signatures. Condition A's scheduler/channel/idle/
+  BAR2 events all preceded the exact FFmpeg process exit.
+- **Observed:** condition A verified the distro plugin path and current
+  DKMS/module `srcversion`; no condition B/C was run because `STOP_A_B=1`.
 - **Source-proven:** the process has both a 3D GR context and separate video
-  engine channels. The PROP records identify the error bits but not the GR
-  command or RT dimensions that caused them.
-- **Still HYPOTHESIS:** the source of the PROP traps, delayed scheduler
-  timeouts, and subsequent unknown-channel BAR2 fault is unresolved. No
-  functional GR fix was created.
+  engine channels. The PROP records identify error bits, not the offending GR
+  method or RT dimensions. GK104 runlist membership comes from runtime TOP
+  data; the captured numeric runlists and channel IDs do not identify engines.
+- **Still HYPOTHESIS:** whether the PROP traps trigger or merely accompany the
+  context-switch timeout, whether timeout is teardown-related, and whether the
+  unknown-channel BAR2 fault is secondary remain unresolved. No functional GR
+  fix was created.
 
-The next evidence step is to run the three capture modes with the new surface
-trace and 15-second post-exit journal tail, stopping after any critical
-failure signature. The current run is the known-good decode baseline, not a
-reason to alter the working kernel fixes.
+The next highest-value condition is private-instrumented Mesa after a fresh
+reboot into the unchanged kernel/module. It can provide the runtime VA
+surface-allocation, `SKIP_CLEAR_SURFACE`, clear callback, and NVC0 clear state
+that condition A cannot show. Defer private-uninstrumented Mesa: A already
+proves the delayed failure is not exclusive to the diagnostic plugin, while B
+would not expose those clear-path details. Stop after any critical signature;
+do not alter the working kernel fixes from the present evidence.
