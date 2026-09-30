@@ -14,6 +14,7 @@ grep -Fq 'patch --fuzz=0' "$repo_root/dkms/dkms-build.sh"
 grep -Fq 'gk104-vp-idle-fence-ctxsw-trace.patch' "$repo_root/tools/install-vp-fence-diagnostic.sh"
 grep -Fq 'experimental-legacy-nonstall.enabled' "$repo_root/tools/install-vp-fence-diagnostic.sh"
 grep -Fq 'diag_fence_wait' "$repo_root/docs/VP-FENCE-DIAGNOSTIC-DKMS.md"
+grep -Fq '[[ $value == 0 || $value == N ]]' "$repo_root/tools/verify-vp-fence-diagnostic.sh"
 
 if grep -Fq 'gk104-vp-idle-fence-ctxsw-trace.patch' "$repo_root/install.sh"; then
     echo 'FAIL: normal installer must not stage the opt-in diagnostic' >&2

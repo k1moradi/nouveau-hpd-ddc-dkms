@@ -104,8 +104,9 @@ sudo tools/verify-vp-fence-diagnostic.sh post-reboot
 ```
 
 The post-reboot verifier requires the diagnostic srcversion, DKMS status,
-module parameters, and both parameter values `0`. Enable diagnostics only after
-that check:
+module parameters, and both boolean parameters to be disabled (`N` in this
+kernel's sysfs representation, or `0` where numeric representation is used).
+Enable diagnostics only after that check:
 
 ```bash
 echo 1 | sudo tee /sys/module/nouveau/parameters/diag_fence_wait

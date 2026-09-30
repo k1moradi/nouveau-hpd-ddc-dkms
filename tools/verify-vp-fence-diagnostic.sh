@@ -74,9 +74,9 @@ for parameter in diag_fence_wait diag_ctxsw; do
     }
     value=$(cat "$parameter_path")
     printf '%s=%s\n' "$parameter" "$value"
-    [[ $value == 0 ]] || {
-        echo "FAIL: $parameter must default to 0 before explicit enablement" >&2
+    [[ $value == 0 || $value == N ]] || {
+        echo "FAIL: $parameter must be false before explicit enablement" >&2
         exit 1
     }
 done
-echo "PASS: diagnostic module is loaded and both opt-in parameters default to 0."
+echo "PASS: diagnostic module is loaded and both opt-in parameters are disabled."
