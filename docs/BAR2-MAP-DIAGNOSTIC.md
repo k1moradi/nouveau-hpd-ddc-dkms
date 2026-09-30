@@ -187,3 +187,57 @@ This reinstalls `0.1.13-diag1` with its expected srcversion and updates the
 initramfs. Reboot without the one-time BAR2 parameter to return to the prior
 diagnostic baseline. `uninstall.sh` removes both diagnostic DKMS revisions
 along with the regular project versions.
+
+## Hardware result: diag2 captures on 2026-09-30
+
+The dracut boot passed `tools/verify-bar2-map-diagnostic.sh post-reboot` with
+the expected loaded and on-disk srcversion `72DEE2B4ECFF77AD3764039`.
+`diag_bar2_map` was enabled by the one-boot dracut option; the fence and CTXSW
+probes were then enabled for the captures. The tested Mesa plugin was the
+private native-surface plus serialized-teardown build pinned above. No Mesa
+package, DKMS module, or kernel image was installed or replaced during either
+capture.
+
+Two captures completed in that boot:
+
+| Capture | Result |
+| --- | --- |
+| `/home/keivan/nouveau-vaapi-captures/20260930T082658Z-private-instrumented-12497` | 3,000 output frames, 3,002 decoded, zero decode errors, FFmpeg exit 0, `STOP_A_B=0`; no BAR2/PTE or other stop signature. |
+| `/home/keivan/nouveau-vaapi-captures/20260930T083455Z-private-instrumented-13895` | Full 40,561-frame file, 40,561 decoded, zero decode errors, FFmpeg exit 0; wall time 534.72 seconds; `STOP_A_B=0`; no BAR2/PTE or other stop signature. |
+
+For the full-file capture, SHA-256 verification passed for all recorded files:
+
+```text
+boot-kernel.log  3ec23b3b3998acaf52d314de25e4ae2db2f2b681bec0b96a091162077d717001
+kernel.log       b26dbe4843f6d50f4603b173cceda595246623e3bbea7365c5794ee01791f5ea
+ffmpeg.log       f5acd6cba5b71e5fc9048f009106a7f3f7ad2a4dffa7f4fef8b671c44a9628cc
+transcript.txt   fa5124695f67b14df67947806e3df63ec09170f79d4c994108ac2a473286b619
+```
+
+The full-file run positively exercised the private VA driver and surface-clear
+trace. The clear records used the expected `1920x544` luma and `960x272`
+chroma render-target dimensions. BSP, VP, and PPP idle fences completed; the
+VP chid 4 fence advanced from `0xaa2e` to its target `0xaa31` and returned
+success after 21 jiffies. The capture had no PROP overrun, `CTXSW_TIMEOUT`,
+channel kill, failed-idle, or BAR2/PTE record. SDDM remained inactive at both
+capture boundaries.
+
+The BAR2 trace saw a live one-page mapping at VMA `0x377000` (backing
+`0xff82f000`) during the run, including successful writes at offsets
+`0x200`, `0x204`, and `0x208`, plus a before-write record for `0x20c`. The
+logger reported suppressed callbacks, so the trace is not a complete access
+history. In the full-file capture that mapping was destroyed at monotonic
+`1922.743289`, about 0.036 seconds before FFmpeg exited. At teardown, another
+mapping covering VMA range `[0x379000, 0x3a3000)` was destroyed. This range
+includes the previously faulting offset `0x388000`, but neither the boot
+snapshot nor the live diagnostic log has a matching map-creation record for
+that object; the logger also reports suppressed map callbacks.
+Therefore the trace does not establish which mapping, if any, owned either
+historical fault address when the earlier faults occurred.
+
+These clean 3,000-frame and full-file samples show that the prior BAR2 faults
+did not reproduce in these `diag2` runs. They do not prove the BAR2 issue is
+fixed: earlier captures recorded faults at `0x377000` and `0x388000`, and a
+single clean boot cannot establish whether those faults are intermittent or
+dependent on another client/state. Keep the BAR2 root cause unresolved and do
+not infer that the Mesa clear or serialized-teardown changes eliminated it.

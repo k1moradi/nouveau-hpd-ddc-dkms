@@ -777,11 +777,45 @@ Validation so far:
   `72DEE2B4ECFF77AD3764039`. The live module remains `0.1.13-diag1` at
   srcversion `B19B8AAE48467545E652509` until the staged dracut boot is used.
 
-The packaging gate is complete: the separately versioned
+At this checkpoint the packaging gate was complete: the separately versioned
 `0.1.13-diag2` module is installed on disk with the expected srcversion. The
-remaining runtime gate is a reboot using the current dracut image, which embeds
+remaining runtime gate was a reboot using the current dracut image, which embeds
 `options nouveau diag_bar2_map=1`; the host-side option file has been removed.
 After reboot, require `tools/verify-bar2-map-diagnostic.sh post-reboot` to
 pass before enabling `diag_fence_wait` and `diag_ctxsw` and running the single
 serialized-teardown capture. Enabling `diag_bar2_map` only after Nouveau has
-initialized is insufficient to capture the early mapping lifetime.
+initialized is insufficient to capture the early mapping lifetime. The
+completed runtime results are recorded below.
+
+### Full-file diag2 result — 2026-09-30
+
+The subsequent dracut boot loaded `diag2` (`72DEE2B4ECFF77AD3764039`) and
+passed the post-reboot verifier. The private Mesa native-surface plus
+serialized-teardown candidate was selected by its exact private path. A
+3,000-frame capture and then a full-file capture both completed with zero
+decode errors and no stop signature. The full run decoded all 40,561 frames
+from `/home/keivan/test_1080p.mkv`, exited 0, and took 534.72 seconds wall
+time. Its capture is
+`/home/keivan/nouveau-vaapi-captures/20260930T083455Z-private-instrumented-13895`;
+all four SHA-256 entries in `SHA256SUMS` verified.
+
+The Mesa trace continued to report correct native render-target dimensions
+(`1920x544` and `960x272`) and emitted no PGRAPH PROP overrun. The kernel log
+showed successful BSP, VP, and PPP idle-fence completion. VP chid 4's fence
+wait advanced from `0xaa2e` to target `0xaa31` in 21 jiffies (18.502 ms from
+the journal timestamps). Mesa's VP channel-destroy interval was 22.547 ms;
+PPP's subsequent channel-destroy interval was 6.079 ms. There was no
+`CTXSW_TIMEOUT`, channel kill, failed idle, or BAR2/PTE record in either
+capture. The BAR2 mapping trace did record
+the one-page `0x377000` mapping and successful writes during decoding, followed
+by its destruction near process exit. It also recorded destruction of the
+`0x379000`/`0x2a000` mapping at teardown, which spans `0x388000`; the
+corresponding map creation was not present, and the diagnostic reported
+suppressed callbacks.
+
+This is strong hardware evidence that the native-surface and serialized VP3
+teardown candidates support this complete H.264 file on the tested K4200
+configuration. It is not proof of universal or repeated reliability. The
+earlier BAR2 PTE faults remain unexplained and were absent, rather than
+reproduced and mapped, in these `diag2` samples. Preserve that issue as
+unresolved and separate from the clear-state and VP/PPP teardown fixes.
