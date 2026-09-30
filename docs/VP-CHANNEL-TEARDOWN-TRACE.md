@@ -523,11 +523,12 @@ The new private Gallium plugin SHA-256 is
 Its `nouveau_drv_video.so` symlink resolves to that plugin, all timestamped
 surface/clear/channel markers are present, and `ldd` reports no missing
 dependencies. The previous working native-surface candidate prefix was not
-modified. This new plugin is **not installed system-wide** and has **not yet
-been run on hardware**.
+modified. This new plugin is **not installed system-wide**. Its first
+controlled hardware run is recorded below.
 
-The next controlled run requires a fresh reboot because the preceding capture
-set `STOP_A_B=1`. Keep the installed diagnostic DKMS module and Mesa
+The pre-run checklist below was used for the controlled run recorded below.
+At that time a fresh reboot was required because the preceding capture set
+`STOP_A_B=1`. Keep the installed diagnostic DKMS module and Mesa
 native-surface fix unchanged; change only to the new private prefix. After
 reboot, verify the module, enable both diagnostics, and verify their readback:
 
@@ -566,3 +567,115 @@ takes the same nonblocking exclusive lock and exits with status 3 before
 stopping services if a capture owns it. Recompute this hash if the local
 helper changes. The capture regression test exercises this external script
 with an isolated temporary `HOME`.
+
+## Serialized teardown candidate hardware capture — 2026-09-29
+
+The planned test above was performed after a fresh boot. The capture is:
+
+`/home/keivan/nouveau-vaapi-captures/20260930T033219Z-private-instrumented-4381`
+
+All three recorded SHA-256 values verify:
+
+| File | SHA-256 |
+| --- | --- |
+| `kernel.log` | `f5162a447bc10467fd7c05ea8fe406b42503f6744a987a7a94f03e98c89fcfed` |
+| `ffmpeg.log` | `608fca8270d3f578d4f5f32f040d7cdcfb73de286a931fad663a42b6a287f014` |
+| `transcript.txt` | `f874d2f0ae0a0cae2489ab60a3ac0731b0a5c7507c246304b6a8b8d5ab973e05` |
+
+The baseline was kernel `7.0.0-34-generic` with the already-installed
+`nouveau-hpd-ddc/0.1.13-diag1`; loaded and on-disk Nouveau `srcversion` both
+matched `B19B8AAE48467545E652509`. Both kernel diagnostic parameters were
+enabled for this one run. SDDM and `display-manager` were inactive at both
+capture start and end. The private `nouveau_drv_video.so` path was selected
+and `va_openDriver()` returned 0. The input SHA-256 remained
+`d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2`.
+
+FFmpeg completed 3000 output frames, decoded 3002 frames with zero decode
+errors, and exited 0. Media progress elapsed was 38.72 s and wall time was
+41.33 s. The harness returned 5 / `STOP_A_B=1` because it observed BAR2/PTE
+faults; this is a successful decode with a kernel fault, not a clean capture.
+No second GPU workload was run in this boot. The diagnostic parameters were
+turned off after the capture.
+
+The VA instrumentation reported `SKIP_CLEAR_SURFACE=0` and entered
+`nvc0_clear_render_target()` for each plane. The emitted RT dimensions were
+only `1920x544` and `960x272`; the kernel log contained no PROP,
+`RT_WIDTH_OVERRUN`, or `RT_HEIGHT_OVERRUN` record.
+
+The Mesa channel identity records map BSP to chid 3, VP to chid 4, and PPP to
+chid 5. The monotonic timestamps from Mesa, the kernel journal, and the
+harness align. The important teardown events were:
+
+| Monotonic time | Event | Relative to FFmpeg start |
+| ---: | --- | ---: |
+| `432.058294584` | FFmpeg starts | `0` |
+| `434.389081` | BSP/chid 3 idle fence completes | `+2.330786 s` |
+| `434.398166` | BAR2/HOST_CPU read PTE fault at `0x377000`, channel `-1` / unknown | `+2.339871 s` |
+| `473.120117073` | Decoder destruction begins | `+41.061822 s` |
+| `473.120942082`–`473.128230169` | BSP/chid 3 channel free | `+41.062648`–`+41.069936 s` |
+| `473.128627715` | VP/chid 4 channel-free call begins | `+41.070333 s` |
+| `473.129053` | VP idle fence seq 3007 emitted at `0x14040`; prior value `0xbbd`; kick called | `+41.070758 s` |
+| `473.130166` | VP fence wait begins; observed value `0xbbd` | `+41.071871 s` |
+| `473.143037` | VP fence reaches target `0xbbf`; wait result 0, 14 jiffies | `+41.084742 s` |
+| `473.144392714` | VP/chid 4 channel-free call ends; duration 15.765 ms | `+41.086098 s` |
+| `473.144413548` | PPP engine-object destruction begins | `+41.086119 s` |
+| `473.145027` | BAR2/HOST_CPU read PTE fault at `0x388000`, channel `-1` / unknown | `+41.086732 s` |
+| `473.146173485` | PPP engine-object destruction ends | `+41.087879 s` |
+| `473.147030`–`473.147888` | PPP/chid 5 idle fence seq 3007 reaches `0xbbf`; wait result 0 | `+41.088735`–`+41.089593 s` |
+| `473.149213786` | Decoder destruction ends; total 29.097 ms | `+41.090919 s` |
+| `473.267709911` | FFmpeg exits 0 | `+41.209415 s` |
+| `488.425711544` | Journal follower stops after 15 s post-exit tail | `+56.367417 s` |
+
+There was no `CTXSW_TIMEOUT`, `SCHED_ERROR`, channel kill, or channel-idle
+failure in this kernel capture. In particular, VP's idle semaphore advanced
+from `0xbbd` to its target `0xbbf`; the previous non-serialized capture had
+stopped at `0xbbd` and waited for 15 seconds while the kernel recovered PPP
+chid 5. In this candidate, VP's complete channel-free call took about 15.8 ms,
+and PPP destruction began only after VP channel-free returned.
+
+This is a strong one-run A/B result for the teardown-order hypothesis: with
+the same diagnostic kernel, native-surface correction, and input, changing
+the Mesa distinct-channel destructor order coincided with the VP fence
+completing promptly and the prior MSPPP timeout/recovery disappearing. The
+runs were on separate boots, and this candidate has only one hardware sample,
+so serialization is strongly supported as the cause of the long VP wait, not
+yet proven across repetitions. Keep the Mesa change as a private candidate;
+the incremental build used for this A/B is not a clean-build provenance
+artifact for an upstream submission.
+
+### Remaining BAR2/PTE fault
+
+The serialized capture still has two BAR2 faults, and they are not simply
+downstream of a context-switch timeout: this kernel log contains no such
+timeout or channel recovery. The first fault occurred about 2.34 seconds into
+active decoding, before decoder teardown and 9.085 ms after the recorded
+chid 3 idle-fence completion. The second occurred about 0.613 ms after PPP
+engine-object destruction began, before PPP channel-free began. Their ordering
+does not establish which operation caused either fault, or whether the two
+faults share a cause.
+
+The exact Ubuntu `linux-source-7.0.0` package for `7.0.0-34.34` explains what
+the record does and does not identify:
+
+- `nvkm/engine/fifo/gk104.c` maps fault engine `0x05` to BAR2 / instance
+  memory.
+- `nvkm/engine/fifo/gf100.c`, in `gf100_fifo_mmu_fault_recover()`, handles a
+  BAR2 fault by calling `nvkm_bar_bar2_reset()` before logging the fault.
+  It records the hardware-reported address, HOST_CPU client, access and PTE
+  reason, plus the instance address.
+- `nvkm/engine/fifo/chan.c` and `runl.c` look up the instance address against
+  live channel instance objects. A missing match produces channel `-1` and
+  name `unknown`, as seen for both addresses (`0x00ffbb7000`).
+
+Thus **observed**: both are BAR2 HOST_CPU read PTE faults which the driver could
+not associate with a live Nouveau channel instance; the existing recovery
+path resets BAR2. **Not established**: which BAR2 mapping or caller accessed
+`0x377000` / `0x388000`, whether the first reset contributes to the second
+fault, and whether either fault affects decode output. Their channel `-1`
+status does not prove a kernel CPU caller or identify an owning allocation.
+The BAR2 issue remains unresolved and must be kept separate from the now
+strongly supported VP/PPP teardown-order result.
+
+No Mesa package, DKMS module, or kernel image was installed or replaced for
+this capture. The existing `0.1.13-diag1` DKMS module was the test baseline;
+the Mesa candidate remained in its private prefix.

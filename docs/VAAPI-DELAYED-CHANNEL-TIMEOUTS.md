@@ -479,3 +479,24 @@ the later PROP burst and BAR2 fault. These timestamps do not prove that the
 H.264 activity caused the fault or that the desktop-session abort caused it.
 The exact journal excerpt and limits are preserved in
 [`evidence/20260929-post-candidate-uncontrolled-journal.txt`](evidence/20260929-post-candidate-uncontrolled-journal.txt).
+
+## Serialized VP3 teardown A/B — 2026-09-29
+
+After a fresh boot, the private serialized-teardown Mesa candidate again
+completed 3000 H.264 VAAPI output frames with 3002 decoded, zero decode
+errors, and FFmpeg exit 0. The native-surface diagnostics showed only correct
+`1920x544`/`960x272` RT dimensions and no PROP/RT-overrun records. The VP
+idle-fence semaphore reached its target in about 13 ms; VP chid 4 channel free
+completed in 15.8 ms instead of the 15-second timeout seen in the prior
+non-serialized run. There was no `CTXSW_TIMEOUT`, recovery, channel kill, or
+idle failure. This is strong support for the Mesa teardown-order hypothesis,
+but it is one A/B sample rather than repeatability proof.
+
+The capture did contain two BAR2/HOST_CPU read PTE faults, one during active
+decode and another during PPP object destruction, both with channel `-1` /
+unknown. Therefore BAR2 is not explained solely by the previous PPP
+context-switch recovery, and its owner/cause remain unresolved. The harness
+correctly returned `STOP_A_B=1`; no second GPU run was performed in that boot.
+The hash-verified capture, event timeline, exact-source fault-handler analysis,
+and limits are documented in
+[`VP-CHANNEL-TEARDOWN-TRACE.md`](VP-CHANNEL-TEARDOWN-TRACE.md).
