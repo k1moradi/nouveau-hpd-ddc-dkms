@@ -1,0 +1,15 @@
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+@@ -222,4 +221,0 @@
+-   nouveau_object_del(&dec->bsp);
+-   nouveau_object_del(&dec->vp);
+-   nouveau_object_del(&dec->ppp);
+-
+@@ -227,0 +224,3 @@
++         struct nouveau_object **engine = i == 0 ? &dec->bsp :
++                                          i == 1 ? &dec->vp : &dec->ppp;
++         nouveau_object_del(engine);
+@@ -231,0 +231,3 @@
++      nouveau_object_del(&dec->bsp);
++      nouveau_object_del(&dec->vp);
++      nouveau_object_del(&dec->ppp);

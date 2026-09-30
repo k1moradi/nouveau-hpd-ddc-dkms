@@ -1,0 +1,48 @@
+--- a/src/gallium/frontends/va/surface.c
++++ b/src/gallium/frontends/va/surface.c
+@@ -32,0 +33 @@
++#include "util/u_inlines.h"
+@@ -973,0 +975,2 @@
++         struct pipe_surface *clear_surface;
++         bool clear_surface_owned = false;
+@@ -982,0 +986,14 @@
++         if (drv->pipe->create_surface) {
++            clear_surface = drv->pipe->create_surface(drv->pipe,
++                                                       surfaces[i].texture,
++                                                       &surfaces[i]);
++            if (!clear_surface) {
++               surface->buffer->destroy(surface->buffer);
++               surface->buffer = NULL;
++               return VA_STATUS_ERROR_ALLOCATION_FAILED;
++            }
++            clear_surface_owned = true;
++         } else {
++            clear_surface = &surfaces[i];
++         }
++
+@@ -984,2 +1001,2 @@
+-         pipe_surface_size(&surfaces[i], &width, &height);
+-         drv->pipe->clear_render_target(drv->pipe, &surfaces[i], &c, 0, 0,
++         pipe_surface_size(clear_surface, &width, &height);
++         drv->pipe->clear_render_target(drv->pipe, clear_surface, &c, 0, 0,
+@@ -987,0 +1005,3 @@
++
++         if (clear_surface_owned)
++            pipe_surface_reference(&clear_surface, NULL);
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_resource.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_resource.c
+@@ -161,0 +162,2 @@
++   pcontext->create_surface = nvc0_miptree_surface_new;
++   pcontext->surface_destroy = nv50_surface_destroy;
+--- a/src/gallium/drivers/nouveau/nvc0/nvc0_miptree.c
++++ b/src/gallium/drivers/nouveau/nvc0/nvc0_miptree.c
+@@ -587,0 +588 @@
++   ns->base.context = pipe;
+--- a/src/gallium/drivers/nouveau/nv50/nv50_resource.c
++++ b/src/gallium/drivers/nouveau/nv50/nv50_resource.c
+@@ -148,0 +149 @@
++   pcontext->create_surface = nv50_miptree_surface_new;
+--- a/src/gallium/drivers/nouveau/nv50/nv50_miptree.c
++++ b/src/gallium/drivers/nouveau/nv50/nv50_miptree.c
+@@ -502,0 +503 @@
++   ns->base.context = pipe;
