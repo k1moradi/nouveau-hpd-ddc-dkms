@@ -752,16 +752,32 @@ Validation so far:
   `7ed1b029e19cd79e85fc07b7d1f605cd1ec0097fcff60c488f902a5d37d6743a`; its
   build log SHA-256 is
   `7eaacbcf3a44e25958a98804e2a3495e4a910eff9ccc2c68696e37e4174f536a`.
-- The full `nouveau.ko` has not yet been rebuilt with this candidate. The
-  patch has not been packaged as a separate DKMS revision, installed, or
-  hardware-tested. It is not part of the normal installer or production DKMS
-  path.
+- A private full-module build then completed with one job using the same
+  Ubuntu source package and the HPD/DDC, GK104 nonprivileged-context, legacy
+  nonstall, and VP fence/CTXSW diagnostic patches from `0.1.13-diag1`, plus
+  this BAR2 patch applied with zero fuzz. The conditional BAR2 marker block
+  was added only to the private build-script copy; it is not yet part of the
+  repository DKMS build script or normal installer.
+- The resulting private module reports vermagic
+  `7.0.0-34-generic SMP preempt mod_unload modversions`, srcversion
+  `72DEE2B4ECFF77AD3764039`, and contains `diag_fence_wait`, `diag_ctxsw`,
+  and `diag_bar2_map`. Its strings include the IDLE_FENCE, CTXSW, BAR2_MAP,
+  and BAR2_ACCESS records, and `nm` shows the two NV50 diagnostic helpers.
+  `nouveau.ko` SHA-256 is
+  `8bce6d049a76676c1d93e7eae027c69517b2604bd21bac1fd68870708aa3e992`; the
+  full build log SHA-256 is
+  `cd2a8daa9791fdc1de14b2997658be768524dbd0dfb5401a307a60b246a55f14`.
+- The full module build exited 0 with no undefined-reference, modpost, or
+  compiler errors. The only notices were the kernel build's compiler-name
+  alias and missing matching `pahole` version; the installed GCC version
+  matched the kernel compiler version. This artifact is not registered with
+  DKMS or installed. DKMS has no `0.1.13-diag2` entry; the loaded and on-disk
+  module remains `0.1.13-diag1` at srcversion
+  `B19B8AAE48467545E652509`.
 
-The next gate is a separately versioned, full-module diagnostic build that
-preserves the already-tested context/nonstall and fence/CTXSW diagnostic
-changes. Verify the linked module's kernel vermagic, `diag_bar2_map` metadata,
-embedded mapping/access markers, module SHA-256, and build-log SHA-256 before
-considering any installation. To capture early mapping lifetime events, the
-parameter must be enabled before Nouveau initializes; do not treat a run with
-the parameter enabled only after module initialization as complete mapping
-provenance.
+The next packaging gate is a separately versioned DKMS revision that preserves
+the tested context/nonstall and fence/CTXSW diagnostic changes and reproduces
+this exact source set and srcversion before any installation. To capture early
+mapping lifetime events, enable the parameter before Nouveau initializes; do
+not treat a run with the parameter enabled only after module initialization
+as complete mapping provenance.
