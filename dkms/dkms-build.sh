@@ -341,6 +341,21 @@ else
     echo "nouveau-hpd-ddc: VP idle-fence/CTXSW diagnostics are disabled"
 fi
 
+# Optional address-filtered NV50 instance-memory BAR2 map/access trace. The
+# uniquely versioned BAR2 diagnostic installer creates this marker; the normal
+# installer does not copy the patch or create the marker. Keep the patch strict
+# so an unexpected Ubuntu source layout fails closed.
+if [ -f "$PWD/diagnostic-bar2-map.enabled" ]; then
+    echo "nouveau-hpd-ddc: applying opt-in BAR2 instance map/access diagnostic"
+    if ! patch --fuzz=0 -d "$srcdir" -p1 --forward --batch \
+        < "$PWD/patches/diagnostic/gk104-bar2-instmem-map-trace.patch"; then
+        echo "ERROR: BAR2 map/access diagnostic patch did not apply strictly; refusing to build." >&2
+        exit 2
+    fi
+else
+    echo "nouveau-hpd-ddc: BAR2 map/access diagnostics are disabled"
+fi
+
 # Force the GNU C compiler even on systems where Clang is the interactive
 # default.  Remove inherited LLVM/Kbuild tool-selection variables first so a
 # shell/profile setting such as LLVM=1 cannot silently switch this DKMS build

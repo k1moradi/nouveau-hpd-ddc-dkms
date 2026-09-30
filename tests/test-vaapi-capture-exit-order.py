@@ -92,6 +92,7 @@ def main() -> None:
         write_executable(
             fake_bin / "journalctl",
             "#!/bin/sh\n"
+            "case \" $* \" in *' -b '*) echo '0.100000 boot-kernel-marker'; exit 0 ;; esac\n"
             "if [ -n \"${TEST_JOURNAL_STARTED:-}\" ]; then : > \"$TEST_JOURNAL_STARTED\"; fi\n"
             "exec /bin/sleep 300\n",
         )
@@ -329,6 +330,46 @@ def main() -> None:
             False,
         )
         print("PASS: successful instrumented run with both trace markers exits 0")
+
+        boot_capture_root = root / "captures-with-boot-journal"
+        boot_home = root / "boot-journal-home"
+        boot_home.mkdir(parents=True, exist_ok=True)
+        boot_env = os.environ.copy()
+        boot_env.update(
+            {
+                "PATH": f"{fake_bin}:{boot_env['PATH']}",
+                "HOME": str(boot_home),
+                "NOUVEAU_CAPTURE_ROOT": str(boot_capture_root),
+                "NOUVEAU_CAPTURE_BOOT_KERNEL_LOG": "1",
+                "TEST_FFMPEG_EXIT": "0",
+                "TEST_TRACE": "1",
+            }
+        )
+        boot_capture = subprocess.run(
+            [str(harness), "private-instrumented", str(dri_dir)],
+            env=boot_env,
+            text=True,
+            capture_output=True,
+            check=False,
+        )
+        boot_output = boot_capture.stdout + boot_capture.stderr
+        assert boot_capture.returncode == 0, (
+            "boot-journal capture should succeed: "
+            f"{boot_output}"
+        )
+        assert "boot_kernel_snapshot=enabled" in boot_output
+        boot_run_line = next(
+            line for line in boot_output.splitlines()
+            if line.startswith("capture_directory=")
+        )
+        boot_run_dir = Path(boot_run_line.split("=", 1)[1])
+        assert (boot_run_dir / "boot-kernel.log").read_text().strip() == (
+            "0.100000 boot-kernel-marker"
+        )
+        sums = (boot_run_dir / "SHA256SUMS").read_text()
+        assert "boot-kernel.log" in sums
+        assert "kernel.log" in sums and "ffmpeg.log" in sums
+        print("PASS: optional current-boot kernel snapshot is captured and hashed")
 
         transition_capture_root = root / "captures-display-manager-change"
         transition_home = transition_capture_root / "display-manager-transition" / "home"

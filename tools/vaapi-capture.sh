@@ -12,6 +12,8 @@ Runs one fixed 3000-frame VA-API decode, records kernel/FFmpeg logs and
 metadata, and leaves the kernel journal follower active for 15 seconds after
 FFmpeg exits. Each run writes a unique directory below
 ${NOUVEAU_CAPTURE_ROOT:-$HOME/nouveau-vaapi-captures}.
+Set NOUVEAU_CAPTURE_BOOT_KERNEL_LOG=1 to save the current boot's kernel journal
+before starting the live capture.
 EOF
 }
 
@@ -152,6 +154,7 @@ ffmpeg_log="$run_dir/ffmpeg.log"
 journal_error="$run_dir/journal-stderr.log"
 time_log="$run_dir/time.txt"
 status_log="$run_dir/pipeline-status.txt"
+boot_kernel_log="$run_dir/boot-kernel.log"
 pid_file="$run_dir/ffmpeg.pid"
 exit_file="$run_dir/ffmpeg-exit.txt"
 logger_pid=
@@ -192,6 +195,25 @@ printf 'expected_plugin=%s\n' "$expected_plugin"
 printf 'input=%s\ninput_sha256=' "$input"
 sha256sum "$input"
 printf 'journal_command=journalctl -kf -n 0 -o short-monotonic\n'
+
+boot_kernel_log_enabled=${NOUVEAU_CAPTURE_BOOT_KERNEL_LOG:-0}
+case "$boot_kernel_log_enabled" in
+    0) printf 'boot_kernel_snapshot=disabled\n' ;;
+    1)
+        printf 'boot_kernel_snapshot=enabled\n'
+        printf 'boot_journal_command=journalctl -k -b -o short-monotonic\n'
+        if ! journalctl -k -b -o short-monotonic > "$boot_kernel_log" 2> "$journal_error"; then
+            echo 'boot kernel journal snapshot failed; refusing to run FFmpeg' >&2
+            cat "$journal_error" >&2
+            exit 3
+        fi
+        printf 'boot_kernel_log_bytes=%s\n' "$(wc -c < "$boot_kernel_log")"
+        ;;
+    *)
+        echo 'NOUVEAU_CAPTURE_BOOT_KERNEL_LOG must be 0 or 1' >&2
+        exit 2
+        ;;
+esac
 
 journalctl -kf -n 0 -o short-monotonic > "$kernel_log" 2> "$journal_error" &
 logger_pid=$!
@@ -324,7 +346,11 @@ exec 1>&3 2>&1
 if [[ -n ${transcript_tee_pid:-} ]]; then
     wait "$transcript_tee_pid" || true
 fi
-sha256sum "$kernel_log" "$ffmpeg_log" "$transcript" > "$run_dir/SHA256SUMS"
+if [[ $boot_kernel_log_enabled == 1 ]]; then
+    sha256sum "$boot_kernel_log" "$kernel_log" "$ffmpeg_log" "$transcript" > "$run_dir/SHA256SUMS"
+else
+    sha256sum "$kernel_log" "$ffmpeg_log" "$transcript" > "$run_dir/SHA256SUMS"
+fi
 cat "$run_dir/SHA256SUMS"
 printf 'capture_directory=%s\n' "$run_dir"
 

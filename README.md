@@ -29,6 +29,7 @@ generated DKMS staging data and are replaced during installation.
 | `docs/STATIC-ANALYSIS.md` | Current static-analysis conclusions and eliminated hypotheses |
 | `docs/NOUVEAU-VAAPI-VIDEO-DECODE-ISSUE.md` | Original GK104/NVE4 VA-API failure capture |
 | `docs/VP5-VIDEO-DECODE.md` | Candidate backport rationale and K4200 validation plan |
+| `docs/BAR2-MAP-DIAGNOSTIC.md` | Separately versioned, opt-in BAR2 mapping diagnostic procedure |
 | `dkms/` | DKMS config, build script, and hooks |
 | `docs/BUG-REPORT.md` | Hardware and diagnostic evidence |
 | `debian/` | Debian package metadata and maintainer scripts |
