@@ -137,9 +137,10 @@ The installer copies this project's DKMS files and patches into the package
 staging directory, builds Nouveau for the running kernel, and installs it.
 DKMS refreshes the target kernel's initramfs with dracut on dracut-configured
 systems or `update-initramfs` when initramfs-tools is configured. Superseded
-local DKMS revisions are removed only after the new revision installs
-successfully. The installer also cleans only this project's temporary
-build/test directories under `/tmp`.
+local DKMS revisions are removed only after the new revision builds
+successfully, immediately before installing the replacement into DKMS's
+shared module destination. The installer also cleans only this project's
+temporary build/test directories under `/tmp`.
 
 After reboot, run:
 
