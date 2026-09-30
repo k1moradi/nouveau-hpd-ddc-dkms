@@ -14,9 +14,11 @@ if [[ -z "$VER" || "$(sed -n 's/^PACKAGE_VERSION="\([^"]*\)"/\1/p' "$ROOT/dkms/d
 fi
 
 rm -rf -- "$STAGE"
-mkdir -p "$SRC/patches/diagnostic" "$STAGE/DEBIAN"
+mkdir -p "$SRC/patches/diagnostic" "$SRC/patches/video" "$STAGE/DEBIAN"
 cp -a "$ROOT/dkms/." "$SRC/"
 cp -a "$ROOT/patches/hpd-low-ddc-probe.patch" "$SRC/patches/"
+cp -a "$ROOT/patches/video/gk104-legacy-video-context-nonpriv.patch" "$SRC/patches/video/"
+cp -a "$ROOT/patches/video/legacy-fifo-nonstall-event-index.patch" "$SRC/patches/video/"
 cp -a "$ROOT/patches/diagnostic/ibuf-state-snapshot.patch" "$SRC/patches/diagnostic/"
 cp -a "$ROOT/patches/diagnostic/dac-powered-ddc-probe.patch" "$SRC/patches/diagnostic/"
 cp -a "$ROOT/patches/diagnostic/ack-slot-sampler.patch" "$SRC/patches/diagnostic/"
@@ -33,5 +35,5 @@ chmod 0755 \
     "$SRC/dkms-post-install.sh" \
     "$SRC/dkms-post-remove.sh"
 
-dpkg-deb --build "$STAGE" "$OUT"
+dpkg-deb --build --root-owner-group "$STAGE" "$OUT"
 echo "Built $OUT"

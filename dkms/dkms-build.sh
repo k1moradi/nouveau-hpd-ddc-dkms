@@ -141,6 +141,80 @@ else
     fi
 fi
 
+# Production backports for GK104 legacy-video engine contexts. Apply only to
+# the proven vulnerable shape, skip a recognized upstream fix, and fail closed
+# when the source has changed beyond either known state.
+video_ctx_src="$srcdir/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c"
+if [ ! -f "$video_ctx_src" ]; then
+    echo "ERROR: GK104 FIFO source missing; refusing to skip video-context fix" >&2
+    exit 2
+fi
+if ! video_ctx_state=$(python3 "$PWD/check-gk104-video-context.py" "$video_ctx_src"); then
+    echo "ERROR: cannot classify GK104 video-context source; refusing to guess." >&2
+    exit 2
+fi
+case "$video_ctx_state" in
+    vulnerable)
+        echo "nouveau-hpd-ddc: applying GK104 legacy-video non-privileged context mapping fix"
+        if ! patch --fuzz=0 -d "$srcdir" -p1 --forward --batch < "$PWD/patches/video/gk104-legacy-video-context-nonpriv.patch"; then
+            echo "ERROR: GK104 video-context fix did not apply exactly; refusing to build." >&2
+            exit 2
+        fi
+        ;;
+    fixed)
+        echo "nouveau-hpd-ddc: GK104 legacy-video context mappings are already fixed; skipping backport"
+        ;;
+    *)
+        echo "ERROR: unexpected GK104 video-context state '$video_ctx_state'; refusing to guess." >&2
+        exit 2
+        ;;
+esac
+if ! video_ctx_post_state=$(python3 "$PWD/check-gk104-video-context.py" "$video_ctx_src"); then
+    echo "ERROR: cannot verify GK104 video-context source after patching; refusing to build." >&2
+    exit 2
+fi
+if [ "$video_ctx_post_state" != fixed ]; then
+    echo "ERROR: GK104 video-context source is '$video_ctx_post_state' after patch step; expected fixed." >&2
+    exit 2
+fi
+
+# Legacy FIFO fence progress fix. This is part of the production patch set,
+# not an opt-in A/B. The classifier skips an upstream fix and fails closed on
+# source layouts it cannot recognize.
+nonstall_src="$srcdir/drivers/gpu/drm/nouveau/nvkm/engine/fifo/uchan.c"
+if [ ! -f "$nonstall_src" ]; then
+    echo "ERROR: Nouveau FIFO channel source missing; refusing to skip nonstall fix" >&2
+    exit 2
+fi
+if ! nonstall_state=$(python3 "$PWD/check-legacy-fifo-nonstall.py" "$nonstall_src"); then
+    echo "ERROR: cannot classify legacy FIFO nonstall registration; refusing to guess." >&2
+    exit 2
+fi
+case "$nonstall_state" in
+    vulnerable)
+        echo "nouveau-hpd-ddc: applying legacy FIFO nonstall event-index fix"
+        if ! patch --fuzz=0 -d "$srcdir" -p1 --forward --batch < "$PWD/patches/video/legacy-fifo-nonstall-event-index.patch"; then
+            echo "ERROR: legacy FIFO nonstall fix did not apply exactly; refusing to build." >&2
+            exit 2
+        fi
+        ;;
+    fixed)
+        echo "nouveau-hpd-ddc: legacy FIFO nonstall event registration is already fixed; skipping backport"
+        ;;
+    *)
+        echo "ERROR: unexpected legacy FIFO nonstall state '$nonstall_state'; refusing to guess." >&2
+        exit 2
+        ;;
+esac
+if ! nonstall_post_state=$(python3 "$PWD/check-legacy-fifo-nonstall.py" "$nonstall_src"); then
+    echo "ERROR: cannot verify legacy FIFO nonstall source after patching; refusing to build." >&2
+    exit 2
+fi
+if [ "$nonstall_post_state" != fixed ]; then
+    echo "ERROR: legacy FIFO nonstall source is '$nonstall_post_state' after patch step; expected fixed." >&2
+    exit 2
+fi
+
 # Optional read-only PNVIO input-buffer snapshot for the K4200 DDC diagnosis.
 # The installer creates this marker only when invoked with --diag-ibuf.
 if [ -f "$PWD/diagnostic-ibuf.enabled" ]; then

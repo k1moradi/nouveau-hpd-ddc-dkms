@@ -1,0 +1,39 @@
+From: Risto Pajula <or.pajula@gmail.com>
+Date: Sun, 13 Sep 2026 23:12:25 +0300
+Subject: [PATCH 2/2] drm/nouveau/fifo: use global nonstall event on legacy FIFO
+
+The per-runlist nonstall interrupt handling change made channel
+nonstall event registration use the runlist ID instead of the global
+event index 0.
+
+Legacy FIFO implementations do not provide a nonstall constructor.
+They have a single global nonstall event, and their interrupt handlers
+signal event index 0. Registering channel events using runl->id can
+therefore leave fence completion waiting for an event that is never
+signalled.
+
+Use the runlist ID when per-runlist nonstall interrupts have been
+constructed, and keep using event index 0 for legacy FIFO
+implementations.
+
+Fixes: 55e1a5996085 ("drm/nouveau/fifo/ga100-: add per-runlist nonstall intr handling")
+Assisted-by: LLM
+Signed-off-by: Risto Pajula <or.pajula@gmail.com>
+Link: https://lists.openwall.net/linux-kernel/2026/09/13/864
+---
+ drivers/gpu/drm/nouveau/nvkm/engine/fifo/uchan.c | 3 ++-
+ 1 file changed, 2 insertions(+), 1 deletion(-)
+
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/uchan.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/uchan.c
+index d6a87cec2..b96e84192 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/uchan.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/uchan.c
+@@ -53,6 +53,7 @@ nvkm_uchan_uevent
+	switch (args->v0.type) {
+	case NVIF_CHAN_EVENT_V0_NON_STALL_INTR:
+-		return nvkm_uevent_add(uevent, &runl->fifo->nonstall.event, runl->id,
++		return nvkm_uevent_add(uevent, &runl->fifo->nonstall.event,
++					       runl->fifo->func->nonstall_ctor ? runl->id : 0,
+				       NVKM_FIFO_NONSTALL_EVENT, NULL);
+	case NVIF_CHAN_EVENT_V0_KILLED:
+		return nvkm_uevent_add(uevent, &runl->chid->event, chan->id,

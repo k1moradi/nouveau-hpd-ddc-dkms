@@ -1,7 +1,7 @@
 #!/bin/bash
 set -Eeuo pipefail
 NAME=nouveau-hpd-ddc
-VER=0.1.6
+VER=0.1.14
 SRC_DIR="/usr/src/$NAME-$VER"
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)
 diag_ibuf=0
@@ -31,7 +31,12 @@ fi
 for source_file in \
     dkms/dkms.conf \
     dkms/dkms-build.sh \
+    dkms/refresh-initramfs.sh \
+    dkms/check-gk104-video-context.py \
+    dkms/check-legacy-fifo-nonstall.py \
     patches/hpd-low-ddc-probe.patch \
+    patches/video/gk104-legacy-video-context-nonpriv.patch \
+    patches/video/legacy-fifo-nonstall-event-index.patch \
     patches/diagnostic/ibuf-state-snapshot.patch \
     patches/diagnostic/dac-powered-ddc-probe.patch \
     patches/diagnostic/ack-slot-sampler.patch \
@@ -74,25 +79,6 @@ apt-get install -y \
     "linux-headers-$k" \
     "linux-source-$base"
 
-# Clean up failed/older test revisions before installing this revision.
-for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5; do
-    if dkms status -m "$NAME" -v "$oldver" 2>/dev/null | grep -q .; then
-        echo "Removing older DKMS revision $NAME/$oldver"
-        dkms remove -m "$NAME" -v "$oldver" --all
-    fi
-    rm -rf "/usr/src/$NAME-$oldver"
-    rm -rf "/var/lib/dkms/$NAME/$oldver"
-done
-
-for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5; do
-    if dkms status -m "$NAME" -v "$oldver" 2>/dev/null | grep -q . \
-        || [ -e "/usr/src/$NAME-$oldver" ] \
-        || [ -e "/var/lib/dkms/$NAME/$oldver" ]; then
-        echo "ERROR: older revision $NAME/$oldver remains after cleanup" >&2
-        exit 2
-    fi
-done
-
 if dkms status -m "$NAME" -v "$VER" 2>/dev/null | grep -q .; then
     echo "Removing existing DKMS revision $NAME/$VER before reinstall"
     dkms remove -m "$NAME" -v "$VER" --all
@@ -101,8 +87,10 @@ rm -rf "/var/lib/dkms/$NAME/$VER"
 rm -rf "$SRC_DIR"
 mkdir -p "$SRC_DIR"
 cp -a "$HERE/dkms/." "$SRC_DIR/"
-mkdir -p "$SRC_DIR/patches/diagnostic"
+mkdir -p "$SRC_DIR/patches/diagnostic" "$SRC_DIR/patches/video"
 cp -a "$HERE/patches/hpd-low-ddc-probe.patch" "$SRC_DIR/patches/"
+cp -a "$HERE/patches/video/gk104-legacy-video-context-nonpriv.patch" "$SRC_DIR/patches/video/"
+cp -a "$HERE/patches/video/legacy-fifo-nonstall-event-index.patch" "$SRC_DIR/patches/video/"
 cp -a "$HERE/patches/diagnostic/ibuf-state-snapshot.patch" "$SRC_DIR/patches/diagnostic/"
 cp -a "$HERE/patches/diagnostic/dac-powered-ddc-probe.patch" "$SRC_DIR/patches/diagnostic/"
 cp -a "$HERE/patches/diagnostic/ack-slot-sampler.patch" "$SRC_DIR/patches/diagnostic/"
@@ -132,7 +120,21 @@ fi
 
 dkms add -m "$NAME" -v "$VER"
 dkms build -m "$NAME" -v "$VER" -k "$k"
+# Build the replacement while the current revision is still available. Remove
+# old versions only after compilation succeeds and before installing the
+# replacement into DKMS's shared module destination.
+for oldver in 0.1.0 0.1.1 0.1.2 0.1.3 0.1.4 0.1.5 0.1.6 0.1.13; do
+    if dkms status -m "$NAME" -v "$oldver" 2>/dev/null | grep -q .; then
+        echo "Removing superseded DKMS revision $NAME/$oldver"
+        dkms remove -m "$NAME" -v "$oldver" --all
+    fi
+    rm -rf "/usr/src/$NAME-$oldver" "/var/lib/dkms/$NAME/$oldver"
+done
 dkms install -m "$NAME" -v "$VER" -k "$k"
+if ! dkms status -m "$NAME" -v "$VER" -k "$k" 2>/dev/null | grep -q 'installed'; then
+    echo "ERROR: DKMS does not report $NAME/$VER installed for $k" >&2
+    exit 2
+fi
 
 if [ "$diag_ack_slot" -eq 1 ]; then
     install -d -m 0755 /etc/modprobe.d
@@ -146,13 +148,16 @@ if [ "$diag_ack_slot" -eq 1 ]; then
     echo "Staged config=NvI2C=1 and included it in the diagnostic initramfs."
 fi
 
-# Refresh every installed kernel so stale copies of earlier DKMS revisions are
-# removed from old initramfs images as well as the running kernel's image.
+# DKMS post-install refreshed the running kernel. Refresh only other images
+# here, including images whose old-version hooks used the wrong generator.
 for modules_dir in /lib/modules/*; do
     [ -d "$modules_dir" ] || continue
     depmod -a "${modules_dir##*/}"
 done
-update-initramfs -u -k all
+"$SRC_DIR/refresh-initramfs.sh" others
+if [ "$diag_ack_slot" -eq 1 ]; then
+    "$SRC_DIR/refresh-initramfs.sh" "$k"
+fi
 
 # Explicit cleanup here plus EXIT trap: tmpfs RAM is released before returning.
 cleanup_tmp

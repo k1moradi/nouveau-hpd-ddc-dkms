@@ -1,0 +1,4 @@
+# These files intentionally contain unified diffs with tab-indented C source.
+# Validate whitespace after applying the patches to source, not on diff context.
+patches/video/gk104-legacy-video-context-nonpriv.patch whitespace=-blank-at-eol,-space-before-tab
+patches/video/legacy-fifo-nonstall-event-index.patch whitespace=-blank-at-eol,-space-before-tab

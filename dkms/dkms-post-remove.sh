@@ -5,8 +5,5 @@ kernelver="${1:-${kernelver:-}}"
 if command -v depmod >/dev/null 2>&1; then
     depmod -a "$kernelver" || true
 fi
-if command -v update-initramfs >/dev/null 2>&1; then
-    update-initramfs -u -k "$kernelver" || true
-elif command -v dracut >/dev/null 2>&1; then
-    dracut -f "/boot/initrd.img-$kernelver" "$kernelver" || true
-fi
+script_dir="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+"$script_dir/refresh-initramfs.sh" "$kernelver" || true
