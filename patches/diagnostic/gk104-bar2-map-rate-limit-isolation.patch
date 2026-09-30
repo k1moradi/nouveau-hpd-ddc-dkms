@@ -1,0 +1,23 @@
+From: Nouveau diagnostic follow-up
+Subject: [DIAGNOSTIC] nouveau: separate BAR2 map and access log budgets
+
+The BAR2 map diagnostic currently uses one ratelimit state for mapping
+lifecycle records and fast access records. A short burst of accesses can use
+the entire budget before a relevant mapping is logged. Give the two record
+classes independent, still bounded budgets so access traffic cannot hide map
+creation/eviction/destruction events.
+
+This is diagnostic-only. It does not change BAR2 mappings or access behavior.
+Each record class remains limited to eight records per second.
+
+---
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
+@@ -42,0 +43 @@
++static DEFINE_RATELIMIT_STATE(nv50_instobj_diag_map_rs, HZ, 8);
+@@ -92 +93 @@
+-	if (!pages || !__ratelimit(&nv50_instobj_diag_access_rs))
++	if (!pages || !__ratelimit(&nv50_instobj_diag_map_rs))
+@@ -96 +97 @@
+-		 "NOUVEAU_DIAG_BAR2_MAP stage=%s pages=0x%x object=%p "
++		 "NOUVEAU_DIAG_BAR2_MAP budget=lifecycle stage=%s pages=0x%x object=%p "

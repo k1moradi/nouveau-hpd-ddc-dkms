@@ -756,8 +756,10 @@ Validation so far:
   Ubuntu source package and the HPD/DDC, GK104 nonprivileged-context, legacy
   nonstall, and VP fence/CTXSW diagnostic patches from `0.1.13-diag1`, plus
   this BAR2 patch applied with zero fuzz. The conditional BAR2 marker block
-  was added only to the private build-script copy; it is not yet part of the
-  repository DKMS build script or normal installer.
+  was initially added only to a private build-script copy. A later
+  marker-gated block was added to the repository DKMS build script for the
+  independent-budget follow-up; neither the `diag2` preparation nor the normal
+  installer creates that follow-up marker.
 - The resulting private module reports vermagic
   `7.0.0-34-generic SMP preempt mod_unload modversions`, srcversion
   `72DEE2B4ECFF77AD3764039`, and contains `diag_fence_wait`, `diag_ctxsw`,
@@ -827,3 +829,21 @@ boots, other media, or other clients. The earlier BAR2 PTE faults remain
 unexplained and were absent, rather than reproduced and mapped, in these
 `diag2` samples. Preserve that issue as unresolved and separate from the
 clear-state and VP/PPP teardown fixes.
+
+### BAR2 diagnostic rate-limit follow-up
+
+The repeated `diag2` captures showed that the BAR2 map lifecycle and access
+records share one eight-record-per-second limiter. This is a source-proven
+coverage limitation; it does not establish that any specific missing callback
+occurred. A separate diagnostic-only patch,
+`patches/diagnostic/gk104-bar2-map-rate-limit-isolation.patch`, gives lifecycle
+records an independent eight-record-per-second limiter while preserving the
+existing access limit. `dkms/dkms-build.sh` applies it with `--fuzz=0` only
+when `diagnostic-bar2-map-budget.enabled` is present. No preparation helper
+creates that marker for `diag2` or for the normal production package.
+
+The follow-up passes a static regression check and strict zero-fuzz application
+to the cached exact Ubuntu source preimage. It has not yet been included in a
+DKMS build or used in hardware testing. Do not treat it as a BAR2 fix; it only
+improves the chance of retaining target mapping lifecycle records if a fault
+recurs.

@@ -7,9 +7,10 @@ PTE faults remained. The faults were reported at BAR2 offsets `0x377000` and
 adds read-only tracing to the NV50 instance-memory BAR2 mapping and access
 paths. It does not alter mapping, MMIO, fence, scheduler, or recovery behavior.
 The address filter only selects 32-bit accesses and mapping lifetimes which
-overlap pages `0x377000` or `0x388000`. The records share one global kernel
-ratelimiter, capped at eight combined mapping/access records per second, not
-eight per record type, so unrelated BAR2 traffic cannot flood the log.
+overlap pages `0x377000` or `0x388000`. In `diag2`, mapping-lifecycle and
+access records share one global kernel ratelimiter capped at eight combined
+records per second. This bounds logging, but access bursts can consume the
+budget before a relevant mapping-lifecycle record is emitted.
 
 The patch is in
 [`patches/diagnostic/gk104-bar2-instmem-map-trace.patch`](../patches/diagnostic/gk104-bar2-instmem-map-trace.patch).
@@ -18,21 +19,20 @@ enabled from Nouveau's initial module load to observe mappings created during
 GPU initialization, so the diagnostic package is separate from the normal
 `0.1.13` and prior `0.1.13-diag1` packages.
 
-## Current module and package state
+## Verified module and package state
 
-The latest live check on 2026-09-30 reports kernel `7.0.0-34-generic`, with
-`nouveau-hpd-ddc/0.1.13-diag1` still loaded at srcversion
-`B19B8AAE48467545E652509`. The separate `nouveau-hpd-ddc/0.1.13-diag2` package
-is installed on disk at srcversion `72DEE2B4ECFF77AD3764039`, but has not yet
-been loaded because the machine has not rebooted since installation. The
-currently loaded module therefore has no `diag_bar2_map`, `diag_fence_wait`,
-or `diag_ctxsw` parameter files.
+The latest verified hardware captures used kernel `7.0.0-34-generic` and the
+loaded/on-disk `nouveau-hpd-ddc/0.1.13-diag2` module at srcversion
+`72DEE2B4ECFF77AD3764039`. `diag_bar2_map`, `diag_fence_wait`, and `diag_ctxsw`
+were enabled for those runs. The prepared `diag3` build described below will
+be a separate DKMS version and will not replace `diag2` unless it passes a
+separate review and install gate.
 
-The current dracut image `/boot/initrd.img-7.0.0-34-generic` contains the
-`diag2` module and the exact one-boot option
-`options nouveau diag_bar2_map=1`; both were verified with `lsinitrd`. The
-host-side option file was then removed. After reboot, the post-reboot verifier
-must pass before running a capture.
+For the initial `diag2` boot, the dracut image was verified with `lsinitrd` to
+contain both the module and the one-boot setting
+`options nouveau diag_bar2_map=1`. The host-side option was removed after the
+boot verifier passed so later generated initramfs images would not enable the
+probe automatically.
 
 The preserved module artifacts are checked by their srcversions:
 
@@ -43,33 +43,24 @@ The preserved module artifacts are checked by their srcversions:
 Do not reuse a DKMS version for different module contents. Do not register or
 install `diag2` if its resulting srcversion differs from the expected value.
 
-## Build and inspect without installing
+## Historical diag2 build record
 
-The preparation helper copies the current functional and diagnostic patches
-into the unique `0.1.13-diag2` source tree, creates explicit markers for the
-legacy nonstall, VP fence/CTXSW, and BAR2 diagnostics, and runs a one-job DKMS
-build. It does not run `dkms install`, replace the on-disk module, update the
-initramfs, or reload Nouveau.
+This preparation completed before the hardware captures. Do not rerun it to
+create different contents under the already-installed `0.1.13-diag2` version.
 
-```bash
-cd ~/nouveau-hpd-ddc-dkms
-sudo env NOUVEAU_DKMS_JOBS=1 tools/prepare-bar2-map-diagnostic.sh
-```
-
-The helper requires a clean checkout of the review branch. It records the
+The helper required a clean checkout of the review branch. It recorded the
 commit and tree IDs, hashes every file under `dkms/`, the preparation script,
 and each applied patch, and verifies the Ubuntu source package version and
 archive SHA-256 (`linux-source-7.0.0` `7.0.0-34.34`,
 `a874e1fb08d2ee695b08e0c8ce6fd2c76a4bf7ffa98882fbabd233380ef8a85a`). The
-same provenance is copied into the staged DKMS source. The installer requires
-a clean checkout with matching commit/tree and recomputes the input manifest
-before it can install the artifact.
+same provenance was copied into the staged DKMS source. The installer required
+a clean checkout with matching commit/tree and recomputed the input manifest
+before installing the artifact.
 
-The helper fails unless the running and on-disk module is still `diag1`, the
-preserved `.13` and `diag1` module artifacts have their expected srcversions,
-the exact kernel headers and Ubuntu source archive are available, and no
-`diag2` source/build entry already exists. After a successful build, inspect
-the printed evidence directory and confirm:
+At build time, the helper required loaded and on-disk `diag1`, preserved `.13`
+and `diag1` artifacts with their expected srcversions, the exact kernel
+headers/source archive, and an absent `diag2` source/build entry. Its recorded
+build checks were:
 
 - DKMS reports `0.1.13-diag2` as **built**, not installed.
 - The module vermagic starts with `7.0.0-34-generic`.
@@ -80,21 +71,18 @@ the printed evidence directory and confirm:
 - The evidence directory records the compressed module and complete DKMS
   build log with SHA-256 hashes.
 
-The regular installer remains on version `0.1.13`; this diagnostic helper is
-the only path that stages the extra BAR2 patch.
+The regular installer remains on version `0.1.13`; the diag2 preparation was
+the only path that staged the base BAR2 patch.
 
-## Install and boot once with early mapping tracing
+## Historical diag2 installation and early tracing boot
 
-After reviewing a successful build artifact, install it on disk with:
+This installation and reboot already occurred. The commands below document
+how that one-time early-parameter boot was prepared; do not rerun the diag2
+installer or reuse this version for the rate-limit follow-up.
 
-```bash
-sudo tools/install-bar2-map-diagnostic.sh
-sudo tools/verify-bar2-map-diagnostic.sh pre-reboot
-```
-
-The install helper uses the unique `0.1.13-diag2` version, verifies both
-preserved module artifacts, keeps the currently loaded `diag1` module running,
-and updates the initramfs. It does not reboot or reload Nouveau.
+The install helper used the unique `0.1.13-diag2` version, verified the
+preserved module artifacts, kept the loaded `diag1` module running, and updated
+the initramfs without rebooting or reloading Nouveau.
 
 This Lubuntu installation uses a dracut-generated initramfs. To enable the
 parameter for one boot without editing a bootloader command line, temporarily
@@ -249,13 +237,10 @@ The second full-file run again recorded a live mapping at `0x377000`, accesses
 to offsets `0x200`, `0x204`, and `0x208`, a before-write record at `0x20c`,
 and destruction of the mapping near FFmpeg exit. It again logged destruction
 of a mapping spanning `0x388000` without a corresponding map-creation record.
-Source review found why the missing record cannot be treated as evidence: the
-current diagnostic uses the same eight-record-per-second rate-limit state for
-both map-lifecycle and access records. The initial map/access burst reaches
-that shared budget, so an access record can suppress a later map record. A
-follow-up diagnostic should give lifecycle and access records separate bounded
-budgets, keeping the trace low-volume while preventing access traffic from
-consuming the entire map-history allowance.
+Source review found that the shared rate-limit state allows an access record
+to suppress a later map record. The missing creation record therefore cannot
+be interpreted as proof that the mapping was not created or that no callback
+ran.
 
 Across these three captures, 84,122 output frames were produced and 84,124
 frames were decoded with zero decode errors. The prior BAR2 faults did not
@@ -264,3 +249,52 @@ earlier captures recorded faults at `0x377000` and `0x388000`, and these clean
 runs cannot establish whether those faults are intermittent or dependent on
 another client/state. Keep the BAR2 root cause unresolved and do not infer that
 the Mesa clear or serialized-teardown changes eliminated it.
+
+## Follow-up diagnostic candidate: independent log budgets
+
+The repeated full-file runs exposed a coverage limitation in `diag2`: a shared
+eight-record-per-second limiter applies to both address-filtered map lifecycle
+records and fast access records. The source proves these record classes share
+that budget. The evidence does not prove which particular callback was
+suppressed, but it permits a burst of accesses to hide a later map creation.
+
+The standalone follow-up patch
+[`gk104-bar2-map-rate-limit-isolation.patch`](../patches/diagnostic/gk104-bar2-map-rate-limit-isolation.patch)
+adds an independent `HZ, 8` limiter for map, eviction, and destroy records;
+the existing access records retain their own `HZ, 8` limiter. This keeps each
+record class bounded and caps their combined output at sixteen records per
+second. The diagnostic is opt-in and does not change mapping or access
+behavior. It is applied only after the base BAR2 patch through a separate
+marker, so the existing `diag2` source and installed artifact remain
+unchanged.
+
+The map record also labels itself `budget=lifecycle` so the new code has a
+distinct module-string marker and captures identify which budget emitted it.
+The strict patch applies with `--fuzz=0` to the cached exact Ubuntu
+`7.0.0-34.34` `nv50.c` preimage, and a regression check verifies the map and
+access callbacks use their distinct limiter states.
+
+The separate `tools/prepare-bar2-map-diagnostic-v3.sh` helper stages
+`nouveau-hpd-ddc/0.1.13-diag3` from a clean committed tree and builds it without
+installing it. Its first build can discover the resulting srcversion; until an
+expected srcversion is reviewed and pinned, the artifact is explicitly
+build-only and not eligible for installation. The `diag2` and normal
+preparation paths do not create the follow-up marker. No `diag3` build or
+hardware run has yet used the isolated budgets. BAR2's historical root cause
+remains unknown; a fresh-boot capture with the revised diagnostic is needed to
+collect a more complete mapping lifetime if the fault recurs.
+
+After the candidate changes are committed and pushed, the preparation command
+is:
+
+```bash
+cd ~/nouveau-hpd-ddc-dkms
+sudo env NOUVEAU_DKMS_JOBS=1 tools/prepare-bar2-map-diagnostic-v3.sh
+```
+
+It requires `diag2` loaded and on disk, a clean review-branch checkout, and the
+exact Ubuntu kernel source archive. It registers/builds only the new
+`0.1.13-diag3` DKMS source; it does not install the module, regenerate the
+initramfs, reload Nouveau, or reboot. Review its build log, output module hash,
+vermagic, srcversion, parameters, and lifecycle-budget marker before preparing
+any install step.

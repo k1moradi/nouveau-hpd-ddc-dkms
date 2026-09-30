@@ -45,8 +45,28 @@ grep -Fq 'dracut-initramfs' "$repo_root/tools/verify-bar2-map-diagnostic.sh"
 grep -Fq '99-nouveau-diag-bar2-once.conf' "$repo_root/tools/verify-bar2-map-diagnostic.sh"
 grep -Fq 'dkms install --force -m "$NAME" -v "$VERSION"' \
     "$repo_root/tools/rollback-bar2-map-diagnostic.sh"
-grep -Fq 'eight combined mapping/access records per second' \
+grep -Fq 'records per second. This bounds logging' \
     "$repo_root/docs/BAR2-MAP-DIAGNOSTIC.md"
+python3 "$repo_root/tests/test_bar2_map_rate_limit_isolation.py"
+grep -Fq 'diagnostic-bar2-map-budget.enabled' \
+    "$repo_root/dkms/dkms-build.sh"
+grep -Fq 'gk104-bar2-map-rate-limit-isolation.patch' \
+    "$repo_root/dkms/dkms-build.sh"
+grep -Fq 'DIAG_VERSION=0.1.13-diag3' \
+    "$repo_root/tools/prepare-bar2-map-diagnostic-v3.sh"
+grep -Fq '0.1.13-diag3' "$repo_root/uninstall.sh"
+grep -Fq 'PREVIOUS_DIAG_VERSION=0.1.13-diag2' \
+    "$repo_root/tools/prepare-bar2-map-diagnostic-v3.sh"
+grep -Fq 'touch "$SRC_DIR/diagnostic-bar2-map-budget.enabled"' \
+    "$repo_root/tools/prepare-bar2-map-diagnostic-v3.sh"
+grep -Fq 'gk104-bar2-map-rate-limit-isolation.patch' \
+    "$repo_root/tools/prepare-bar2-map-diagnostic-v3.sh"
+! grep -Fq 'diagnostic-bar2-map-budget.enabled' \
+    "$repo_root/tools/prepare-bar2-map-diagnostic.sh"
+! grep -Eq '^dkms install([[:space:]]|$)' \
+    "$repo_root/tools/prepare-bar2-map-diagnostic-v3.sh"
+! grep -Eq 'update-initramfs|dracut|modprobe -r' \
+    "$repo_root/tools/prepare-bar2-map-diagnostic-v3.sh"
 grep -Fq 'd841244e592f171adebdbeaa556c97cb2e1bf639fceba81b0a829c9720b1119f' \
     "$repo_root/docs/BAR2-MAP-DIAGNOSTIC.md"
 grep -Fq 'serialized-teardown native-surface Mesa candidate' \

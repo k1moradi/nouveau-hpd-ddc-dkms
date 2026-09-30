@@ -356,6 +356,21 @@ else
     echo "nouveau-hpd-ddc: BAR2 map/access diagnostics are disabled"
 fi
 
+# Optional follow-up to the BAR2 trace: give address-filtered mapping lifecycle
+# records their own bounded log budget so hot access records cannot suppress
+# map/evict/destroy events. Only a uniquely versioned diagnostic package stages
+# this marker and patch; normal DKMS builds retain the base behavior.
+if [ -f "$PWD/diagnostic-bar2-map-budget.enabled" ]; then
+    echo "nouveau-hpd-ddc: separating BAR2 lifecycle and access log budgets"
+    if ! patch --fuzz=0 -d "$srcdir" -p1 --forward --batch \
+        < "$PWD/patches/diagnostic/gk104-bar2-map-rate-limit-isolation.patch"; then
+        echo "ERROR: BAR2 map-budget diagnostic patch did not apply strictly; refusing to build." >&2
+        exit 2
+    fi
+else
+    echo "nouveau-hpd-ddc: BAR2 map-budget diagnostic is disabled"
+fi
+
 # Force the GNU C compiler even on systems where Clang is the interactive
 # default.  Remove inherited LLVM/Kbuild tool-selection variables first so a
 # shell/profile setting such as LLVM=1 cannot silently switch this DKMS build
