@@ -1,10 +1,11 @@
 # GK104 VP channel teardown trace
 
-This is an offline source analysis and a prepared, opt-in trace procedure for
-the remaining VP-channel teardown timeout. The private Mesa native-surface
-clear candidate remains unchanged. A separate Mesa 26.0.8 teardown-order
-candidate is now privately built for a controlled hardware A/B; it is not
-installed system-wide and has not yet been hardware-tested.
+This investigation tracks the remaining Nouveau BAR2/HOST_CPU PTE faults and
+the legacy VP3 teardown timeout. The private Mesa native-surface clear fix and
+the separate-channel teardown ordering have each been tested in controlled
+hardware runs. The latest run completed the VP and PPP idle fences promptly
+with no context-switch timeout or channel kill, but still logged two BAR2 PTE
+faults. Neither Mesa candidate is installed system-wide.
 
 ## Candidate-run observations
 
@@ -675,6 +676,52 @@ fault, and whether either fault affects decode output. Their channel `-1`
 status does not prove a kernel CPU caller or identify an owning allocation.
 The BAR2 issue remains unresolved and must be kept separate from the now
 strongly supported VP/PPP teardown-order result.
+
+### Exact GK104 BAR2 mapping path
+
+Further inspection of that same Ubuntu source package establishes the BAR2
+address-space path used by GK104:
+
+- `nvkm/engine/device/base.c`, `nve4_chipset`, selects
+  `.imem = nv50_instmem_new` and `.bar = gf100_bar_new` for GK104.
+- `nvkm/engine/device/pci.c:nvkm_device_pci_resource_idx()` maps
+  `NVKM_BAR2_INST` to the PCI resource after BAR0 and BAR1. On this K4200,
+  `/sys/bus/pci/devices/0000:01:00.0/resource` shows that resource as
+  `0xde000000..0xdfffffff`, a 32 MiB BAR. The fault offsets `0x377000` and
+  `0x388000` are inside that aperture, not beyond its bounds.
+- `nvkm/subdev/bar/gf100.c:gf100_bar_oneinit_bar()` creates a BAR2 VMM from
+  address zero with the PCI BAR2 size and joins it to instance memory.
+- `nvkm/subdev/instmem/nv50.c:nv50_instobj_kmap()` allocates a 4 KiB-granular
+  VMA in that BAR2 VMM, maps an instance-memory object into it, and creates a
+  CPU `ioremap_wc()` at `BAR2 physical base + VMA address`. The fast instance
+  memory read/write accessors use `ioread32_native()` and
+  `iowrite32_native()` through that mapping. Unused mappings enter an LRU and
+  can later be evicted; object destruction unmaps the CPU mapping and VMA.
+- `nvkm_bar_bar2_reset()` in `nvkm/subdev/bar/base.c` calls the BAR2 init and
+  wait hooks. GK104's GF100 BAR2 init rewrites the BAR2 base register from the
+  BAR2 instance-memory object. That reset path does not itself rebuild the
+  individual instance-object VMA mappings.
+
+This makes the NV50 instance-memory CPU mapping a **strong candidate path** for
+the HOST_CPU BAR2 faults: it is the GK104 implementation that directly maps
+instance objects through BAR2 for CPU reads and writes, and the reported fault
+offsets lie within its aperture. It is not yet proof that either captured
+fault came from `nv50_instobj_rd32()` or `nv50_instobj_wr32()`, nor that a
+mapping was stale or absent. The fault record's `inst` value and channel `-1`
+do not identify the CPU-side object.
+
+The next diagnostic should remain observational and separate from the
+production DKMS path. An opt-in trace in `nv50_instobj_kmap()`, eviction, and
+destruction should report VMA start/size, instance object pointer, backing
+memory address/size/target, and map lifetime. Add narrowly filtered
+before/after records in the fast read/write accessors when the computed BAR2
+offset falls on the two observed pages (`0x377000` or `0x388000`). That would
+show whether a live NV50 instance object owned either offset at access time and
+which object operation coincided with the fault, without changing mapping,
+fence, or recovery behavior. Because mappings may predate a userspace test,
+the trace must be enabled before relevant instance-object mappings are
+created, or it must use a separately validated safe snapshot mechanism; it
+must not traverse the VMM tree without its required synchronization.
 
 No Mesa package, DKMS module, or kernel image was installed or replaced for
 this capture. The existing `0.1.13-diag1` DKMS module was the test baseline;
