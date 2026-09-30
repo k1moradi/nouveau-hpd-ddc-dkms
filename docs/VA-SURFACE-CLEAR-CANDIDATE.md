@@ -344,3 +344,100 @@ failure occur with corrected RT dimensions and no PROP traps, so the two
 failure classes are experimentally separated in this run. The reason for the
 VP context-switch timeout remains unresolved. The harness set `STOP_A_B=1`;
 do not run another GPU condition in this boot.
+
+## Clean Mesa rebuild and full-file hardware validation — 2026-09-30
+
+To close the provenance gap left by the earlier incremental candidate build,
+Mesa 26.0.8 was reconstructed from the original Ubuntu source archive in a new
+user-owned source/build/prefix directory:
+
+```text
+/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-instrumented-native-surface-fix-serialized-teardown-clean-20260930/
+```
+
+The archive SHA-256 was
+`caf1c0061a68e88dfa74967a7e780c0e85d65b6c4e334cd69095a5dc54ad78bc`. The
+four patches were applied in order with `patch --fuzz=0`:
+
+| Patch | SHA-256 |
+| --- | --- |
+| `nvc0-rt-clear-diagnostic.patch` | `e01b17f7f5e7557b6ed87fcc88d306924c2e10a64a49bbb50a83f36b24a502b8` |
+| `nvc0-create-surface-for-va-clear.patch` | `d6315f8762f72b6cc45ab73807a9f8577d56ce1d255b5cd0d60d20ae48ae300b` |
+| `nouveau-vp3-channel-id-diagnostic.patch` | `390b0e08798e9c1330b3ac572eb3ee25955d9fa9fcaeb40bbe015f683689dc34` |
+| `nouveau-vp3-serialize-channel-teardown.patch` | `adf179f8cc6d93c8329d8303a38c9a1b02d3c1ea52255791d35251af17c07840` |
+
+Both focused source checks passed, and the clean private Mesa build completed
+935/935 steps with exit 0. The built plugin's dependencies resolve, and the
+driver symlink resolves to the plugin in this private prefix:
+
+```text
+/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-instrumented-native-surface-fix-serialized-teardown-clean-20260930/prefix/lib/x86_64-linux-gnu/dri/libgallium_drv_video.so
+SHA-256: e3d539f79241c95af838c2944937afbd6146b43d8ae7e8e378fc8723ae55f3e2
+```
+
+The clean build log SHA-256 is
+`c8348042c481efa95c4d4d2dc960ef693ec522668d19bfe2825f484f4f9dfa69`.
+
+The clean plugin is not byte-identical to the previously tested incremental
+plugin (`d841244e592f171adebdbeaa556c97cb2e1bf639fceba81b0a829c9720b1119f`).
+The source trees have matching content for all 11,514 non-generated files;
+the eight earlier recursive-diff entries were generated Python bytecode only.
+Meson configuration differs only in the private install prefix, and all 1,009
+Ninja commands match after normalizing the two build roots. The old binary
+contains its earlier `/private-instrumented/prefix` configuration paths;
+the clean binary contains its new clean-build prefix. Consequently, the ELF
+build ID, embedded path strings, and address-dependent loadable data differ. A
+comparison of the `.text` disassembly found 1,533,836 instructions and no
+instruction or non-address operand differences after normalizing PC-relative
+address displacements and comments. The clean artifact was nevertheless
+exercised directly below; it is not being treated as interchangeable by hash
+alone.
+
+The full-file capture used the current diagnostic kernel without changing or
+reloading it, and selected only the clean private Mesa prefix. The input SHA-256
+was `d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2`.
+Capture directory:
+
+```text
+/home/keivan/nouveau-vaapi-captures/20260930T122151Z-private-instrumented-23681
+```
+
+The harness verified the exact private `nouveau_drv_video.so` path and
+`va_openDriver() returns 0`. It ran with kernel `7.0.0-34-generic`, loaded and
+on-disk Nouveau `diag3` srcversion `9F90A7EB5A9E1505E0B6708`, and all three
+diagnostic parameters enabled. SDDM/display-manager was inactive at the start
+and end. FFmpeg produced and decoded all 40,561 frames, reported zero decode
+errors, and exited 0 after 535.24 seconds wall time. The journal logger
+continued for the required 15-second post-exit tail; the harness reported
+`STOP_A_B=0`.
+
+The Mesa trace confirmed `SKIP_CLEAR_SURFACE=0`, eight allocation entries, and
+32 clear calls. All 16 luma clears used `1920x544`; all 16 chroma clears used
+`960x272`. No other RT dimensions were recorded. The teardown trace completed
+in BSP, VP, PPP order. BSP chid 3, VP chid 4, and PPP chid 5 idle fences each
+returned success; the VP fence completed in 19 jiffies. Mesa's three channel
+object-idle intervals were about 3.590 ms (BSP), 22.979 ms (VP), and 6.991 ms
+(PPP). Decoder destruction took about 36.97 ms. The current-run kernel log had
+no PROP overrun, `CTXSW_TIMEOUT`, channel kill, failed idle, `PRIV_VIOLATION`,
+SIGBUS, GPU reset, or BAR2/PTE fault.
+
+The `diag3` lifecycle trace logged map and destroy records for both target
+ranges: the one-page VMA at `0x377000` and `[0x379000, 0x3a3000)`, which covers
+historical address `0x388000`. It recorded successful writes through the live
+`0x377000` mapping. This run is another clean non-reproduction of the old
+BAR2/PTE faults; it does not identify why they occurred historically.
+
+Capture checksum verification passed:
+
+| File | SHA-256 |
+| --- | --- |
+| `boot-kernel.log` | `e1b48606e51e8154a1e2ec0193b39635ba4c95fc4dae1175d78d45642e6c5997` |
+| `kernel.log` | `006d1a5e0f6a535f21a20f34291b054f040ca262ca69a5318d6a6972dc8399fc` |
+| `ffmpeg.log` | `750459efb3ce830061201c5f9f460818f1a999fa6d15b68acc5bd07d0679f753` |
+| `transcript.txt` | `b8d366d049c300870262c22b51408ae7e20ca48bb66d425affc162ba81ab54ec` |
+
+This completes the clean-source build-to-hardware validation for the
+native-surface and serialized-teardown Mesa candidate on this K4200 and test
+file. BAR2's historical root cause remains unresolved; the clean run shows
+non-reproduction, not a BAR2 fix. No system Mesa package or kernel/module was
+installed or replaced for this build or capture.

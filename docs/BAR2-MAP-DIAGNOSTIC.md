@@ -411,3 +411,10 @@ exact Ubuntu kernel source archive. It registers/builds only the new
 initramfs, reload Nouveau, or reboot. Review its build log, output module hash,
 vermagic, srcversion, parameters, and lifecycle-budget marker before preparing
 any install step.
+
+The clean-source Mesa reconstruction was subsequently run under this same
+`diag3` module and completed another full-file decode without a BAR2/PTE fault.
+It captured map/destroy records for the one-page mapping at `0x377000` and the
+range covering `0x388000`. The clean plugin hash and complete capture checksums
+are recorded in `VA-SURFACE-CLEAR-CANDIDATE.md`. This remains a non-reproduction
+sample; it does not resolve the historical BAR2 cause.

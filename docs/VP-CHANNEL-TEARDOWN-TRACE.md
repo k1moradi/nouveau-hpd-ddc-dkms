@@ -852,3 +852,10 @@ historical BAR2 cause remains unresolved because the fault did not recur; see
 for capture hashes, mapping identities, and the complete qualification. Do not
 treat this diagnostic patch as a BAR2 fix; it improves mapping-lifecycle
 observability only.
+
+The Mesa patch stack was later reconstructed from the original Mesa 26.0.8
+archive in a clean private directory and completed another 40,561-frame decode
+on the same `diag3` kernel. BSP, VP, and PPP fences all succeeded, VP completed
+in 19 jiffies, and decoder teardown completed in about 37 ms. The clean plugin
+provenance and full capture checksums are recorded in
+`VA-SURFACE-CLEAR-CANDIDATE.md`.
