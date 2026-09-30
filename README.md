@@ -1,18 +1,26 @@
 # Nouveau HPD/DDC DKMS fix
 
 This project builds a maintained Nouveau module for the Quadro K4200 DVI-I to
-VGA EDID investigation. The confirmed fix lets DRM try DDC when HPD is low on a
-non-DisplayPort output. It does not change DisplayPort detection.
+VGA EDID investigation. It also carries production backports for GK104 legacy
+video contexts and FIFO fence-event registration. The DDC fix lets DRM try
+DDC when HPD is low on a non-DisplayPort output; it does not change
+DisplayPort detection.
 
 ## Source layout
 
-This directory is the canonical source for the fix and its build. Make changes
-here; `/usr/src/nouveau-hpd-ddc-*` and `/var/lib/dkms/nouveau-hpd-ddc/*` are
-generated DKMS staging data and are replaced during installation.
+This directory is the canonical source for the Nouveau DKMS package. Make
+changes here; `/usr/src/nouveau-hpd-ddc-*` and
+`/var/lib/dkms/nouveau-hpd-ddc/*` are generated DKMS staging data and are
+replaced during installation.
 
 | Path | Contents |
 | --- | --- |
 | `patches/hpd-low-ddc-probe.patch` | Confirmed HPD-low/DDC fix |
+| `patches/video/gk104-legacy-video-context-nonpriv.patch` | GK104 legacy-video engine-context mapping fix |
+| `patches/video/legacy-fifo-nonstall-event-index.patch` | Legacy FIFO nonstall fence-event fix |
+| `patches/mesa/` | Functional Mesa 26.0.8 VA-API patches; not applied by DKMS |
+| `tests/test-mesa-*-functional.py` | Mesa source-contract regression checks |
+| `docs/KNOWN-ISSUES.md` | Remaining BAR2/PTE observation and scope |
 | `patches/diagnostic/ibuf-state-snapshot.patch` | Optional read-only IBUF diagnostic |
 | `patches/diagnostic/dac-powered-ddc-probe.patch` | Optional DAC-powered DDC diagnostic |
 | `patches/diagnostic/ack-slot-sampler.patch` | Optional read-only PNVIO ACK-slot sampler |
@@ -125,11 +133,13 @@ Treat this capture as evidence about register behavior; do not interpret a
 high SDA sample as proof that the monitor or board path failed to pull the
 physical line low without independent validation.
 
-The installer removes the known older DKMS revisions (0.1.0 through 0.1.5),
-copies this project's DKMS files and patches into the package staging directory,
-builds Nouveau for the running kernel, installs it, and updates the initramfs.
-It also cleans only this project's temporary build/test directories under
-`/tmp`.
+The installer copies this project's DKMS files and patches into the package
+staging directory, builds Nouveau for the running kernel, and installs it.
+DKMS refreshes the target kernel's initramfs with dracut on dracut-configured
+systems or `update-initramfs` when initramfs-tools is configured. Superseded
+local DKMS revisions are removed only after the new revision installs
+successfully. The installer also cleans only this project's temporary
+build/test directories under `/tmp`.
 
 After reboot, run:
 
@@ -157,6 +167,18 @@ headers. A patch that no longer applies stops the build for review. The build
 uses GCC and all online logical CPUs by default; set `NOUVEAU_DKMS_JOBS=<N>` to
 limit parallelism or `NOUVEAU_DKMS_TMPDIR=/path` to choose a build location.
 
+The build classifies the GK104 video-context and legacy FIFO nonstall source
+before patching. It applies either fix only to its recognized vulnerable
+preimage, skips a recognized upstream-fixed source, and fails closed on an
+unknown source layout. Both patches are part of the normal build; neither is
+gated by an experimental marker.
+
+The two functional Mesa patches under `patches/mesa/` are maintained as
+separate source patches and are not installed or applied by this DKMS package.
+Apply them to a pristine Mesa 26.0.8 source tree and run the two
+`test-mesa-*-functional.py` checks before building a private Mesa prefix. They
+do not contain the investigation's Mesa diagnostic instrumentation.
+
 The optional diagnostics are enabled only by their `install.sh` flags. A normal
 install replaces the staged source and removes all diagnostic markers and the
 temporary `NvI2C=1` module option.
@@ -175,8 +197,9 @@ The generated package and staging tree live under ignored `build/` output.
 pkexec ./uninstall.sh
 ```
 
-This removes all known DKMS revisions from 0.1.0 through 0.1.6, their source
-staging directories, and project temporary trees, then refreshes module
+This removes all known stable DKMS revisions from 0.1.0 through 0.1.6 and
+0.1.13 through 0.1.14, their source staging directories, and project temporary
+trees, then refreshes module
 dependencies and initramfs files. Nouveau uses the distribution module after
 reboot.
 
@@ -186,8 +209,11 @@ The hardware setup and captured evidence are in [docs/BUG-REPORT.md](docs/BUG-RE
 The IBUF experiment remains diagnostic: the K4200 VBIOS setting bit 17 does not
 prove that bit 16 should be enabled, so the patch does not modify `0xe1b8`.
 
-Version 0.1.6 organizes the canonical patches, retires earlier DKMS revisions
-during installation, and fixes executable hook invocation. Versions 0.1.1 to
+Version 0.1.14 adds production fail-closed classification for the GK104
+legacy-video context and FIFO nonstall backports. It also records the separate
+functional Mesa 26.0.8 candidate and its source checks. Version 0.1.6
+organizes the canonical patches, retires earlier DKMS revisions during
+installation, and fixes executable hook invocation. Versions 0.1.1 to
 0.1.5 added Ubuntu kernel build compatibility, exact source retrieval, GCC
 selection, and bounded temporary-build cleanup.
 
