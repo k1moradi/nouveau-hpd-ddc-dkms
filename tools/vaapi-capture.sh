@@ -113,12 +113,34 @@ if [[ ! -r $input ]]; then
     echo "decode input is not readable: $input" >&2
     exit 2
 fi
-for tool in ffmpeg journalctl modinfo sha256sum tee; do
+for tool in ffmpeg flock journalctl modinfo sha256sum tee; do
     command -v "$tool" >/dev/null || {
         echo "required command not found: $tool" >&2
         exit 2
     }
 done
+
+# Serialize GPU captures against each other and cli-low-memory.sh. That script
+# stops SDDM and other services; a service transition during a capture can add
+# unrelated GPU teardown activity to the kernel trace. Both operations take
+# the same exclusive lock, so only one can be active at a time.
+capture_lock_dir="$HOME/.cache/nouveau-vaapi-followup-20260928"
+capture_lock_file="$capture_lock_dir/hardware-capture.lock"
+mkdir -p "$capture_lock_dir"
+exec {capture_lock_fd}>"$capture_lock_file"
+if ! flock --nonblock --exclusive "$capture_lock_fd"; then
+    echo 'capture refused: another hardware capture or low-memory maintenance operation holds the lock' >&2
+    exit 3
+fi
+
+unit_state() {
+    local unit=$1
+    if ! command -v systemctl >/dev/null 2>&1; then
+        printf 'unavailable'
+        return
+    fi
+    systemctl is-active "$unit" 2>/dev/null || true
+}
 
 capture_root=${NOUVEAU_CAPTURE_ROOT:-$HOME/nouveau-vaapi-captures}
 stamp=$(date -u +%Y%m%dT%H%M%SZ)
@@ -150,6 +172,10 @@ transcript_tee_pid=$!
 
 record_time run-start
 printf 'mode=%s\n' "$mode"
+sddm_state_start=$(unit_state sddm.service)
+display_manager_state_start=$(unit_state display-manager.service)
+printf 'sddm_state_start=%s\n' "$sddm_state_start"
+printf 'display_manager_state_start=%s\n' "$display_manager_state_start"
 printf 'uname_r=%s\n' "$(uname -r)"
 module_path=$(modinfo -n nouveau)
 loaded_srcversion=$(cat /sys/module/nouveau/srcversion 2>/dev/null || true)
@@ -251,6 +277,18 @@ record_time logger-stop
 kill "$logger_pid" 2>/dev/null || true
 wait "$logger_pid" 2>/dev/null || true
 logger_pid=
+sddm_state_end=$(unit_state sddm.service)
+display_manager_state_end=$(unit_state display-manager.service)
+printf 'sddm_state_end=%s\n' "$sddm_state_end"
+printf 'display_manager_state_end=%s\n' "$display_manager_state_end"
+display_manager_changed=0
+if [[ -n $sddm_state_start && $sddm_state_start != unavailable &&
+      $sddm_state_start != "$sddm_state_end" ]] ||
+   [[ -n $display_manager_state_start && $display_manager_state_start != unavailable &&
+      $display_manager_state_start != "$display_manager_state_end" ]]; then
+    display_manager_changed=1
+    echo 'capture invalid: SDDM/display-manager state changed during capture' >&2
+fi
 
 trace_invalid=0
 if [[ $mode == private-instrumented ]]; then
@@ -275,8 +313,8 @@ if [[ -s $journal_error ]]; then
     cat "$journal_error"
 fi
 printf 'kernel_log_bytes=%s\n' "$(wc -c < "$kernel_log")"
-if [[ $runner_status -ne 0 ]] || grep -Eiq 'CTXSW_TIMEOUT|errored - disabling channel|channel [0-9]+ killed|fault .*\[BAR2\].*\[PTE\]|PRIV_VIOLATION|SIGBUS|GPU reset' "$kernel_log" "$ffmpeg_log"; then
-    echo 'STOP_A_B=1 nonzero FFmpeg exit or critical Nouveau/VAAPI failure signature; do not run another condition without a fresh boot'
+if [[ $runner_status -ne 0 || $display_manager_changed -ne 0 ]] || grep -Eiq 'CTXSW_TIMEOUT|errored - disabling channel|channel [0-9]+ killed|fault .*\[BAR2\].*\[PTE\]|PRIV_VIOLATION|SIGBUS|GPU reset' "$kernel_log" "$ffmpeg_log"; then
+    echo 'STOP_A_B=1 FFmpeg failure, display-manager state change, or critical Nouveau/VAAPI signature; do not run another condition without a fresh boot'
 else
     echo 'STOP_A_B=0 no stop-signature matched in this capture'
 fi
@@ -300,6 +338,9 @@ if [[ $tee_status != 0 ]]; then
 fi
 if [[ $runner_status -ne 0 ]]; then
     exit "$runner_status"
+fi
+if [[ $display_manager_changed -ne 0 ]]; then
+    exit 4
 fi
 if [[ $trace_invalid -ne 0 ]]; then
     exit 4
