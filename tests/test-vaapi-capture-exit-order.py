@@ -35,8 +35,12 @@ def run_case(
     expected_stop: str,
     expect_invalid_trace: bool,
     expect_display_manager_change: bool = False,
+    capture_frames: int | None = None,
 ) -> None:
     env = os.environ.copy()
+    env.pop("NOUVEAU_CAPTURE_FRAMES", None)
+    args_file = capture_root / f"{name}-ffmpeg-args.txt"
+    args_file.parent.mkdir(parents=True, exist_ok=True)
     env.update(
         {
             "PATH": f"{fake_bin}:{env['PATH']}",
@@ -44,8 +48,11 @@ def run_case(
             "HOME": str(capture_root / name / "home"),
             "TEST_FFMPEG_EXIT": str(ffmpeg_exit),
             "TEST_TRACE": "1" if trace else "0",
+            "TEST_FFMPEG_ARGS_FILE": str(args_file),
         }
     )
+    if capture_frames is not None:
+        env["NOUVEAU_CAPTURE_FRAMES"] = str(capture_frames)
     Path(env["HOME"]).mkdir(parents=True, exist_ok=True)
     result = subprocess.run(
         [str(harness), "private-instrumented", str(dri_dir)],
@@ -59,6 +66,13 @@ def run_case(
         f"{name}: expected exit {expected_status}, got {result.returncode}\n{output}"
     )
     assert expected_stop in output, f"{name}: missing {expected_stop!r}\n{output}"
+    recorded_args = args_file.read_text().splitlines()
+    frames_index = recorded_args.index("-frames:v")
+    expected_frames = 3000 if capture_frames is None else capture_frames
+    assert recorded_args[frames_index + 1] == str(expected_frames), (
+        f"{name}: expected FFmpeg frame limit {expected_frames}, "
+        f"got {recorded_args[frames_index + 1]}"
+    )
     if expect_invalid_trace:
         assert "capture invalid: instrumented Mesa trace was not positively exercised" in output
     else:
@@ -138,6 +152,7 @@ def main() -> None:
             "echo 'libva: va_openDriver() returns 0'\n"
             "echo 'VAAPI driver: mocked Nouveau'\n"
             "if [ -n \"${TEST_FFMPEG_STARTED:-}\" ]; then : > \"$TEST_FFMPEG_STARTED\"; fi\n"
+            "if [ -n \"${TEST_FFMPEG_ARGS_FILE:-}\" ]; then printf '%s\\n' \"$@\" > \"$TEST_FFMPEG_ARGS_FILE\"; fi\n"
             "if [ \"${TEST_TRACE:-0}\" = 1 ]; then\n"
             f"  echo '{TRACE_HOOK}'\n"
             f"  echo '{TRACE_ALLOCATE}'\n"
@@ -328,6 +343,7 @@ def main() -> None:
             0,
             "STOP_A_B=0",
             False,
+            capture_frames=40561,
         )
         print("PASS: successful instrumented run with both trace markers exits 0")
 

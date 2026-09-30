@@ -12,6 +12,7 @@ Runs one fixed 3000-frame VA-API decode, records kernel/FFmpeg logs and
 metadata, and leaves the kernel journal follower active for 15 seconds after
 FFmpeg exits. Each run writes a unique directory below
 ${NOUVEAU_CAPTURE_ROOT:-$HOME/nouveau-vaapi-captures}.
+Set NOUVEAU_CAPTURE_FRAMES to a positive frame limit to override 3000.
 Set NOUVEAU_CAPTURE_BOOT_KERNEL_LOG=1 to save the current boot's kernel journal
 before starting the live capture.
 EOF
@@ -69,6 +70,11 @@ fi
 
 mode=$1
 dri_dir=${2:-}
+capture_frames=${NOUVEAU_CAPTURE_FRAMES:-3000}
+if [[ ! $capture_frames =~ ^[1-9][0-9]*$ ]]; then
+    echo 'NOUVEAU_CAPTURE_FRAMES must be a positive integer' >&2
+    exit 2
+fi
 system_plugin=${SYSTEM_NOUVEAU_PLUGIN:-/usr/lib/x86_64-linux-gnu/dri/nouveau_drv_video.so}
 expected_plugin=
 run_env=(-u LD_LIBRARY_PATH -u LIBVA_DRIVER_NAME -u NOUVEAU_DIAG_RT_CLEAR -u NOUVEAU_DIAG_VA_SURFACE)
@@ -175,6 +181,7 @@ transcript_tee_pid=$!
 
 record_time run-start
 printf 'mode=%s\n' "$mode"
+printf 'requested_frames=%s\n' "$capture_frames"
 sddm_state_start=$(unit_state sddm.service)
 display_manager_state_start=$(unit_state display-manager.service)
 printf 'sddm_state_start=%s\n' "$sddm_state_start"
@@ -238,7 +245,7 @@ ffmpeg_args=(
     -hwaccel_device va
     -hwaccel_output_format vaapi
     -i "$input"
-    -an -frames:v 3000 -f null -
+    -an -frames:v "$capture_frames" -f null -
 )
 run_command=(env "${run_env[@]}" ffmpeg "${ffmpeg_args[@]}")
 printf 'ffmpeg_command='
