@@ -20,12 +20,19 @@ GPU initialization, so the diagnostic package is separate from the normal
 
 ## Current module and package state
 
-The post-reboot check confirmed that kernel `7.0.0-34-generic` is running
-`nouveau-hpd-ddc/0.1.13-diag1`, with loaded and on-disk srcversion
-`B19B8AAE48467545E652509`. Its `diag_fence_wait` and `diag_ctxsw` parameters
-were both disabled after reboot. The BAR2-specific `0.1.13-diag2` package is
-prepared separately and must pass its DKMS build and artifact checks before it
-is installed.
+The latest live check on 2026-09-30 reports kernel `7.0.0-34-generic`, with
+`nouveau-hpd-ddc/0.1.13-diag1` still loaded at srcversion
+`B19B8AAE48467545E652509`. The separate `nouveau-hpd-ddc/0.1.13-diag2` package
+is installed on disk at srcversion `72DEE2B4ECFF77AD3764039`, but has not yet
+been loaded because the machine has not rebooted since installation. The
+currently loaded module therefore has no `diag_bar2_map`, `diag_fence_wait`,
+or `diag_ctxsw` parameter files.
+
+The current dracut image `/boot/initrd.img-7.0.0-34-generic` contains the
+`diag2` module and the exact one-boot option
+`options nouveau diag_bar2_map=1`; both were verified with `lsinitrd`. The
+host-side option file was then removed. After reboot, the post-reboot verifier
+must pass before running a capture.
 
 The preserved module artifacts are checked by their srcversions:
 
@@ -98,13 +105,16 @@ the image is built, so it will not affect later module loads:
 K=$(uname -r)
 CFG=/etc/modprobe.d/99-nouveau-diag-bar2-once.conf
 printf 'options nouveau diag_bar2_map=1\n' | sudo tee "$CFG"
-sudo dracut --force "/boot/initrd.img-$K" "$K"
+sudo dracut --force --include "$CFG" "$CFG" \
+    "/boot/initrd.img-$K" "$K"
 sudo lsinitrd -f "$CFG" "/boot/initrd.img-$K"
 sudo unlink "$CFG"
 ```
 
-Confirm `lsinitrd` prints exactly `options nouveau diag_bar2_map=1`, then
-reboot. After reconnecting, verify before enabling the other probes:
+On this Lubuntu dracut setup, the modprobe file was not included by a plain
+`dracut --force`; the explicit `--include` is required. Confirm `lsinitrd`
+prints exactly `options nouveau diag_bar2_map=1`, then reboot. After
+reconnecting, verify before enabling the other probes:
 
 ```bash
 sudo tools/verify-bar2-map-diagnostic.sh post-reboot

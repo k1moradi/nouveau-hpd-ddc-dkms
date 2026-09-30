@@ -770,14 +770,18 @@ Validation so far:
 - The full module build exited 0 with no undefined-reference, modpost, or
   compiler errors. The only notices were the kernel build's compiler-name
   alias and missing matching `pahole` version; the installed GCC version
-  matched the kernel compiler version. This artifact is not registered with
-  DKMS or installed. DKMS has no `0.1.13-diag2` entry; the loaded and on-disk
-  module remains `0.1.13-diag1` at srcversion
-  `B19B8AAE48467545E652509`.
+  matched the kernel compiler version. That initial private artifact was not
+  registered with DKMS or installed. It was subsequently reproduced through
+  the committed `0.1.13-diag2` preparation/install flow; DKMS now reports
+  `0.1.13-diag2` installed on disk at srcversion
+  `72DEE2B4ECFF77AD3764039`. The live module remains `0.1.13-diag1` at
+  srcversion `B19B8AAE48467545E652509` until the staged dracut boot is used.
 
-The next packaging gate is a separately versioned DKMS revision that preserves
-the tested context/nonstall and fence/CTXSW diagnostic changes and reproduces
-this exact source set and srcversion before any installation. To capture early
-mapping lifetime events, enable the parameter before Nouveau initializes; do
-not treat a run with the parameter enabled only after module initialization
-as complete mapping provenance.
+The packaging gate is complete: the separately versioned
+`0.1.13-diag2` module is installed on disk with the expected srcversion. The
+remaining runtime gate is a reboot using the current dracut image, which embeds
+`options nouveau diag_bar2_map=1`; the host-side option file has been removed.
+After reboot, require `tools/verify-bar2-map-diagnostic.sh post-reboot` to
+pass before enabling `diag_fence_wait` and `diag_ctxsw` and running the single
+serialized-teardown capture. Enabling `diag_bar2_map` only after Nouveau has
+initialized is insufficient to capture the early mapping lifetime.
