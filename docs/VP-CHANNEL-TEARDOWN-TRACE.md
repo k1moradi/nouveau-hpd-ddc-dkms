@@ -555,6 +555,14 @@ holds an exclusive lock for the complete run and journal tail; the low-memory
 script takes the same exclusive lock and refuses to stop SDDM or other
 services while that lock is held. A second simultaneous capture is also
 refused before its logger or FFmpeg starts. The helper records SDDM state
-before and after and rejects a capture if it changes. The explicit VAAPI render-node
-test does not require SDDM. If this capture reports `STOP_A_B=1`, do not run
-another GPU condition in the same boot.
+before and after and rejects a capture if it changes. The explicit VA-API
+render-node test does not require SDDM. If this capture reports `STOP_A_B=1`,
+do not run another GPU condition in the same boot.
+
+The paired local low-memory helper is outside this repository at
+`/home/keivan/cli-low-memory.sh`. The tested copy had SHA-256
+`64e53cfaf476718c48e76c634c57b5314cee8a77ae41b364b49952b67e5a45eb`; it
+takes the same nonblocking exclusive lock and exits with status 3 before
+stopping services if a capture owns it. Recompute this hash if the local
+helper changes. The capture regression test exercises this external script
+with an isolated temporary `HOME`.
