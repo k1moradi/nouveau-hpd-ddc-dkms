@@ -1,14 +1,15 @@
 # BAR2 instance-memory map diagnostic
 
 The serialized Mesa teardown test removed the VP idle-fence timeout and
-MSPPP/CTXSW recovery from the tested 3000-frame run, but two BAR2/HOST_CPU read
-PTE faults remained. The faults were reported at BAR2 offsets `0x377000` and
-`0x388000`; their caller and mapping lifetime are still unknown. This diagnostic
-adds read-only tracing to the NV50 instance-memory BAR2 mapping and access
-paths. It does not alter mapping, MMIO, fence, scheduler, or recovery behavior.
-The address filter only selects 32-bit accesses and mapping lifetimes which
-overlap pages `0x377000` or `0x388000`. In `diag2`, mapping-lifecycle and
-access records share one global kernel ratelimiter capped at eight combined
+MSPPP/CTXSW recovery from the tested 3000-frame run, but BAR2/HOST_CPU read
+PTE faults have occurred at offsets `0x377000`, `0x388000`, and, in a later
+production-kernel run, `0x3a4000`. Their caller and mapping lifetime are still
+unknown. This diagnostic adds read-only tracing to the NV50 instance-memory
+BAR2 mapping and access paths. It does not alter mapping, MMIO, fence,
+scheduler, or recovery behavior. The address filter only selects 32-bit accesses and mapping
+lifetimes which overlap pages `0x377000` or `0x388000`; it does not cover the
+later `0x3a4000` fault. In `diag2`, mapping-lifecycle and access records share
+one global kernel ratelimiter capped at eight combined
 records per second. This bounds logging, but access bursts can consume the
 budget before a relevant mapping-lifecycle record is emitted. The separately
 versioned `diag3` follow-up gives lifecycle and access callbacks independent
@@ -418,3 +419,64 @@ It captured map/destroy records for the one-page mapping at `0x377000` and the
 range covering `0x388000`. The clean plugin hash and complete capture checksums
 are recorded in `VA-SURFACE-CLEAR-CANDIDATE.md`. This remains a non-reproduction
 sample; it does not resolve the historical BAR2 cause.
+
+### Production `.13` full-file capture on 2026-09-30
+
+After restoring the preserved production Nouveau `0.1.13` module and rebooting,
+the diagnostic-free Mesa plugin completed the full test file. Capture:
+
+`/home/keivan/nouveau-vaapi-captures/20260930T134903Z-private-uninstrumented-4544`
+
+The capture used kernel `7.0.0-34-generic`, loaded and on-disk Nouveau
+srcversion `57AE1B168D50DB546CD87A1`, and the functional-only Mesa plugin
+`7115d52de2cc245076f18a38a28e4f844ca1affffbe946b6d8ba127afb87d753`. The
+`diag_bar2_map`, fence, and CTXSW probes were absent, so this run has no
+mapping-lifetime trace for the fault address.
+
+FFmpeg produced and decoded all 40,561 frames with zero decode errors and
+exited 0. At kernel monotonic time `946.040610`, the kernel logged:
+
+```text
+nouveau 0000:01:00.0: fifo: fault 00 [READ] at 00000000003a4000
+engine 05 [BAR2] client 07 [HUB/HOST_CPU] reason 02 [PTE]
+on channel -1 [00ffbb7000 unknown]
+```
+
+The FFmpeg process start was monotonic `409.176694352`; the fault was
+`+536.863916` seconds from start and `0.113731` seconds before the exact
+process-exit time `946.154341204`. The fault address `0x3a4000` is outside the
+two pages filtered by `diag3`, so earlier `diag3` map/destroy records cannot
+identify this fault's mapping. The harness returned 5 and set `STOP_A_B=1` as
+designed; no further GPU workload was run in this boot.
+
+The live log then recorded `fbcon: Taking over console` at `946.041722`,
+1.112 ms after the fault, followed by the console mode switch at `946.041786`.
+The boot log shows that deferred fbcon takeover was pending after both
+simpledrm and Nouveau registered framebuffers, and the running kernel has
+`CONFIG_FRAMEBUFFER_CONSOLE_DEFERRED_TAKEOVER=y`. In Linux v7.0,
+`fbcon_output_notifier()` prints the takeover message and schedules deferred
+work when console output triggers the notifier
+([source](https://github.com/torvalds/linux/blob/v7.0/drivers/video/fbdev/core/fbcon.c#L3136-L3165)).
+This ordering is consistent with the BAR2 fault's printk triggering the
+deferred takeover. It does not show that fbcon caused the preceding fault or
+identify which CPU-side BAR2 access faulted. The log also contains a
+`perf: interrupt took too long` warning at monotonic `939.655081`; no causal
+link to the later BAR2 fault is established.
+
+This run confirms that the specific H.264 file decoded completely on the
+functional-only Mesa build and production `.13`, while a separate BAR2/HOST_CPU
+PTE fault still occurred near process exit. It is not a clean kernel run and
+does not prove the historical BAR2 issue is fixed. Because the fault moved to
+an address that `diag3` did not cover, a future mapping diagnostic would need
+to include page `0x3a4000` while retaining separate bounded access and
+lifecycle log budgets. The responsible mapping and whether this event is
+related to VAAPI teardown remain unknown.
+
+SHA-256 verification passed for the capture files:
+
+```text
+boot-kernel.log  5bab0b9a77ac31f0bea4f71bea25858e1bced7897dfa98c0ad0f2d7f66eaad2d
+kernel.log       4c58d7ca65db983cb6e3bfec78d4f649230fe6236854ea13f4cd0f72cf921e94
+ffmpeg.log       179fbcd69dc3faedf017122b3b21565ad0af19067509b7577866ebef39fb941d
+transcript.txt   f261dcf69750a4f07e869a431c070f601b5c581a74870a382ead2e57a250ca3e
+```

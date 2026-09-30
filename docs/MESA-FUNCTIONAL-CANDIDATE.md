@@ -144,21 +144,39 @@ including complete 40,561-frame H.264 decodes with clean fences and teardown.
 The historical BAR2/PTE fault did not reproduce in the runs with `diag3`
 mapping traces; its original cause remains unknown.
 
-The diagnostic-free plugin above has been built and statically audited. Its
-final full-file hardware validation is pending a fresh boot into the preserved
-production Nouveau `0.1.13` module. Do not use the Mesa diagnostics, install
-this Mesa candidate system-wide, or interpret the prior `diag3` runs as that
-production-kernel validation. The planned single run uses the same
-40,561-frame input with this exact private prefix and records any BAR2/PTE
-event without making such an isolated historical event a decode acceptance
-failure.
+The diagnostic-free plugin above has now been hardware-tested after a fresh
+boot into the preserved production Nouveau `0.1.13` module. Capture directory:
+
+`/home/keivan/nouveau-vaapi-captures/20260930T134903Z-private-uninstrumented-4544`
+
+The run used input SHA-256
+`d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2`, loaded
+and on-disk Nouveau srcversion `57AE1B168D50DB546CD87A1`, and the private
+plugin SHA-256
+`7115d52de2cc245076f18a38a28e4f844ca1affffbe946b6d8ba127afb87d753`.
+libva opened the pinned private `nouveau_drv_video.so`; SDDM/display-manager
+state was inactive at both capture boundaries. The result was:
+
+- 40,561 output frames and 40,561 decoded frames, with zero decode errors.
+- FFmpeg exited 0 after 537.10 seconds.
+- There was no PROP/RT overrun, `CTXSW_TIMEOUT`, channel kill, failed idle,
+  `PRIV_VIOLATION`, SIGBUS, or GPU reset in the captured boot/runtime evidence.
+- One Nouveau BAR2/HOST_CPU READ PTE fault remained. The harness therefore
+  returned 5 and set `STOP_A_B=1`, as designed.
+
+This proves full-file decode completion with the functional-only Mesa build
+and production Nouveau `.13`; it does not establish that every Nouveau fault
+is fixed. The BAR2 fault is not evidence of a decoded-frame error, but it is a
+real kernel event and its source remains unresolved. No further GPU work was
+run in that boot after `STOP_A_B=1`.
 
 The guarded rollback helper is
 [`rollback-bar2-diagnostic-v3-to-production.sh`](../tools/rollback-bar2-diagnostic-v3-to-production.sh).
 Its `--check-only` mode validates both pinned artifacts without changing the
 system. The normal mode selects the existing production `.13` DKMS artifact,
 regenerates the dracut initramfs, verifies the exact module bytes in the image,
-and leaves the currently loaded `diag3` untouched until a manual reboot. After
-reconnecting, run
+and leaves the currently loaded `diag3` untouched until a manual reboot. The
+post-reboot production verifier
 [`verify-production-nouveau-baseline.sh`](../tools/verify-production-nouveau-baseline.sh)
-before starting the single full-file capture.
+passed before the capture above was started and confirmed the production
+module and absence of diagnostic parameters.
