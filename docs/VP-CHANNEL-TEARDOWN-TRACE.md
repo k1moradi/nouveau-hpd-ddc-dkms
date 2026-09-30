@@ -842,8 +842,13 @@ existing access limit. `dkms/dkms-build.sh` applies it with `--fuzz=0` only
 when `diagnostic-bar2-map-budget.enabled` is present. No preparation helper
 creates that marker for `diag2` or for the normal production package.
 
-The follow-up passes a static regression check and strict zero-fuzz application
-to the cached exact Ubuntu source preimage. It has not yet been included in a
-DKMS build or used in hardware testing. Do not treat it as a BAR2 fix; it only
-improves the chance of retaining target mapping lifecycle records if a fault
-recurs.
+The follow-up passed a static regression check and strict zero-fuzz
+application, was included in the separately versioned `0.1.13-diag3` module,
+and completed a full-file hardware capture on 2026-09-30. The capture had no
+BAR2/PTE fault. Unlike the `diag2` runs, it recorded map and destroy events for
+the active-run mappings covering both historical fault addresses. The
+historical BAR2 cause remains unresolved because the fault did not recur; see
+[`BAR2-MAP-DIAGNOSTIC.md`](BAR2-MAP-DIAGNOSTIC.md#hardware-result-diag3-full-file-capture-on-2026-09-30)
+for capture hashes, mapping identities, and the complete qualification. Do not
+treat this diagnostic patch as a BAR2 fix; it improves mapping-lifecycle
+observability only.

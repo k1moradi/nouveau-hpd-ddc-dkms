@@ -10,7 +10,9 @@ The address filter only selects 32-bit accesses and mapping lifetimes which
 overlap pages `0x377000` or `0x388000`. In `diag2`, mapping-lifecycle and
 access records share one global kernel ratelimiter capped at eight combined
 records per second. This bounds logging, but access bursts can consume the
-budget before a relevant mapping-lifecycle record is emitted.
+budget before a relevant mapping-lifecycle record is emitted. The separately
+versioned `diag3` follow-up gives lifecycle and access callbacks independent
+eight-record-per-second budgets; its hardware result is recorded below.
 
 The patch is in
 [`patches/diagnostic/gk104-bar2-instmem-map-trace.patch`](../patches/diagnostic/gk104-bar2-instmem-map-trace.patch).
@@ -21,12 +23,13 @@ GPU initialization, so the diagnostic package is separate from the normal
 
 ## Verified module and package state
 
-The latest verified hardware captures used kernel `7.0.0-34-generic` and the
-loaded/on-disk `nouveau-hpd-ddc/0.1.13-diag2` module at srcversion
+The historical `diag2` hardware captures used kernel `7.0.0-34-generic` and
+the loaded/on-disk `nouveau-hpd-ddc/0.1.13-diag2` module at srcversion
 `72DEE2B4ECFF77AD3764039`. `diag_bar2_map`, `diag_fence_wait`, and `diag_ctxsw`
-were enabled for those runs. The prepared `diag3` build described below will
-be a separate DKMS version and will not replace `diag2` unless it passes a
-separate review and install gate.
+were enabled for those runs. A later, separately versioned `0.1.13-diag3`
+module passed its own provenance and install checks and was loaded for the
+full-file capture documented below. The regular `0.1.13` production package
+was not replaced.
 
 For the initial `diag2` boot, the dracut image was verified with `lsinitrd` to
 contain both the module and the one-boot setting
@@ -284,8 +287,8 @@ subsequent mismatch fails the build gate. The pinned clean rebuild from
 module bytes apart from the GNU build-id descriptor. Its compressed module
 SHA-256 is `d437863bd12473c8dbba7104cf8bccdc7a2b67fafe10a9e0d5f963a168245aca`.
 The `diag2` and normal preparation paths do not create the follow-up marker.
-BAR2's historical root cause remains unknown; `diag3` exists to collect a more
-complete mapping lifetime if the fault recurs.
+BAR2's historical root cause remains unknown; `diag3` was built to improve
+mapping-lifetime coverage and has now completed one hardware capture below.
 
 The version-specific install, verify, and rollback helpers are
 `tools/install-bar2-map-diagnostic-v3.sh`,
@@ -326,9 +329,76 @@ address-filtered BAR2 map/access records identify the mappings covering
 `0x377000` or `0x388000` if either PTE fault recurs. A clean run is
 non-reproduction evidence; it does not by itself identify the historical
 fault's cause. Respect `STOP_A_B=1` and stop further GPU work in that boot.
+Run `post-reboot` verification before enabling `diag_fence_wait` and
+`diag_ctxsw`; that mode intentionally rejects them when they are already on.
 
-After the candidate changes are committed and pushed, the preparation command
-is:
+### Hardware result: diag3 full-file capture on 2026-09-30
+
+The post-reboot capture used kernel `7.0.0-34-generic`, loaded and on-disk
+`diag3` srcversion `9F90A7EB5A9E1505E0B6708`, and the private Mesa
+26.0.8 NVE4 plugin containing both the native-surface clear fix and serialized
+VP3 teardown. The plugin SHA-256 was
+`d841244e592f171adebdbeaa556c97cb2e1bf639fceba81b0a829c9720b1119f`;
+libva confirms it opened the exact private `nouveau_drv_video.so` and
+`va_openDriver()` returned 0. SDDM was inactive at both capture boundaries.
+No system Mesa package or kernel image was installed or replaced for this
+capture; the separately versioned diagnostic DKMS module was already installed
+and loaded as planned.
+
+Capture directory:
+`/home/keivan/nouveau-vaapi-captures/20260930T112729Z-private-instrumented-12723`.
+The boot journal snapshot was captured before the live logger, and the live
+logger remained active for the 15-second post-FFmpeg tail. The full-file result
+was:
+
+- 40,561 output frames and 40,561 decoded frames, with zero decode errors.
+- FFmpeg exit 0; wall time 536.09 seconds; harness `STOP_A_B=0`.
+- The VA surface hook was active and `SKIP_CLEAR_SURFACE` returned 0.
+- The trace recorded 16 clears at `1920x544` and 16 at `960x272`.
+- No BAR2/PTE fault, PROP overrun, `CTXSW_TIMEOUT`, channel kill, failed idle,
+  `PRIV_VIOLATION`, SIGBUS, or GPU reset appeared in the boot or live kernel
+  logs.
+- BSP chid 3, VP chid 4, and PPP chid 5 idle fences all returned success. VP
+  chid 4 advanced from `0x9e6f` to target `0x9e72` in 19 jiffies; PPP chid 5
+  then completed successfully. The Mesa trace shows BSP, VP, then PPP teardown.
+
+The `diag3` trace captured a map and matching destroy for the active run's
+one-page VMA at `0x377000` (backing `0xff82f000`, object `0x7e5c6f67`, map
+`0xddb3008f`). It also logged four successful writes to offsets `0x200` through
+`0x20c` while `maps=1`. The VMA was destroyed at monotonic `1667.917741`, about
+85.9 ms before FFmpeg exited.
+
+It also captured a map/destroy pair for VMA range `[0x379000, 0x3a3000)`, which
+contains historical address `0x388000` (backing `0xff75d000`, object
+`0xa6a71d45`, map `0xaf8cb7a9`). The active run's mapping was created at
+`1132.852656` and destroyed at `1667.916880`; no access to this range and no
+fault was recorded. The boot snapshot contains an earlier record at the same
+VMA/backing/map handle but with a different object identifier, so these are
+kept as separate object records rather than assumed to be one object lifetime.
+Both targeted ranges have map and destroy records in this capture. The bounded
+ratelimit can still suppress callbacks silently; this only establishes the
+records actually present in this sample.
+
+SHA-256 verification passed for every file listed in the capture's
+`SHA256SUMS`:
+
+```text
+boot-kernel.log  4b93310c9942960454f0e3cd88b3eb4313a76f4c1a1794084bab843b58c325be
+kernel.log       119875adb4a7bb5ce1aa8bc2919300cde9b7533a3a6405fe64d8d71146d6cca1
+ffmpeg.log       4b9b06150358f63855e4ef3555ec8e702ef2730b690e4f8e57707a99d0e532b4
+transcript.txt   cfce462be0a0f9300672cb433de1dbab39526b0483d8ab23ef931efc0a953d87
+```
+
+This is a clean full-file non-reproduction of the historical BAR2 faults with
+map and destroy records for mappings covering both old addresses. It does not
+identify the cause of the earlier faults or prove they cannot recur. The
+native-surface and serialized-teardown candidates remain strongly
+hardware-supported for this K4200 and test file; the historical BAR2 root
+cause remains unresolved. The one-boot dracut option is now absent from the
+host and current initramfs, while the already-loaded `diag_bar2_map=Y` remains
+active until reboot.
+
+For reproducibility, the historical build-only preparation command was:
 
 ```bash
 cd ~/nouveau-hpd-ddc-dkms
