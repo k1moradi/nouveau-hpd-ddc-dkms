@@ -198,12 +198,13 @@ private native-surface plus serialized-teardown build pinned above. No Mesa
 package, DKMS module, or kernel image was installed or replaced during either
 capture.
 
-Two captures completed in that boot:
+Three captures completed in that boot:
 
 | Capture | Result |
 | --- | --- |
 | `/home/keivan/nouveau-vaapi-captures/20260930T082658Z-private-instrumented-12497` | 3,000 output frames, 3,002 decoded, zero decode errors, FFmpeg exit 0, `STOP_A_B=0`; no BAR2/PTE or other stop signature. |
 | `/home/keivan/nouveau-vaapi-captures/20260930T083455Z-private-instrumented-13895` | Full 40,561-frame file, 40,561 decoded, zero decode errors, FFmpeg exit 0; wall time 534.72 seconds; `STOP_A_B=0`; no BAR2/PTE or other stop signature. |
+| `/home/keivan/nouveau-vaapi-captures/20260930T085548Z-private-instrumented-16322` | Repeated full 40,561-frame file, 40,561 decoded, zero decode errors, FFmpeg exit 0; wall time 535.15 seconds; `STOP_A_B=0`; no BAR2/PTE or other stop signature. |
 
 For the full-file capture, SHA-256 verification passed for all recorded files:
 
@@ -235,9 +236,31 @@ that object; the logger also reports suppressed map callbacks.
 Therefore the trace does not establish which mapping, if any, owned either
 historical fault address when the earlier faults occurred.
 
-These clean 3,000-frame and full-file samples show that the prior BAR2 faults
-did not reproduce in these `diag2` runs. They do not prove the BAR2 issue is
-fixed: earlier captures recorded faults at `0x377000` and `0x388000`, and a
-single clean boot cannot establish whether those faults are intermittent or
-dependent on another client/state. Keep the BAR2 root cause unresolved and do
-not infer that the Mesa clear or serialized-teardown changes eliminated it.
+The repeated full-file capture's SHA-256 values also verified:
+
+```text
+boot-kernel.log  a781117dd3758e4f92bc99a6922f34fe94f68d1467885099f6bf93533c8dc0ad
+kernel.log       3b4bf799fd3a27aa747e8c961a14164b9bfe385ba0332ad3477ddc5db45166fc
+ffmpeg.log       c8779225f5b6a4fe071deaa6fbb2d3564e440c652da4655d4bcd668a0928cbb3
+transcript.txt   602f318469a3da5a5c1fcd313e5f0ae75f6c782788ae6c7aba18736c70cd9d93
+```
+
+The second full-file run again recorded a live mapping at `0x377000`, accesses
+to offsets `0x200`, `0x204`, and `0x208`, a before-write record at `0x20c`,
+and destruction of the mapping near FFmpeg exit. It again logged destruction
+of a mapping spanning `0x388000` without a corresponding map-creation record.
+Source review found why the missing record cannot be treated as evidence: the
+current diagnostic uses the same eight-record-per-second rate-limit state for
+both map-lifecycle and access records. The initial map/access burst reaches
+that shared budget, so an access record can suppress a later map record. A
+follow-up diagnostic should give lifecycle and access records separate bounded
+budgets, keeping the trace low-volume while preventing access traffic from
+consuming the entire map-history allowance.
+
+Across these three captures, 84,122 output frames were produced and 84,124
+frames were decoded with zero decode errors. The prior BAR2 faults did not
+reproduce in these `diag2` runs. This does not prove the BAR2 issue is fixed:
+earlier captures recorded faults at `0x377000` and `0x388000`, and these clean
+runs cannot establish whether those faults are intermittent or dependent on
+another client/state. Keep the BAR2 root cause unresolved and do not infer that
+the Mesa clear or serialized-teardown changes eliminated it.

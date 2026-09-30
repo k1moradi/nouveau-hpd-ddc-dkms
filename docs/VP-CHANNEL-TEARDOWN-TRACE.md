@@ -791,22 +791,28 @@ completed runtime results are recorded below.
 
 The subsequent dracut boot loaded `diag2` (`72DEE2B4ECFF77AD3764039`) and
 passed the post-reboot verifier. The private Mesa native-surface plus
-serialized-teardown candidate was selected by its exact private path. A
-3,000-frame capture and then a full-file capture both completed with zero
-decode errors and no stop signature. The full run decoded all 40,561 frames
-from `/home/keivan/test_1080p.mkv`, exited 0, and took 534.72 seconds wall
-time. Its capture is
+serialized-teardown candidate was selected by its exact private path. One
+3,000-frame capture and two full-file captures completed with zero decode
+errors and no stop signature. Each full run decoded all 40,561 frames from
+`/home/keivan/test_1080p.mkv` and exited 0; wall times were 534.72 and 535.15
+seconds. The first full-run capture is
 `/home/keivan/nouveau-vaapi-captures/20260930T083455Z-private-instrumented-13895`;
 all four SHA-256 entries in `SHA256SUMS` verified.
+
+The repeat full-run capture is
+`/home/keivan/nouveau-vaapi-captures/20260930T085548Z-private-instrumented-16322`;
+its four SHA-256 entries also verified. It used the same kernel srcversion and
+the same pinned private Mesa plugin hash.
 
 The Mesa trace continued to report correct native render-target dimensions
 (`1920x544` and `960x272`) and emitted no PGRAPH PROP overrun. The kernel log
 showed successful BSP, VP, and PPP idle-fence completion. VP chid 4's fence
 wait advanced from `0xaa2e` to target `0xaa31` in 21 jiffies (18.502 ms from
 the journal timestamps). Mesa's VP channel-destroy interval was 22.547 ms;
-PPP's subsequent channel-destroy interval was 6.079 ms. There was no
-`CTXSW_TIMEOUT`, channel kill, failed idle, or BAR2/PTE record in either
-capture. The BAR2 mapping trace did record
+PPP's subsequent channel-destroy interval was 6.079 ms. The repeated run also
+completed VP chid 4's fence successfully in 20 jiffies and completed the PPP
+fence with result 0. There was no `CTXSW_TIMEOUT`, channel kill, failed idle,
+or BAR2/PTE record in any of the three captures. The BAR2 mapping trace did record
 the one-page `0x377000` mapping and successful writes during decoding, followed
 by its destruction near process exit. It also recorded destruction of the
 `0x379000`/`0x2a000` mapping at teardown, which spans `0x388000`; the
@@ -815,7 +821,9 @@ suppressed callbacks.
 
 This is strong hardware evidence that the native-surface and serialized VP3
 teardown candidates support this complete H.264 file on the tested K4200
-configuration. It is not proof of universal or repeated reliability. The
-earlier BAR2 PTE faults remain unexplained and were absent, rather than
-reproduced and mapped, in these `diag2` samples. Preserve that issue as
-unresolved and separate from the clear-state and VP/PPP teardown fixes.
+configuration over two consecutive full-file decodes in one boot. This is
+stronger repeatability evidence, but it is not proof of reliability across
+boots, other media, or other clients. The earlier BAR2 PTE faults remain
+unexplained and were absent, rather than reproduced and mapped, in these
+`diag2` samples. Preserve that issue as unresolved and separate from the
+clear-state and VP/PPP teardown fixes.
