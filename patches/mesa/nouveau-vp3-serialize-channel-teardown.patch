@@ -1,0 +1,102 @@
+From: Nouveau debugging notes
+Subject: [EXPERIMENTAL] nouveau: serialize VP3 teardown on separate channels
+
+Mesa 26.0.8 experiment. For distinct BSP/VP/PPP channels, destroy each
+engine object, then its push buffer, then its channel before moving to the
+next engine. Preserve the original ordering for shared-channel hardware.
+This changes teardown order only; it does not alter decode commands or kernel
+recovery behavior. It remains unvalidated until a fresh-boot hardware A/B.
+
+---
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video.c
+@@ -283,39 +283,25 @@
+    for (i = 0; i < NOUVEAU_VP3_VIDEO_QDEPTH; ++i)
+       nouveau_bo_ref(NULL, &dec->bsp_bo[i]);
+-
++
+-   object = dec->bsp;
+-   channel = dec->channel[0];
+-   object_id = (uintptr_t)object;
+-   channel_id = (uintptr_t)channel;
+-   nouveau_vp3_diag("phase=object-destroy stage=begin engine=bsp object_ptr=0x%llx channel_ptr=0x%llx\n",
+-                    (unsigned long long)object_id, (unsigned long long)channel_id);
+-   nouveau_object_del(&dec->bsp);
+-   nouveau_vp3_diag("phase=object-destroy stage=end engine=bsp object_ptr=0x%llx channel_ptr=0x%llx\n",
+-                    (unsigned long long)object_id, (unsigned long long)channel_id);
+-   object = dec->vp;
+-   channel = dec->channel[1];
+-   object_id = (uintptr_t)object;
+-   channel_id = (uintptr_t)channel;
+-   nouveau_vp3_diag("phase=object-destroy stage=begin engine=vp object_ptr=0x%llx channel_ptr=0x%llx\n",
+-                    (unsigned long long)object_id, (unsigned long long)channel_id);
+-   nouveau_object_del(&dec->vp);
+-   nouveau_vp3_diag("phase=object-destroy stage=end engine=vp object_ptr=0x%llx channel_ptr=0x%llx\n",
+-                    (unsigned long long)object_id, (unsigned long long)channel_id);
+-   object = dec->ppp;
+-   channel = dec->channel[2];
+-   object_id = (uintptr_t)object;
+-   channel_id = (uintptr_t)channel;
+-   nouveau_vp3_diag("phase=object-destroy stage=begin engine=ppp object_ptr=0x%llx channel_ptr=0x%llx\n",
+-                    (unsigned long long)object_id, (unsigned long long)channel_id);
+-   nouveau_object_del(&dec->ppp);
+-   nouveau_vp3_diag("phase=object-destroy stage=end engine=ppp object_ptr=0x%llx channel_ptr=0x%llx\n",
+-                    (unsigned long long)object_id, (unsigned long long)channel_id);
+-
+    if (dec->channel[0] != dec->channel[1]) {
+       for (i = 0; i < 3; ++i) {
++         struct nouveau_object **engine = i == 0 ? &dec->bsp :
++                                          i == 1 ? &dec->vp : &dec->ppp;
+          struct nouveau_pushbuf *pushbuf = dec->pushbuf[i];
+          channel = dec->channel[i];
+          channel_id = (uintptr_t)channel;
++         object = *engine;
++         object_id = (uintptr_t)object;
++         nouveau_vp3_diag("phase=object-destroy stage=begin engine=%s "
++                          "object_ptr=0x%llx channel_ptr=0x%llx\n",
++                          engine_name[i], (unsigned long long)object_id,
++                          (unsigned long long)channel_id);
++         nouveau_object_del(engine);
++         nouveau_vp3_diag("phase=object-destroy stage=end engine=%s "
++                          "object_ptr=0x%llx channel_ptr=0x%llx\n",
++                          engine_name[i], (unsigned long long)object_id,
++                          (unsigned long long)channel_id);
++
+          pushbuf_id = (uintptr_t)pushbuf;
+          nouveau_vp3_diag("phase=channel-destroy stage=pushbuf-begin index=%d "
+                           "engine=%s channel_ptr=0x%llx pushbuf_ptr=0x%llx\n",
+@@ -335,6 +321,34 @@
+                           i, engine_name[i], (unsigned long long)channel_id);
+       }
+    } else {
++      object = dec->bsp;
++      channel = dec->channel[0];
++      object_id = (uintptr_t)object;
++      channel_id = (uintptr_t)channel;
++      nouveau_vp3_diag("phase=object-destroy stage=begin engine=bsp object_ptr=0x%llx channel_ptr=0x%llx\n",
++                       (unsigned long long)object_id, (unsigned long long)channel_id);
++      nouveau_object_del(&dec->bsp);
++      nouveau_vp3_diag("phase=object-destroy stage=end engine=bsp object_ptr=0x%llx channel_ptr=0x%llx\n",
++                       (unsigned long long)object_id, (unsigned long long)channel_id);
++      object = dec->vp;
++      channel = dec->channel[1];
++      object_id = (uintptr_t)object;
++      channel_id = (uintptr_t)channel;
++      nouveau_vp3_diag("phase=object-destroy stage=begin engine=vp object_ptr=0x%llx channel_ptr=0x%llx\n",
++                       (unsigned long long)object_id, (unsigned long long)channel_id);
++      nouveau_object_del(&dec->vp);
++      nouveau_vp3_diag("phase=object-destroy stage=end engine=vp object_ptr=0x%llx channel_ptr=0x%llx\n",
++                       (unsigned long long)object_id, (unsigned long long)channel_id);
++      object = dec->ppp;
++      channel = dec->channel[2];
++      object_id = (uintptr_t)object;
++      channel_id = (uintptr_t)channel;
++      nouveau_vp3_diag("phase=object-destroy stage=begin engine=ppp object_ptr=0x%llx channel_ptr=0x%llx\n",
++                       (unsigned long long)object_id, (unsigned long long)channel_id);
++      nouveau_object_del(&dec->ppp);
++      nouveau_vp3_diag("phase=object-destroy stage=end engine=ppp object_ptr=0x%llx channel_ptr=0x%llx\n",
++                       (unsigned long long)object_id, (unsigned long long)channel_id);
++
+       struct nouveau_pushbuf *pushbuf = dec->pushbuf[0];
+       channel = dec->channel[0];
+       channel_id = (uintptr_t)channel;

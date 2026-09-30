@@ -1,10 +1,10 @@
 # GK104 VP channel teardown trace
 
 This is an offline source analysis and a prepared, opt-in trace procedure for
-the remaining VP-channel teardown timeout. It does not change the working
-video fixes, alter scheduling, or install anything. The private Mesa clear
-candidate is frozen functionally; the extra Mesa change in this checkpoint
-prints channel identities only when `NOUVEAU_DIAG_VA_SURFACE=1`.
+the remaining VP-channel teardown timeout. The private Mesa native-surface
+clear candidate remains unchanged. A separate Mesa 26.0.8 teardown-order
+candidate is now privately built for a controlled hardware A/B; it is not
+installed system-wide and has not yet been hardware-tested.
 
 ## Candidate-run observations
 
@@ -395,29 +395,166 @@ the installed `pahole` is version 0 while the kernel build used version 131.
 Kbuild therefore skipped BTF generation because the matching `vmlinux` is not
 available. Compilation, `MODPOST`, and module linking all succeeded.
 
-This is a private review artifact only. It was not registered with DKMS,
-installed, loaded, or hardware-tested. The running 0.1.13 module remains
-unchanged and does not contain these parameters. Do not install this artifact
-as a replacement for 0.1.13; any later deployment needs a separately versioned
-diagnostic package and its own review. No scheduler backport, Mesa teardown
-reorder, or functional kernel change is included.
-
-If later approved for a controlled capture, enable the two parameters only on
-the separately installed diagnostic module through
-`/sys/module/nouveau/parameters/diag_fence_wait` and
-`/sys/module/nouveau/parameters/diag_ctxsw`, then reset both to `0`. The next
-hardware test should reuse the private native-surface Mesa candidate and keep
-the existing functional kernel behavior.
+The preserved `.ko` above is a private review artifact, not the file registered
+directly with DKMS. A separately versioned `nouveau-hpd-ddc/0.1.13-diag1`
+package was subsequently installed and loaded after reboot; the capture below
+used that module. The original `.13` build remains preserved for rollback. No
+scheduler backport or functional kernel change is included.
 
 ## Current confidence
 
 - **PROVEN:** Mesa channel identity is BSP chid 3, VP chid 4, PPP chid 5.
 - **PROVEN:** the 15-second VP teardown stall is the Nouveau idle-fence wait.
-- **PROVEN:** the timeout recovery targeted PPP chid 5 while VP chid 4 was
-  waiting; this temporal overlap does not establish causation.
-- **UNKNOWN:** which engine bit or bits formed `engm`, whether the VP semaphore
-  release executed, and why the VP fence did not signal before its deadline.
+- **PROVEN:** the new diagnostic identifies `engm=0x4` as MSPPP, runlist 2,
+  active chid 5, and the recovery targets that PPP channel while VP chid 4 is
+  waiting.
+- **PROVEN:** the VP idle-fence submission returned 0 and kicked the push
+  buffer. The semaphore at GPU address `0x14040` moved from `0xbbc` to `0xbbd`
+  but never reached target sequence 3007 (`0xbbf`) before the 15-second
+  deadline. This shows incomplete fence progress; it does not prove why the
+  release stopped.
+- **UNKNOWN:** whether PPP recovery caused VP command progress to stop, whether
+  VP itself stopped executing, or whether another shared FIFO condition is
+  responsible.
 - **UNRESOLVED:** whether the BAR2/PTE fault is primary or secondary.
 - **UNSUPPORTED as a direct explanation:** patch 2's nonstall event index for
   this non-lazy busy-poll fence wait.
-- **No functional Mesa teardown reorder or kernel recovery change was made.**
+- **No Mesa teardown reorder has been hardware-tested, and no kernel recovery
+  change was made.** A standalone Mesa-only ordering candidate is described
+  below.
+
+## Fresh diagnostic capture and serialized teardown candidate
+
+After installing the separately versioned diagnostic module and rebooting,
+one private native-surface Mesa run was captured at:
+
+`/home/keivan/nouveau-vaapi-captures/20260930T023643Z-private-instrumented-5108`
+
+All entries in that capture's `SHA256SUMS` verify. The hash values are:
+
+| File | SHA-256 |
+| --- | --- |
+| `kernel.log` | `0822ea431fffd99b647eee031a3245e330f3657e90a2d394ed457bd65f22b96c` |
+| `ffmpeg.log` | `8b1b6ee0da8e660d05f3944fc78bcf40b0c111ce4d9c7ce7a01924224266eac1` |
+| `transcript.txt` | `e15f3cc2c19170a5415eca1bd5c1584a674e5759a470c2783595b7d534f798ee` |
+
+The loaded and on-disk diagnostic kernel module both had source version
+`B19B8AAE48467545E652509`. Libva opened the exact private native-surface
+plugin, and `va_openDriver()` returned 0. The input hash was
+`d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2`.
+FFmpeg output 3000 frames, decoded 3002 with zero decode errors, and exited 0.
+The run took 56.34 seconds wall time; its final media progress was 38.71
+seconds. The VA trace reports `SKIP_CLEAR_SURFACE=0`; all clears entered
+`nvc0_clear_render_target()` with correct `1920x544` or `960x272` RT extents.
+This kernel capture has no PROP/RT-overrun or BAR2/PTE records. The earlier
+candidate capture did have a BAR2 fault, so BAR2 is improved in this sample,
+not established as fixed.
+
+The combined monotonic timeline is:
+
+| Monotonic time | Event | Since FFmpeg start | Relative to FFmpeg exit |
+| ---: | --- | ---: | ---: |
+| `373.458864409` | FFmpeg starts | `0` | `-56.212822 s` |
+| `414.524727454` | VP3 decoder destruction begins | `+41.065863 s` | `-15.146959 s` |
+| `414.525120492` | PPP engine-object deletion begins | `+41.066256 s` | `-15.146566 s` |
+| `414.526152001` | PPP engine-object deletion ends | `+41.067288 s` | `-15.145535 s` |
+| `414.529605402` | VP chid 4 channel-free call begins | `+41.070741 s` | `-15.142081 s` |
+| `414.530106` | VP idle fence emitted: seq 3007, address `0x14040`, old value `0xbbc`, kick called | `+41.071242 s` | `-15.141581 s` |
+| `414.530560` | VP fence busy-wait begins; value remains `0xbbc` | `+41.071696 s` | `-15.141127 s` |
+| `415.530079` | First sample: semaphore advances to `0xbbd` | `+42.071215 s` | `-14.141608 s` |
+| `418.828701` | `CTXSW_TIMEOUT` | `+45.369837 s` | `-10.842986 s` |
+| `418.829592` | Diagnostic records `engine_mask=0x4` | `+45.370728 s` | `-10.842095 s` |
+| `418.831719` | Selected engine: MSPPP, runlist 2, active chid 5 | `+45.372855 s` | `-10.839968 s` |
+| `418.833974` | PPP chid 5 killed | `+45.375110 s` | `-10.837713 s` |
+| `429.530655` | VP idle-fence wait ends `-EBUSY`; semaphore still `0xbbd` | `+56.071791 s` | `-0.141032 s` |
+| `429.530981` | Kernel reports `failed to idle channel 4` | `+56.072117 s` | `-0.140706 s` |
+| `429.531822677` | PPP chid 5 channel-free call begins, after VP wait returns | `+56.072958 s` | `-0.139864 s` |
+| `429.537165245` | PPP channel-free call returns in about 5.34 ms | `+56.078301 s` | `-0.134521 s` |
+| `429.671686632` | FFmpeg exits 0 | `+56.212822 s` | `0` |
+| `444.875895124` | Journal logger stops after post-FFmpeg tail | `+71.417031 s` | `+15.204208 s` |
+
+The diagnostic samples once per second. After the one-step advance to `0xbbd`,
+the semaphore remained at that value in every later sample. The channel-free
+ordering is also explicit in Mesa's timestamped log: PPP's context object is
+deleted before the VP channel wait starts, but PPP's channel itself is not
+freed until VP returns. Thus the capture confirms PPP context-switch recovery
+overlaps the VP idle-fence wait, but does not show that the PPP channel-free
+call caused the VP wait to stall.
+
+## Mesa-only serialized teardown candidate
+
+The exact Mesa `26.0.8-1ubuntu0.3` source uses separate BSP, VP, and PPP
+channels on GK104. Before this candidate its destructor deletes all three
+engine objects first, then frees each push buffer and channel. The trace shows
+that PPP engine-object deletion therefore happens before the VP idle-fence
+wait. This makes serialization a controlled hypothesis worth testing; it is
+not causal proof.
+
+[`patches/mesa/nouveau-vp3-serialize-channel-teardown.patch`](../patches/mesa/nouveau-vp3-serialize-channel-teardown.patch)
+changes only the distinct-channel branch to perform, in order:
+
+```text
+BSP object -> BSP push buffer -> BSP channel
+VP object  -> VP push buffer  -> VP channel
+PPP object -> PPP push buffer -> PPP channel
+```
+
+The shared-channel branch retains the original all-engine-objects-first
+ordering. The candidate does not change decode submissions, kernel behavior,
+idle-fence semantics, or error handling. It keeps the native-surface fix and
+timestamped diagnostics in place.
+
+The diagnostic, native-surface, channel-ID, and teardown patches were applied
+in that order with `patch --fuzz=0` to a staging copy of the private
+uninstrumented Mesa 26.0.8 source. The native-surface helper verified its
+exact five-file preimage hashes, and the resulting VP3 source matched the
+private candidate build source byte-for-byte. The static regression check
+verifies both the per-engine ordering and unchanged shared-channel ordering.
+A new private build was started from a clean Meson
+setup but stopped after 208 of 934 targets to avoid wasting RAM/time. The
+changed VP3 source was then built and linked incrementally in the already
+successful private Mesa build cache: 4 Ninja steps, `build_script_exit=0`,
+with `-j1`. Failed/interrupted and successful logs are kept separately under:
+
+`/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-instrumented-native-surface-fix-serialized-teardown-candidate/`
+
+The new private Gallium plugin SHA-256 is
+`d841244e592f171adebdbeaa556c97cb2e1bf639fceba81b0a829c9720b1119f`.
+Its `nouveau_drv_video.so` symlink resolves to that plugin, all timestamped
+surface/clear/channel markers are present, and `ldd` reports no missing
+dependencies. The previous working native-surface candidate prefix was not
+modified. This new plugin is **not installed system-wide** and has **not yet
+been run on hardware**.
+
+The next controlled run requires a fresh reboot because the preceding capture
+set `STOP_A_B=1`. Keep the installed diagnostic DKMS module and Mesa
+native-surface fix unchanged; change only to the new private prefix. After
+reboot, verify the module, enable both diagnostics, and verify their readback:
+
+```bash
+cd ~/nouveau-hpd-ddc-dkms
+sudo tools/verify-vp-fence-diagnostic.sh post-reboot
+sudo sh -c 'printf 1 > /sys/module/nouveau/parameters/diag_fence_wait; printf 1 > /sys/module/nouveau/parameters/diag_ctxsw'
+sudo sh -c 'printf "diag_fence_wait="; cat /sys/module/nouveau/parameters/diag_fence_wait; printf "diag_ctxsw="; cat /sys/module/nouveau/parameters/diag_ctxsw'
+```
+
+Both readbacks should be `Y`. Then verify and run only the serialized candidate:
+
+```bash
+DRI="$HOME/.cache/nouveau-vaapi-followup-20260928/private-instrumented-native-surface-fix-serialized-teardown-candidate/prefix/lib/x86_64-linux-gnu/dri"
+printf '%s  %s\n' \
+  'd841244e592f171adebdbeaa556c97cb2e1bf639fceba81b0a829c9720b1119f' \
+  "$DRI/libgallium_drv_video.so" | sha256sum --check -
+readlink -f "$DRI/nouveau_drv_video.so"
+tools/vaapi-capture.sh private-instrumented "$DRI"
+```
+
+Keep SDDM off during the capture and do not run
+`/home/keivan/cli-low-memory.sh` until it completes. The capture helper now
+holds an exclusive lock for the complete run and journal tail; the low-memory
+script takes the same exclusive lock and refuses to stop SDDM or other
+services while that lock is held. A second simultaneous capture is also
+refused before its logger or FFmpeg starts. The helper records SDDM state
+before and after and rejects a capture if it changes. The explicit VAAPI render-node
+test does not require SDDM. If this capture reports `STOP_A_B=1`, do not run
+another GPU condition in the same boot.
