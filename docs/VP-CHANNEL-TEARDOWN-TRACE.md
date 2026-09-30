@@ -726,3 +726,42 @@ must not traverse the VMM tree without its required synchronization.
 No Mesa package, DKMS module, or kernel image was installed or replaced for
 this capture. The existing `0.1.13-diag1` DKMS module was the test baseline;
 the Mesa candidate remained in its private prefix.
+
+### BAR2 mapping/access diagnostic candidate
+
+The standalone patch `patches/diagnostic/gk104-bar2-instmem-map-trace.patch`
+adds the opt-in `diag_bar2_map` module parameter, default false. It traces
+NV50 instance-memory mappings overlapping either fault page at map creation,
+LRU eviction, and object destruction. It also records before/after 32-bit
+reads and writes through the fast BAR2 accessors when their computed address
+falls in either page. Records include the VMA/backing-object identity and are
+rate-limited to eight total records per second. No mapping, read/write, fence,
+or recovery behavior is changed.
+
+Validation so far:
+
+- The patch applies with `--fuzz=0` to the exact Ubuntu `7.0.0-34.34`
+  `nv50.c` source preimage and produces the same file as the staged candidate.
+- That changed `nv50.o` compiles against the installed
+  `7.0.0-34-generic` kernel headers with `-j1`; the object contains the
+  `diag_bar2_map`, `NOUVEAU_DIAG_BAR2_MAP`, and
+  `NOUVEAU_DIAG_BAR2_ACCESS` markers and the diagnostic helper symbols.
+- Patch SHA-256:
+  `cb981c696c315cab8fd365f32b2e76b17f9d31c06c3248b604785649627cfa77`.
+  The compiled `nv50.o` SHA-256 is
+  `7ed1b029e19cd79e85fc07b7d1f605cd1ec0097fcff60c488f902a5d37d6743a`; its
+  build log SHA-256 is
+  `7eaacbcf3a44e25958a98804e2a3495e4a910eff9ccc2c68696e37e4174f536a`.
+- The full `nouveau.ko` has not yet been rebuilt with this candidate. The
+  patch has not been packaged as a separate DKMS revision, installed, or
+  hardware-tested. It is not part of the normal installer or production DKMS
+  path.
+
+The next gate is a separately versioned, full-module diagnostic build that
+preserves the already-tested context/nonstall and fence/CTXSW diagnostic
+changes. Verify the linked module's kernel vermagic, `diag_bar2_map` metadata,
+embedded mapping/access markers, module SHA-256, and build-log SHA-256 before
+considering any installation. To capture early mapping lifetime events, the
+parameter must be enabled before Nouveau initializes; do not treat a run with
+the parameter enabled only after module initialization as complete mapping
+provenance.

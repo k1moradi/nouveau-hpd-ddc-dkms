@@ -1,0 +1,164 @@
+From: Nouveau diagnostic preparation
+Subject: [DIAGNOSTIC] drm/nouveau: trace GK104 BAR2 instance accesses
+
+Add an opt-in, address-filtered trace for NV50 instance-memory mappings and
+fast CPU accesses at BAR2 offsets seen in K4200 HOST_CPU PTE faults. Record
+mapping creation, LRU eviction, object destruction, and before/after access
+metadata without changing mapping, access, or recovery behavior. All records
+are rate-limited to eight per second.
+
+Enable diag_bar2_map before Nouveau initializes so early mappings are included.
+The records are limited to mappings or 32-bit accesses overlapping 0x377000
+or 0x388000.
+
+---
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
+@@ -24,11 +24,22 @@
+ #define nv50_instmem(p) container_of((p), struct nv50_instmem, base)
+ #include "priv.h"
+ 
++#include <linux/jiffies.h>
++#include <linux/moduleparam.h>
++#include <linux/ratelimit.h>
++
+ #include <core/memory.h>
+ #include <subdev/bar.h>
+ #include <subdev/fb.h>
+ #include <subdev/gsp.h>
+ #include <subdev/mmu.h>
++
++static bool nouveau_diag_bar2_map;
++module_param_named(diag_bar2_map, nouveau_diag_bar2_map, bool, 0600);
++MODULE_PARM_DESC(diag_bar2_map,
++		 "Enable opt-in NV50 instance-memory BAR2 mapping diagnostics");
++
++static DEFINE_RATELIMIT_STATE(nv50_instobj_diag_access_rs, HZ, 8);
+ 
+ struct nv50_instmem {
+ 	struct nvkm_instmem base;
+@@ -53,6 +64,73 @@
+ 	struct list_head lru;
+ };
+ 
++static u32
++nv50_instobj_diag_page_mask(u64 addr, u64 size)
++{
++	const u64 page_size = 0x1000;
++	u32 mask = 0;
++
++	if (addr < 0x377000 + page_size && 0x377000 < addr + size)
++		mask |= 0x01;
++	if (addr < 0x388000 + page_size && 0x388000 < addr + size)
++		mask |= 0x02;
++
++	return mask;
++}
++
++static void
++nv50_instobj_diag_map(const char *stage, struct nv50_instobj *iobj,
++		      struct nvkm_vma *bar, void *map)
++{
++	u64 size = nvkm_memory_size(&iobj->base.memory);
++	u32 pages;
++
++	if (!READ_ONCE(nouveau_diag_bar2_map) || !bar)
++		return;
++
++	pages = nv50_instobj_diag_page_mask(bar->addr, size);
++	if (!pages || !__ratelimit(&nv50_instobj_diag_access_rs))
++		return;
++
++	nvkm_info(&iobj->imem->base.subdev,
++		 "NOUVEAU_DIAG_BAR2_MAP stage=%s pages=0x%x object=%p "
++		 "vma_start=0x%016llx vma_size=0x%016llx "
++		 "backing_addr=0x%016llx backing_size=0x%016llx "
++		 "backing_target=%d map=%p maps=%d\n",
++		 stage, pages, iobj, (unsigned long long)bar->addr,
++		 (unsigned long long)size,
++		 (unsigned long long)nvkm_memory_addr(iobj->ram),
++		 (unsigned long long)nvkm_memory_size(iobj->ram),
++		 nvkm_memory_target(iobj->ram), map, refcount_read(&iobj->maps));
++}
++
++static void
++nv50_instobj_diag_access(const char *stage, const char *op,
++			 struct nv50_instobj *iobj, u64 offset, u32 value,
++			 bool value_valid)
++{
++	u64 addr;
++	u32 pages;
++
++	if (!READ_ONCE(nouveau_diag_bar2_map) || !iobj->bar)
++		return;
++
++	addr = iobj->bar->addr + offset;
++	pages = nv50_instobj_diag_page_mask(addr, sizeof(u32));
++	if (!pages || !__ratelimit(&nv50_instobj_diag_access_rs))
++		return;
++
++	nvkm_info(&iobj->imem->base.subdev,
++		 "NOUVEAU_DIAG_BAR2_ACCESS stage=%s op=%s pages=0x%x object=%p "
++		 "bar2_addr=0x%016llx memory_offset=0x%016llx "
++		 "value_valid=%u value=0x%08x backing_addr=0x%016llx "
++		 "map=%p maps=%d\n",
++		 stage, op, pages, iobj, (unsigned long long)addr,
++		 (unsigned long long)offset, (unsigned int)value_valid, value,
++		 (unsigned long long)nvkm_memory_addr(iobj->ram), iobj->map,
++		 refcount_read(&iobj->maps));
++}
++
+ static void
+ nv50_instobj_wr32_slow(struct nvkm_memory *memory, u64 offset, u32 data)
+ {
+@@ -102,13 +180,23 @@
+ static void
+ nv50_instobj_wr32(struct nvkm_memory *memory, u64 offset, u32 data)
+ {
+-	iowrite32_native(data, nv50_instobj(memory)->map + offset);
++	struct nv50_instobj *iobj = nv50_instobj(memory);
++
++	nv50_instobj_diag_access("before", "write", iobj, offset, data, true);
++	iowrite32_native(data, iobj->map + offset);
++	nv50_instobj_diag_access("after", "write", iobj, offset, data, true);
+ }
+ 
+ static u32
+ nv50_instobj_rd32(struct nvkm_memory *memory, u64 offset)
+ {
+-	return ioread32_native(nv50_instobj(memory)->map + offset);
++	struct nv50_instobj *iobj = nv50_instobj(memory);
++	u32 data;
++
++	nv50_instobj_diag_access("before", "read", iobj, offset, 0, false);
++	data = ioread32_native(iobj->map + offset);
++	nv50_instobj_diag_access("after", "read", iobj, offset, data, true);
++	return data;
+ }
+ 
+ static const struct nvkm_memory_ptrs
+@@ -142,6 +230,7 @@
+ 		mutex_lock(&imem->base.mutex);
+ 		eobj = list_first_entry_or_null(&imem->lru, typeof(*eobj), lru);
+ 		if (eobj) {
++			nv50_instobj_diag_map("evict", eobj, eobj->bar, eobj->map);
+ 			nvkm_debug(subdev, "evict %016llx %016llx @ %016llx\n",
+ 				   nvkm_memory_addr(&eobj->base.memory),
+ 				   nvkm_memory_size(&eobj->base.memory),
+@@ -174,6 +263,8 @@
+ 	iobj->bar = bar;
+ 	iobj->map = ioremap_wc(device->func->resource_addr(device, NVKM_BAR2_INST) +
+ 			       (u32)iobj->bar->addr, size);
++	nv50_instobj_diag_map(iobj->map ? "map" : "ioremap-failed", iobj,
++			      iobj->bar, iobj->map);
+ 	if (!iobj->map) {
+ 		nvkm_warn(subdev, "PRAMIN ioremap failed\n");
+ 		nvkm_vmm_put(vmm, &iobj->bar);
+@@ -330,6 +421,7 @@
+ 
+ 	if (map) {
+ 		struct nvkm_vmm *vmm = nvkm_bar_bar2_vmm(imem->subdev.device);
++		nv50_instobj_diag_map("destroy", iobj, bar, map);
+ 		iounmap(map);
+ 		if (likely(vmm)) /* Can be NULL during BAR destructor. */
+ 			nvkm_vmm_put(vmm, &bar);
