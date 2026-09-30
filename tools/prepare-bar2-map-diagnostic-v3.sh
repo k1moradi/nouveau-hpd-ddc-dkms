@@ -12,17 +12,15 @@ SOURCE_ARCHIVE=/usr/src/linux-source-7.0.0/linux-source-7.0.0.tar.bz2
 EXPECTED_SOURCE_ARCHIVE_SHA256=a874e1fb08d2ee695b08e0c8ce6fd2c76a4bf7ffa98882fbabd233380ef8a85a
 EXPECTED_PREVIOUS_SRCVERSION=72DEE2B4ECFF77AD3764039
 EXPECTED_BASE_SRCVERSION=57AE1B168D50DB546CD87A1
-EXPECTED_DIAG_SRCVERSION=
+EXPECTED_DIAG_SRCVERSION=9F90A7EB5A9E1505E0B6708
 HERE=$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd -P)
 SCRIPT_PATH="$HERE/tools/prepare-bar2-map-diagnostic-v3.sh"
 
 if [[ $EUID -ne 0 ]]; then
     exec sudo -- "$SCRIPT_PATH" "$@"
 fi
-if (($# == 2)) && [[ $1 == --expect-srcversion && $2 =~ ^[A-Fa-f0-9]{24}$ ]]; then
-    EXPECTED_DIAG_SRCVERSION=${2^^}
-elif (($# != 0)); then
-    echo "Usage: $0 [--expect-srcversion SRCVERSION]" >&2
+if (($# != 0)); then
+    echo "Usage: $0" >&2
     exit 2
 fi
 
@@ -287,9 +285,6 @@ chown "$user_uid:$user_gid" "$evidence_dir/nouveau-diag3.ko.zst" "$evidence_dir/
 } >> "$evidence_dir/build-metadata.txt"
 chown "$user_uid:$user_gid" "$evidence_dir/build-metadata.txt" "$input_manifest_tmp"
 
-echo "Prepared and verified $NAME/$DIAG_VERSION; it was not installed."
-if [[ -z $EXPECTED_DIAG_SRCVERSION ]]; then
-    echo "No reviewed srcversion was supplied; this artifact is build-only and is not eligible for installation."
-fi
+echo "Prepared and verified $NAME/$DIAG_VERSION at reviewed srcversion $EXPECTED_DIAG_SRCVERSION; it was not installed."
 echo "Build artifact and logs: $evidence_dir"
 echo "DKMS status: $(dkms status -m "$NAME" -v "$DIAG_VERSION" -k "$kernel")"

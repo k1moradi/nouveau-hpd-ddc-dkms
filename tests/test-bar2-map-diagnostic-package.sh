@@ -57,6 +57,8 @@ grep -Fq 'DIAG_VERSION=0.1.13-diag3' \
 grep -Fq '0.1.13-diag3' "$repo_root/uninstall.sh"
 grep -Fq 'PREVIOUS_DIAG_VERSION=0.1.13-diag2' \
     "$repo_root/tools/prepare-bar2-map-diagnostic-v3.sh"
+grep -Fq 'EXPECTED_DIAG_SRCVERSION=9F90A7EB5A9E1505E0B6708' \
+    "$repo_root/tools/prepare-bar2-map-diagnostic-v3.sh"
 grep -Fq 'touch "$SRC_DIR/diagnostic-bar2-map-budget.enabled"' \
     "$repo_root/tools/prepare-bar2-map-diagnostic-v3.sh"
 grep -Fq 'gk104-bar2-map-rate-limit-isolation.patch' \

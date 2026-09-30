@@ -276,13 +276,16 @@ access callbacks use their distinct limiter states.
 
 The separate `tools/prepare-bar2-map-diagnostic-v3.sh` helper stages
 `nouveau-hpd-ddc/0.1.13-diag3` from a clean committed tree and builds it without
-installing it. Its first build can discover the resulting srcversion; until an
-expected srcversion is reviewed and pinned, the artifact is explicitly
-build-only and not eligible for installation. The `diag2` and normal
-preparation paths do not create the follow-up marker. No `diag3` build or
-hardware run has yet used the isolated budgets. BAR2's historical root cause
-remains unknown; a fresh-boot capture with the revised diagnostic is needed to
-collect a more complete mapping lifetime if the fault recurs.
+installing it. The clean discovery build from review commit
+`42d0f6b60485587050795e2b4cd4c7a247d10752` produced srcversion
+`9F90A7EB5A9E1505E0B6708`; that value is now pinned in the helper, so a
+subsequent mismatch fails the build gate. This pin does not authorize
+installation: the resulting module remains a build-only diagnostic artifact,
+with no `diag3` install path. The `diag2` and normal preparation paths do not
+create the follow-up marker. No `diag3` hardware run has used the isolated
+budgets. BAR2's historical root cause remains unknown; a fresh-boot capture
+with the revised diagnostic is needed to collect a more complete mapping
+lifetime if the fault recurs.
 
 After the candidate changes are committed and pushed, the preparation command
 is:
