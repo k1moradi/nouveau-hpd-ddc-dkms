@@ -279,13 +279,53 @@ The separate `tools/prepare-bar2-map-diagnostic-v3.sh` helper stages
 installing it. The clean discovery build from review commit
 `42d0f6b60485587050795e2b4cd4c7a247d10752` produced srcversion
 `9F90A7EB5A9E1505E0B6708`; that value is now pinned in the helper, so a
-subsequent mismatch fails the build gate. This pin does not authorize
-installation: the resulting module remains a build-only diagnostic artifact,
-with no `diag3` install path. The `diag2` and normal preparation paths do not
-create the follow-up marker. No `diag3` hardware run has used the isolated
-budgets. BAR2's historical root cause remains unknown; a fresh-boot capture
-with the revised diagnostic is needed to collect a more complete mapping
-lifetime if the fault recurs.
+subsequent mismatch fails the build gate. The pinned clean rebuild from
+`94cc54875b1fff7a863dd483a0482c2572446046` produced the same srcversion and
+module bytes apart from the GNU build-id descriptor. Its compressed module
+SHA-256 is `d437863bd12473c8dbba7104cf8bccdc7a2b67fafe10a9e0d5f963a168245aca`.
+The `diag2` and normal preparation paths do not create the follow-up marker.
+BAR2's historical root cause remains unknown; `diag3` exists to collect a more
+complete mapping lifetime if the fault recurs.
+
+The version-specific install, verify, and rollback helpers are
+`tools/install-bar2-map-diagnostic-v3.sh`,
+`tools/verify-bar2-map-diagnostic-v3.sh`, and
+`tools/rollback-bar2-map-diagnostic-v3.sh`. Installation puts the unique
+diagnostic version on disk while leaving the running `diag2` loaded. It stages
+`diag_bar2_map=1` in this machine's dracut image for one boot, verifies that
+the image contains both the pinned module and option, then removes the host
+modprobe file. It does not reboot or reload Nouveau. The verifier's
+`clear-early-option` mode regenerates the initramfs after the diagnostic boot
+so later boots do not automatically enable BAR2 logging; the live module
+parameter stays enabled until reboot.
+
+After a successful install verification and a fresh boot, use this sequence:
+
+```bash
+sudo tools/verify-bar2-map-diagnostic-v3.sh post-reboot
+sudo tools/verify-bar2-map-diagnostic-v3.sh clear-early-option
+sudo sh -c '
+printf 1 > /sys/module/nouveau/parameters/diag_fence_wait
+printf 1 > /sys/module/nouveau/parameters/diag_ctxsw
+printf "diag_bar2_map="; cat /sys/module/nouveau/parameters/diag_bar2_map
+printf "diag_fence_wait="; cat /sys/module/nouveau/parameters/diag_fence_wait
+printf "diag_ctxsw="; cat /sys/module/nouveau/parameters/diag_ctxsw
+'
+
+DRI="$HOME/.cache/nouveau-vaapi-followup-20260928/private-instrumented-native-surface-fix-serialized-teardown-candidate/prefix/lib/x86_64-linux-gnu/dri"
+printf '%s  %s\n' \
+  'd841244e592f171adebdbeaa556c97cb2e1bf639fceba81b0a829c9720b1119f' \
+  "$DRI/libgallium_drv_video.so" | sha256sum --check -
+NOUVEAU_CAPTURE_FRAMES=40561 NOUVEAU_CAPTURE_BOOT_KERNEL_LOG=1 \
+  tools/vaapi-capture.sh private-instrumented "$DRI"
+```
+
+The capture is a full-file decode with the already validated native-surface
+and serialized-teardown Mesa build. It is intended to establish whether the
+address-filtered BAR2 map/access records identify the mappings covering
+`0x377000` or `0x388000` if either PTE fault recurs. A clean run is
+non-reproduction evidence; it does not by itself identify the historical
+fault's cause. Respect `STOP_A_B=1` and stop further GPU work in that boot.
 
 After the candidate changes are committed and pushed, the preparation command
 is:

@@ -63,6 +63,28 @@ grep -Fq 'touch "$SRC_DIR/diagnostic-bar2-map-budget.enabled"' \
     "$repo_root/tools/prepare-bar2-map-diagnostic-v3.sh"
 grep -Fq 'gk104-bar2-map-rate-limit-isolation.patch' \
     "$repo_root/tools/prepare-bar2-map-diagnostic-v3.sh"
+for script in install-bar2-map-diagnostic-v3.sh \
+              verify-bar2-map-diagnostic-v3.sh \
+              rollback-bar2-map-diagnostic-v3.sh; do
+    test -x "$repo_root/tools/$script"
+    grep -Fq '0.1.13-diag3' "$repo_root/tools/$script"
+done
+grep -Fq 'DIAG_SRCVERSION=9F90A7EB5A9E1505E0B6708' \
+    "$repo_root/tools/install-bar2-map-diagnostic-v3.sh"
+grep -Fq 'DIAG_MODULE_SHA256=d437863bd12473c8dbba7104cf8bccdc7a2b67fafe10a9e0d5f963a168245aca' \
+    "$repo_root/tools/install-bar2-map-diagnostic-v3.sh"
+grep -Fq 'dkms install --force -m "$NAME" -v "$VERSION"' \
+    "$repo_root/tools/install-bar2-map-diagnostic-v3.sh"
+grep -Fq 'dracut --force --include "$OPTION_FILE"' \
+    "$repo_root/tools/install-bar2-map-diagnostic-v3.sh"
+grep -Fq 'clear-early-option' \
+    "$repo_root/tools/verify-bar2-map-diagnostic-v3.sh"
+grep -Fq 'PREVIOUS_SRCVERSION=72DEE2B4ECFF77AD3764039' \
+    "$repo_root/tools/rollback-bar2-map-diagnostic-v3.sh"
+grep -Fq 'PREVIOUS_VERSION=0.1.13-diag2' \
+    "$repo_root/tools/install-bar2-map-diagnostic-v3.sh"
+! grep -Eq '(^|[;&|[:space:]])reboot([[:space:]]|$)' \
+    "$repo_root/tools/install-bar2-map-diagnostic-v3.sh"
 ! grep -Fq 'diagnostic-bar2-map-budget.enabled' \
     "$repo_root/tools/prepare-bar2-map-diagnostic.sh"
 ! grep -Eq '^dkms install([[:space:]]|$)' \
