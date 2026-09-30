@@ -89,26 +89,42 @@ The install helper uses the unique `0.1.13-diag2` version, verifies both
 preserved module artifacts, keeps the currently loaded `diag1` module running,
 and updates the initramfs. It does not reboot or reload Nouveau.
 
-On the next boot, pass this one-time kernel command-line argument so mapping
-creation is traced from module initialization:
+This Lubuntu installation uses a dracut-generated initramfs. To enable the
+parameter for one boot without editing a bootloader command line, temporarily
+put a modprobe option in the initramfs. The host-side config is removed after
+the image is built, so it will not affect later module loads:
 
-```text
-nouveau.diag_bar2_map=1
+```bash
+K=$(uname -r)
+CFG=/etc/modprobe.d/99-nouveau-diag-bar2-once.conf
+printf 'options nouveau diag_bar2_map=1\n' | sudo tee "$CFG"
+sudo dracut --force "/boot/initrd.img-$K" "$K"
+sudo lsinitrd -f "$CFG" "/boot/initrd.img-$K"
+sudo unlink "$CFG"
 ```
 
-At the GRUB menu, edit the normal Ubuntu entry, append the argument to the
-`linux` line, and boot that entry. Do not add it permanently to `/etc/default/grub`.
-After reconnecting, verify before enabling the other probes:
+Confirm `lsinitrd` prints exactly `options nouveau diag_bar2_map=1`, then
+reboot. After reconnecting, verify before enabling the other probes:
 
 ```bash
 sudo tools/verify-bar2-map-diagnostic.sh post-reboot
 ```
 
-The verifier requires the loaded `diag2` srcversion, the kernel argument, and
-`diag_bar2_map=Y`; it also requires `diag_fence_wait` and `diag_ctxsw` to remain
-off until they are explicitly enabled. For the one controlled capture, enable
-those two parameters, verify their readback, then use the already validated
-serialized-teardown native-surface Mesa candidate and existing capture harness.
+The verifier requires the loaded `diag2` srcversion, `diag_bar2_map=Y`, and
+either the one-time kernel argument or the exact option in the dracut image. It
+also requires `diag_fence_wait` and `diag_ctxsw` to remain off until explicitly
+enabled. After the verifier passes, regenerate the initramfs without the
+temporary option; this leaves the already-loaded `diag_bar2_map=Y` unchanged
+for the current boot and prevents it from carrying into the next boot:
+
+```bash
+sudo dracut --force "/boot/initrd.img-$(uname -r)" "$(uname -r)"
+cat /sys/module/nouveau/parameters/diag_bar2_map
+```
+
+Then enable the other two parameters, verify their readback, and use the
+already validated serialized-teardown native-surface Mesa candidate and
+existing capture harness.
 Verify that the exact candidate plugin is selected before the capture:
 
 ```bash

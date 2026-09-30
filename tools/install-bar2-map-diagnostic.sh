@@ -253,7 +253,7 @@ dkms status -m "$NAME" -v "$DIAG_VERSION" -k "$kernel" | grep -q 'installed' || 
 } >> "$evidence_dir/install-metadata.txt"
 chown "$user_uid:$user_gid" "$evidence_dir/install-metadata.txt"
 
-echo "Installed on disk only. On the next boot, add the one-time kernel argument nouveau.diag_bar2_map=1."
+echo "Installed on disk only. Use a one-boot dracut modprobe option to enable diag_bar2_map before Nouveau initializes."
 echo "Evidence: $evidence_dir"
 echo "Verify before reboot: sudo $HERE/tools/verify-bar2-map-diagnostic.sh pre-reboot"
 echo "Rollback on disk: sudo $HERE/tools/rollback-bar2-map-diagnostic.sh"

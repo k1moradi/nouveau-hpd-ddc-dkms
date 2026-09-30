@@ -72,10 +72,20 @@ fi
     echo "FAIL: diag2 is not the loaded Nouveau module" >&2
     exit 1
 }
-grep -Eq '(^| )nouveau\.diag_bar2_map=1( |$)' /proc/cmdline || {
-    echo "FAIL: boot command line did not enable early BAR2 mapping tracing" >&2
-    exit 1
-}
+if grep -Eq '(^| )nouveau\.diag_bar2_map=1( |$)' /proc/cmdline; then
+    bar2_enable_source=kernel-command-line
+else
+    initrd="/boot/initrd.img-$kernel"
+    option_file=/etc/modprobe.d/99-nouveau-diag-bar2-once.conf
+    option_text=$(lsinitrd -f "$option_file" "$initrd" 2>/dev/null || true)
+    if [[ $option_text != 'options nouveau diag_bar2_map=1' ]]; then
+        echo "FAIL: neither the kernel command line nor the dracut initramfs enables early BAR2 tracing" >&2
+        echo "Expected $option_file in $initrd with: options nouveau diag_bar2_map=1" >&2
+        exit 1
+    fi
+    bar2_enable_source=dracut-initramfs
+fi
+printf 'diag_bar2_enable_source=%s\n' "$bar2_enable_source"
 for parameter in diag_fence_wait diag_ctxsw diag_bar2_map; do
     value=$(cat "/sys/module/nouveau/parameters/$parameter")
     printf '%s=%s\n' "$parameter" "$value"
