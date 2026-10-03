@@ -1,0 +1,6 @@
+[vaapi] libva: User environment variable requested driver 'nouveau'
+[vaapi] libva: Trying to open /home/keivan/nouveau-vaapi-app-validation/mpv-eexist-delete-fd-candidate-20261001/prefix/lib/x86_64-linux-gnu/dri/nouveau_drv_video.so
+[vaapi] libva: va_openDriver() returns 0
+[vd] Trying hardware decoding via h264-vaapi-copy.
+[vd] Requesting pixfmt 'vaapi' from decoder.
+[vd] Using hardware decoding (vaapi-copy).

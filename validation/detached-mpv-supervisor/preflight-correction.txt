@@ -1,0 +1,11 @@
+Original preflight.txt incorrectly reported BAR2_baseline_count=0 because the Python regex was over-escaped.
+Correct baseline count from saved kernel-pre.log: 3
+Full current boot BAR2/HOST_CPU/PTE count: 3
+Fault records after full-run launch (2026-10-01T08:54:51-07:00 local): 0
+
+2026-10-01T08:10:22.660906-07:00 Inspiron1564Linux kernel: nouveau 0000:01:00.0: fifo: fault 00 [READ] at 00000000003f3000 engine 05 [BAR2] client 07 [HUB/HOST_CPU] reason 02 [PTE] on channel -1 [00ffbb7000 unknown]
+2026-10-01T08:50:31.805638-07:00 Inspiron1564Linux kernel: nouveau 0000:01:00.0: fifo: fault 00 [READ] at 00000000005d6000 engine 05 [BAR2] client 07 [HUB/HOST_CPU] reason 02 [PTE] on channel -1 [00ffbb7000 unknown]
+2026-10-01T08:50:31.819712-07:00 Inspiron1564Linux kernel: nouveau 0000:01:00.0: fifo: fault 00 [READ] at 00000000005da000 engine 05 [BAR2] client 07 [HUB/HOST_CPU] reason 02 [PTE] on channel -1 [00ffbb7000 unknown]
+
+The two 0x5d6000/0x5da000 events occurred at 08:50:31 local, before the 08:54:51 test launch.
+No BAR2/PTE event occurred during the full-file mpv attempt. The test should still be classified invalid/incomplete because the boot baseline gate failed.
