@@ -1,5 +1,8 @@
 # Mesa Nouveau BSP NVIF lifetime A/B diagnostic
 
+The saved application failure boundaries are summarized in
+[`evidence/FIRST-FAILURE-COMPARISON.md`](evidence/FIRST-FAILURE-COMPARISON.md).
+
 **Status: matched A/B VA DSOs linked; neither installed nor run.** This patch
 prepares the missing userspace records for the stage-4 BSP NEW `-EEXIST`
 investigation. It complements the kernel duplicate-layer markers in
