@@ -101,6 +101,51 @@ slice-data size 6160, but the trace does not contain slice-data bytes. The
 trace therefore does not establish raw VA-structure or bitstream-byte
 identity.
 
+### Side-by-side trace timeline and first relevant divergence
+
+The libva timestamps below are monotonic values from separate captures; they
+must not be compared as if they shared a clock. The thread labels identify the
+saved libva trace workers, not independently verified OS thread IDs. MPV also
+has a separate renderer-capability worker (`thd-0x000222c9`) that probes a
+temporary 128x128 surface and a temporary PRIME export. Those extra calls are
+not part of the H.264 decode sequence; the `vaDeriveImage()` failure and
+temporary export rejection continue nonfatally.
+
+| Decode step | MPV worker `thd-0x000222ba` | FFmpeg worker `thd-0x00022445` |
+|---|---|---|
+| Decode surface creation | `33311.948768` start; 1920x1088, format 1, one surface (ID 2), NV12 attribute `type=1/flags=2/value=0x3231564e`, usage attribute `type=6/flags=2/value=1`; success `33311.948788` | `33425.537120` start; same dimensions, format, count and numeric attributes (surface ID 1); success `33425.537139` |
+| Full-size `vaDeriveImage()` probe | Surface 2; `VA_STATUS_ERROR_OPERATION_FAILED` at `33311.949128` | Surface 1; `VA_STATUS_ERROR_OPERATION_FAILED` at `33425.537289`; the FFmpeg hwdownload path continues through `vaGetImage()` |
+| Initial decode context | H.264 High/VLD, 1920x1088, flag `0x1`, zero explicit render targets; context ID 4; success `33311.949219` | Same profile, entrypoint, dimensions, flag and render-target count; context ID 3; success `33425.537384` |
+| Frame-0 target and picture/IQ | `vaBeginPicture(ctx=4,target=2)` succeeds at `33311.951078`; 672-byte picture parameters + 240-byte IQ matrix submit successfully at `33311.955130` | `vaBeginPicture(ctx=3,target=1)` succeeds at `33425.539985`; same buffer types/sizes submit successfully at `33425.543615` |
+| Frame-0 slice/data and end | 3128-byte slice parameters + 6160-byte slice data submit successfully at `33311.955278`; `vaEndPicture()` succeeds at `33311.955379` | Same buffer types/sizes submit successfully at `33425.543758`; `vaEndPicture()` succeeds at `33425.543853` |
+| Next decoder lifecycle | `vaDestroyContext(ctx=4)` succeeds at `33312.012801`; MPV then creates a replacement H.264 High/VLD context, again numbered 4, successfully at `33312.013023`, without destroying surface 2 | The captured 10-frame control continues decoding on context 3; it contains no corresponding context destroy/recreate before the captured successful frames |
+| First failing replacement submission | `vaBeginPicture(ctx=4,target=2)` succeeds at `33312.014800`; `vaRenderPicture()` starts at `33312.014802` with picture-parameter buffer 5 (672 bytes) and IQ buffer 6 (240 bytes); it returns `VA_STATUS_ERROR_ALLOCATION_FAILED` at `33312.032716` | No corresponding replacement-context submission occurs in the captured control |
+
+The earliest application-level trace differences include MPV's extra
+nonfatal renderer probes, so there is no single paired VA call whose result
+can be called “the first divergence” across the entire startup streams. In the
+common H.264 decode sequence, surface creation attributes, profile/entrypoint,
+context dimensions and render-target count, and the trace-visible frame-0
+picture/IQ/slice fields match after normalizing the target surface ID. The
+first established decode-lifecycle difference before MPV's fatal submission
+is the successful preflight followed by MPV's context/config teardown and
+context reconstruction while its surface pool remains alive. FFmpeg's saved
+control does not exercise that transition. This localizes the comparison to a
+decoder-reconstruction path; it does not prove retained surfaces are invalid
+or that reconstruction itself violates the VA contract.
+
+For the failing call, libva traces successful `vaBufferInfo()`, map and unmap
+operations for both buffers before reporting the `vaRenderPicture()` result.
+The Mesa source audit shows `vlVaRenderPicture()` dispatches buffers in
+caller order and stops on the picture-parameter handler's failure. That
+handler lazily creates the codec when the replacement context has no decoder.
+The separate v5 GDB capture places the subsequent constructor failure at BSP
+NVIF object NEW, class `0x95b1`, return `-EEXIST`; it is corroborating
+constructor-stage evidence from another run, not an event recorded in this
+libva trace. The old/new object keys and DEL result are missing, so the
+wrong-fd stale-key explanation remains a candidate rather than runtime
+causal proof.
+
 ### Constructor failure reached from that VA path
 
 The separate v5 GDB probe records constructor invocation 2 failing at GK104
