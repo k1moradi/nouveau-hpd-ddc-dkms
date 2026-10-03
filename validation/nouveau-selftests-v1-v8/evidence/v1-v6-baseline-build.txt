@@ -1,0 +1,20 @@
+Baseline scratch build before 0007 review fixes
+
+Source: Ubuntu linux-source-7.0.0 7.0.0-34.34, v1-v6 validation stack.
+The v2 and v3 patches used separate source-coordinate-only adapters. Their
+normalized patch payload/context checks passed; the supplied package patches
+were not modified.
+Command used linux-headers-7.0.0-34-generic, CONFIG_DRM_NOUVEAU=m,
+KCFLAGS=-DCONFIG_DRM_NOUVEAU_SELFTEST=1, W=1, -j2.
+Final make exit: 0. The first attempt ended with SIGTERM/143; no build process
+remained, then the retry completed and the full log was preserved.
+
+nouveau.ko SHA-256: a61c32bdc007411c4e0f03091e4716028c1691bdb6a24379f6cd0e18dc69abd0
+srcversion: B97AD73C8D241153FC05BF0
+vermagic: 7.0.0-34-generic SMP preempt mod_unload modversions
+Size: 248075264 bytes (unstripped scratch module).
+
+Warnings were limited to compiler executable naming (gcc vs
+x86_64-linux-gnu-gcc, both GCC 15.2.0-16ubuntu1), pahole version reporting,
+and skipped BTF generation because vmlinux is unavailable. No source/compiler
+error occurred. This module was never installed or loaded.

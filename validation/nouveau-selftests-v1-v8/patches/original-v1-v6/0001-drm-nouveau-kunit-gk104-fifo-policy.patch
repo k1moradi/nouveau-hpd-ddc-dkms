@@ -1,0 +1,172 @@
+diff --git a/drivers/gpu/drm/nouveau/Kbuild b/drivers/gpu/drm/nouveau/Kbuild
+--- a/drivers/gpu/drm/nouveau/Kbuild
++++ b/drivers/gpu/drm/nouveau/Kbuild
+@@ -12,3 +12,6 @@ nouveau-y += nvc0_fence.o
+ nouveau-y += gv100_fence.o
+ 
+ obj-$(CONFIG_DRM_NOUVEAU) += nouveau.o
++
++obj-$(CONFIG_DRM_NOUVEAU_KUNIT_TEST) += nouveau_kunit.o
++nouveau_kunit-y := nvkm/engine/fifo/kunit.o
+diff --git a/drivers/gpu/drm/nouveau/Kconfig b/drivers/gpu/drm/nouveau/Kconfig
+--- a/drivers/gpu/drm/nouveau/Kconfig
++++ b/drivers/gpu/drm/nouveau/Kconfig
+@@ -5,6 +5,18 @@ config DRM_NOUVEAU
+ 	help
+ 	  Choose this option for open-source NVIDIA support.
+ 
++config DRM_NOUVEAU_KUNIT_TEST
++	tristate "KUnit tests for Nouveau FIFO policy" if !KUNIT_ALL_TESTS
++	depends on DRM_NOUVEAU && KUNIT
++	default KUNIT_ALL_TESTS
++	help
++	  Build KUnit tests for pure Nouveau/NVKM FIFO policy decisions which
++	  do not require access to a physical GPU.  The tests currently cover
++	  GK104 legacy video engine context privilege selection and legacy
++	  versus per-runlist nonstall event indexing.
++
++	  These tests do not submit GPU work or access MMIO.
++
+ config NOUVEAU_PLATFORM_DRIVER
+ 	bool "Nouveau (NVIDIA) SoC GPUs"
+ 	depends on DRM_NOUVEAU && ARCH_TEGRA
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gk104.c
+@@ -1,23 +1,15 @@
+ int
+ gk104_ectx_ctor(struct nvkm_engn *engn, struct nvkm_vctx *vctx)
+ {
+-	struct gf100_vmm_map_v0 args = { .priv = 1 };
++	/*
++	 * Legacy video engines access their engine contexts through
++	 * non-privileged MMU requests.
++	 */
++	struct gf100_vmm_map_v0 args = {
++		.priv = gk104_ectx_map_priv(engn->engine->subdev.type),
++	};
+ 	int ret;
+ 
+-	/*
+-	 * Legacy video engines access their engine contexts through
+-	 * non-privileged MMU requests.
+-	 */
+-	switch (engn->engine->subdev.type) {
+-	case NVKM_ENGINE_MSPDEC:
+-	case NVKM_ENGINE_MSPPP:
+-	case NVKM_ENGINE_MSVLD:
+-		args.priv = 0;
+-		break;
+-	default:
+-		break;
+-	}
+-
+ 	ret = nvkm_vmm_get(vctx->vmm, 12, vctx->inst->size, &vctx->vma);
+ 	if (ret)
+ 		return ret;
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/kunit.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/kunit.c
+new file mode 100644
+--- /dev/null
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/kunit.c
+@@ -0,0 +1,54 @@
++// SPDX-License-Identifier: MIT
++#include <kunit/test.h>
++
++#include "priv.h"
++
++static void
++gk104_legacy_video_context_is_nonpriv_test(struct kunit *test)
++{
++	KUNIT_EXPECT_FALSE(test, gk104_ectx_map_priv(NVKM_ENGINE_MSPDEC));
++	KUNIT_EXPECT_FALSE(test, gk104_ectx_map_priv(NVKM_ENGINE_MSPPP));
++	KUNIT_EXPECT_FALSE(test, gk104_ectx_map_priv(NVKM_ENGINE_MSVLD));
++}
++
++static void
++gk104_other_contexts_remain_priv_test(struct kunit *test)
++{
++	KUNIT_EXPECT_TRUE(test, gk104_ectx_map_priv(NVKM_ENGINE_GR));
++	KUNIT_EXPECT_TRUE(test, gk104_ectx_map_priv(NVKM_ENGINE_CE));
++	KUNIT_EXPECT_TRUE(test, gk104_ectx_map_priv(NVKM_ENGINE_SW));
++}
++
++static void
++nvkm_legacy_nonstall_uses_global_event_test(struct kunit *test)
++{
++	KUNIT_EXPECT_EQ(test, nvkm_uchan_nonstall_event_index(false, 0), 0);
++	KUNIT_EXPECT_EQ(test, nvkm_uchan_nonstall_event_index(false, 1), 0);
++	KUNIT_EXPECT_EQ(test, nvkm_uchan_nonstall_event_index(false, 7), 0);
++}
++
++static void
++nvkm_per_runlist_nonstall_uses_runlist_event_test(struct kunit *test)
++{
++	KUNIT_EXPECT_EQ(test, nvkm_uchan_nonstall_event_index(true, 0), 0);
++	KUNIT_EXPECT_EQ(test, nvkm_uchan_nonstall_event_index(true, 1), 1);
++	KUNIT_EXPECT_EQ(test, nvkm_uchan_nonstall_event_index(true, 7), 7);
++}
++
++static struct kunit_case nouveau_fifo_policy_test_cases[] = {
++	KUNIT_CASE(gk104_legacy_video_context_is_nonpriv_test),
++	KUNIT_CASE(gk104_other_contexts_remain_priv_test),
++	KUNIT_CASE(nvkm_legacy_nonstall_uses_global_event_test),
++	KUNIT_CASE(nvkm_per_runlist_nonstall_uses_runlist_event_test),
++	{}
++};
++
++static struct kunit_suite nouveau_fifo_policy_test_suite = {
++	.name = "nouveau-fifo-policy",
++	.test_cases = nouveau_fifo_policy_test_cases,
++};
++
++kunit_test_suite(nouveau_fifo_policy_test_suite);
++
++MODULE_DESCRIPTION("KUnit tests for Nouveau FIFO policy");
++MODULE_LICENSE("GPL");
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/priv.h b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/priv.h
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/priv.h
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/priv.h
+@@ -4,6 +4,29 @@
+ 	} chan;
+ };
+ 
++
++static inline bool
++gk104_ectx_map_priv(enum nvkm_subdev_type type)
++{
++	switch (type) {
++	case NVKM_ENGINE_MSPDEC:
++	case NVKM_ENGINE_MSPPP:
++	case NVKM_ENGINE_MSVLD:
++		return false;
++	default:
++		return true;
++	}
++}
++
++static inline int
++nvkm_uchan_nonstall_event_index(bool per_runlist, int runlist_id)
++{
++	if (per_runlist)
++		return runlist_id;
++
++	return 0;
++}
++
+ int r535_fifo_new(const struct nvkm_fifo_func *, struct nvkm_device *, enum nvkm_subdev_type, int,
+ 		  struct nvkm_fifo **);
+ int nvkm_fifo_new_(const struct nvkm_fifo_func *, struct nvkm_device *, enum nvkm_subdev_type, int,
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/uchan.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/uchan.c
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/uchan.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/uchan.c
+@@ -13,7 +13,9 @@ nvkm_uchan_uevent(struct nvkm_object *object, void *argv, u32 argc, struct nvkm_
+ 	switch (args->v0.type) {
+ 	case NVIF_CHAN_EVENT_V0_NON_STALL_INTR:
+ 		return nvkm_uevent_add(uevent, &runl->fifo->nonstall.event,
+-					       runl->fifo->func->nonstall_ctor ? runl->id : 0,
++					       nvkm_uchan_nonstall_event_index(
++						       runl->fifo->func->nonstall_ctor != NULL,
++						       runl->id),
+ 				       NVKM_FIFO_NONSTALL_EVENT, NULL);
+ 	case NVIF_CHAN_EVENT_V0_KILLED:
+ 		return nvkm_uevent_add(uevent, &runl->chid->event, chan->id,

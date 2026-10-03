@@ -1,0 +1,177 @@
+diff --git a/drivers/gpu/drm/nouveau/nouveau_debugfs.c b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+--- a/drivers/gpu/drm/nouveau/nouveau_debugfs.c
++++ b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+@@ -31,11 +31,13 @@
+ #include <linux/debugfs.h>
+ #include <linux/delay.h>
+ #include <linux/jiffies.h>
++#include <core/device.h>
+ #include <core/memory.h>
++#include <engine/falcon.h>
+ #include <nvif/class.h>
+ #include <nvif/device.h>
+ #include <nvif/if0001.h>
+ #include "nouveau_debugfs.h"
+ #include "nouveau_drv.h"
+ #include "nouveau_dma.h"
+ #include "nouveau_fence.h"
+@@ -862,8 +864,152 @@
+ static const struct file_operations nouveau_selftest_fifo_fops = {
+ 	.owner = THIS_MODULE,
+ 	.open = nouveau_debugfs_selftest_fifo_open,
+ 	.read = seq_read,
+ 	.llseek = seq_lseek,
+ 	.release = single_release,
+ };
++
++static DEFINE_MUTEX(nouveau_selftest_falcon_lock);
++
++struct nouveau_selftest_falcon_desc {
++	const char *name;
++	enum nvkm_subdev_type type;
++	int inst;
++	u32 base;
++};
++
++static int
++nouveau_selftest_falcon_snapshot(struct seq_file *m, struct nvkm_device *device,
++				 const struct nouveau_selftest_falcon_desc *desc)
++{
++	struct nvkm_engine *engine;
++	struct nvkm_falcon *falcon;
++	u32 cap108, cap12c;
++	u32 intr, intr_enable, intr_dest;
++	u32 fifo_chsw, trigger, entry, block_on_fifo;
++	u32 cap_code_limit, cap_data_limit;
++	u8 cap_version, cap_secret;
++	bool pass = true;
++
++	engine = nvkm_device_engine(device, desc->type, desc->inst);
++	if (!engine) {
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=falcon test=engine result=FAIL "
++			   "name=%s type=%d inst=%d stage=lookup errno=%d\n",
++			   desc->name, desc->type, desc->inst, -ENODEV);
++		return 1;
++	}
++
++	falcon = nvkm_falcon(engine);
++	cap108 = nvkm_rd32(device, desc->base + 0x108);
++	cap12c = nvkm_rd32(device, desc->base + 0x12c);
++	intr = nvkm_rd32(device, desc->base + 0x008);
++	intr_enable = nvkm_rd32(device, desc->base + 0x010);
++	intr_dest = nvkm_rd32(device, desc->base + 0x01c);
++	fifo_chsw = nvkm_rd32(device, desc->base + 0x048);
++	trigger = nvkm_rd32(device, desc->base + 0x100);
++	entry = nvkm_rd32(device, desc->base + 0x104);
++	block_on_fifo = nvkm_rd32(device, desc->base + 0x10c);
++
++	cap_version = cap12c & 0x0f;
++	cap_secret = (cap12c & 0x30) >> 4;
++	cap_code_limit = (cap108 & 0x000001ff) << 8;
++	cap_data_limit = (cap108 & 0x0003fe00) >> 1;
++
++	if (falcon->addr != desc->base ||
++	    falcon->version != cap_version || falcon->secret != cap_secret ||
++	    falcon->code.limit != cap_code_limit ||
++	    falcon->data.limit != cap_data_limit ||
++	    !falcon->code.data || !falcon->code.size ||
++	    (!falcon->core &&
++	     (falcon->code.size > falcon->code.limit ||
++	      falcon->data.size > falcon->data.limit)) ||
++	    intr_enable != 0x0000fff2 || intr_dest != 0x0000fff2 ||
++	    (fifo_chsw & 0x00000003) != 0x00000003 ||
++	    entry != 0x00000000 || block_on_fifo != 0x00000001)
++		pass = false;
++
++	seq_printf(m,
++		   "NOUVEAU_SELFTEST suite=falcon test=engine result=%s "
++		   "name=%s type=%d inst=%d base=0x%06x falcon_addr=0x%06x "
++		   "version=%u secret=%u external=%u core=%u "
++		   "code_size=%u data_size=%u code_limit=%u data_limit=%u "
++		   "cap108=%08x cap12c=%08x intr=%08x "
++		   "intr_enable=%08x intr_dest=%08x fifo_chsw=%08x "
++		   "trigger=%08x entry=%08x block_on_fifo=%08x\n",
++		   pass ? "PASS" : "FAIL", desc->name, desc->type, desc->inst,
++		   desc->base, falcon->addr, falcon->version, falcon->secret,
++		   falcon->external, !!falcon->core, falcon->code.size,
++		   falcon->data.size, falcon->code.limit, falcon->data.limit,
++		   cap108, cap12c, intr, intr_enable, intr_dest, fifo_chsw,
++		   trigger, entry, block_on_fifo);
++
++	return pass ? 0 : 1;
++}
++
++static int
++nouveau_debugfs_selftest_falcon_show(struct seq_file *m, void *data)
++{
++	static const struct nouveau_selftest_falcon_desc engines[] = {
++		{ "MSVLD", NVKM_ENGINE_MSVLD, 0, 0x084000 },
++		{ "MSPDEC", NVKM_ENGINE_MSPDEC, 0, 0x085000 },
++		{ "MSPPP", NVKM_ENGINE_MSPPP, 0, 0x086000 },
++	};
++	struct drm_device *dev = m->private;
++	struct nouveau_drm *drm = nouveau_drm(dev);
++	struct nvif_device *nvif_device = &drm->client.device;
++	const struct nv_device_info_v0 *info = &nvif_device->info;
++	struct nvkm_device *device = nvxx_device(drm);
++	int failures = 0;
++	int ret;
++	int i;
++
++	if (info->family != NV_DEVICE_INFO_V0_KEPLER || info->chipset != 0x00e4) {
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=falcon test=gk104_nve4_contract "
++			   "result=SKIP family=%u chipset=0x%04x "
++			   "reason=not_gk104_nve4\n",
++			   info->family, info->chipset);
++		seq_puts(m, "NOUVEAU_SELFTEST suite=falcon result=SKIP failures=0\n");
++		return 0;
++	}
++
++	mutex_lock(&nouveau_selftest_falcon_lock);
++	ret = pm_runtime_get_sync(drm->dev->dev);
++	if (ret < 0 && ret != -EACCES) {
++		pm_runtime_put_autosuspend(drm->dev->dev);
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=falcon test=gk104_nve4_contract "
++			   "result=FAIL stage=runtime_pm errno=%d\n", ret);
++		failures = 1;
++		goto out_summary;
++	}
++
++	for (i = 0; i < ARRAY_SIZE(engines); i++)
++		failures += nouveau_selftest_falcon_snapshot(m, device, &engines[i]);
++
++	pm_runtime_mark_last_busy(drm->dev->dev);
++	pm_runtime_put_autosuspend(drm->dev->dev);
++
++out_summary:
++	seq_printf(m, "NOUVEAU_SELFTEST suite=falcon result=%s failures=%d\n",
++		   failures ? "FAIL" : "PASS", failures);
++	mutex_unlock(&nouveau_selftest_falcon_lock);
++	return 0;
++}
++
++static int
++nouveau_debugfs_selftest_falcon_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, nouveau_debugfs_selftest_falcon_show,
++			   inode->i_private);
++}
++
++static const struct file_operations nouveau_selftest_falcon_fops = {
++	.owner = THIS_MODULE,
++	.open = nouveau_debugfs_selftest_falcon_open,
++	.read = seq_read,
++	.llseek = seq_lseek,
++	.release = single_release,
++};
+ #endif
+@@ -920,3 +1066,6 @@
+ 	debugfs_create_file("selftest_fifo_fence", S_IRUSR, minor->debugfs_root,
+ 			    minor->dev, &nouveau_selftest_fifo_fops);
++	debugfs_create_file("selftest_falcon_contract", S_IRUSR,
++			    minor->debugfs_root, minor->dev,
++			    &nouveau_selftest_falcon_fops);
+ #endif

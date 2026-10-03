@@ -1,0 +1,219 @@
+Subject: [PATCH] drm/nouveau: harden diagnostic selftests
+
+Initialize lazy runlist metadata before inspection, serialize diagnostic
+selftests with one nonblocking gate, validate Falcon register bases before
+MMIO, and bound the fixed-size device strings in selftest output.
+
+---
+--- a/drivers/gpu/drm/nouveau/nouveau_debugfs.c
++++ b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+@@ -36,6 +36,7 @@
+ #include <engine/falcon.h>
+ #include <nvif/class.h>
+ #include <nvif/device.h>
++#include <nvif/fifo.h>
+ #include <nvif/if0001.h>
+ #include "nouveau_debugfs.h"
+ #include "nouveau_drv.h"
+@@ -250,6 +251,8 @@
+ }
+ 
+ #if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++static DEFINE_MUTEX(nouveau_selftest_lock);
++
+ static int
+ nouveau_debugfs_selftest_safe_show(struct seq_file *m, void *data)
+ {
+@@ -269,11 +272,18 @@
+ 	int ret;
+ 	int i;
+ 
++	if (!mutex_trylock(&nouveau_selftest_lock)) {
++		seq_puts(m, "NOUVEAU_SELFTEST suite=safe result=FAIL reason=selftest_busy\n");
++		return 0;
++	}
++
++	(void)nvif_fifo_runlist(device, NV_DEVICE_HOST_RUNLIST_ENGINES_GR);
++
+ 	if (info->chipset && info->family) {
+ 		seq_printf(m,
+ 			   "NOUVEAU_SELFTEST suite=safe test=device_info result=PASS "
+ 			   "platform=%u chipset=0x%04x revision=0x%02x family=%u "
+-			   "chip=\"%s\" name=\"%s\"\n",
++			   "chip=\"%.15s\" name=\"%.63s\"\n",
+ 			   info->platform, info->chipset, info->revision, info->family,
+ 			   info->chip, info->name);
+ 	} else {
+@@ -389,6 +399,7 @@
+ done:
+ 	seq_printf(m, "NOUVEAU_SELFTEST suite=safe result=%s failures=%d\n",
+ 		   failures ? "FAIL" : "PASS", failures);
++	mutex_unlock(&nouveau_selftest_lock);
+ 	return 0;
+ }
+ 
+@@ -406,8 +417,6 @@
+ 	.release = single_release,
+ };
+ 
+-static DEFINE_MUTEX(nouveau_selftest_instmem_lock);
+-
+ static int
+ nouveau_debugfs_selftest_instmem_show(struct seq_file *m, u32 size)
+ {
+@@ -452,7 +461,10 @@
+ 		return 0;
+ 	}
+ 
+-	mutex_lock(&nouveau_selftest_instmem_lock);
++	if (!mutex_trylock(&nouveau_selftest_lock)) {
++		seq_puts(m, "NOUVEAU_SELFTEST suite=instmem result=FAIL reason=selftest_busy\n");
++		return 0;
++	}
+ 
+ 	ret = pm_runtime_get_sync(drm->dev->dev);
+ 	if (ret < 0 && ret != -EACCES) {
+@@ -612,7 +624,7 @@
+ out_summary:
+ 	seq_printf(m, "NOUVEAU_SELFTEST suite=instmem result=%s failures=%d\n",
+ 		   ret ? "FAIL" : "PASS", ret ? 1 : 0);
+-	mutex_unlock(&nouveau_selftest_instmem_lock);
++	mutex_unlock(&nouveau_selftest_lock);
+ 	return 0;
+ }
+ 
+@@ -679,8 +691,6 @@
+ 	.release = single_release,
+ };
+ 
+-static DEFINE_MUTEX(nouveau_selftest_fifo_lock);
+-
+ #define NOUVEAU_SELFTEST_FENCE_TIMEOUT_MS 2000
+ 
+ static int
+@@ -718,13 +728,18 @@
+ 		return 0;
+ 	}
+ 
++	if (!mutex_trylock(&nouveau_selftest_lock)) {
++		seq_puts(m, "NOUVEAU_SELFTEST suite=fifo result=FAIL reason=selftest_busy\n");
++		return 0;
++	}
++
++	(void)nvif_fifo_runlist(device, NV_DEVICE_HOST_RUNLIST_ENGINES_GR);
+ 	if (device->runlists <= 0 || !device->runlist) {
++		ret = -ENODEV;
+ 		seq_printf(m,
+-			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
+-			   "result=FAIL stage=runlist_inventory errno=%d\n",
+-			   -ENODEV);
+-		seq_puts(m, "NOUVEAU_SELFTEST suite=fifo result=FAIL failures=1\n");
+-		return 0;
++			   "NOUVEAU_SELFTEST suite=fifo stage=runlist_inventory errno=%d\n",
++			   ret);
++		goto out_summary;
+ 	}
+ 
+ 	for (i = 0; i < device->runlists && i < 64; i++) {
+@@ -732,16 +747,13 @@
+ 			runm |= BIT_ULL(i);
+ 	}
+ 	if (!runm) {
++		ret = -ENODEV;
+ 		seq_printf(m,
+-			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
+-			   "result=FAIL stage=gr_runlist errno=%d\n",
+-			   -ENODEV);
+-		seq_puts(m, "NOUVEAU_SELFTEST suite=fifo result=FAIL failures=1\n");
+-		return 0;
++			   "NOUVEAU_SELFTEST suite=fifo stage=gr_runlist errno=%d\n",
++			   ret);
++		goto out_summary;
+ 	}
+ 
+-	mutex_lock(&nouveau_selftest_fifo_lock);
+-
+ 	ret = pm_runtime_get_sync(drm->dev->dev);
+ 	if (ret < 0 && ret != -EACCES) {
+ 		pm_runtime_put_autosuspend(drm->dev->dev);
+@@ -850,7 +862,7 @@
+ out_summary:
+ 	seq_printf(m, "NOUVEAU_SELFTEST suite=fifo result=%s failures=%d\n",
+ 		   ret ? "FAIL" : "PASS", ret ? 1 : 0);
+-	mutex_unlock(&nouveau_selftest_fifo_lock);
++	mutex_unlock(&nouveau_selftest_lock);
+ 	return 0;
+ }
+ 
+@@ -869,8 +881,6 @@
+ 	.release = single_release,
+ };
+ 
+-static DEFINE_MUTEX(nouveau_selftest_falcon_lock);
+-
+ struct nouveau_selftest_falcon_desc {
+ 	const char *name;
+ 	enum nvkm_subdev_type type;
+@@ -884,6 +894,7 @@
+ {
+ 	struct nvkm_engine *engine;
+ 	struct nvkm_falcon *falcon;
++	u32 base;
+ 	u32 cap108, cap12c;
+ 	u32 intr, intr_enable, intr_dest;
+ 	u32 fifo_chsw, trigger, entry, block_on_fifo;
+@@ -901,15 +912,24 @@
+ 	}
+ 
+ 	falcon = nvkm_falcon(engine);
+-	cap108 = nvkm_rd32(device, desc->base + 0x108);
+-	cap12c = nvkm_rd32(device, desc->base + 0x12c);
+-	intr = nvkm_rd32(device, desc->base + 0x008);
+-	intr_enable = nvkm_rd32(device, desc->base + 0x010);
+-	intr_dest = nvkm_rd32(device, desc->base + 0x01c);
+-	fifo_chsw = nvkm_rd32(device, desc->base + 0x048);
+-	trigger = nvkm_rd32(device, desc->base + 0x100);
+-	entry = nvkm_rd32(device, desc->base + 0x104);
+-	block_on_fifo = nvkm_rd32(device, desc->base + 0x10c);
++	if (falcon->addr != desc->base) {
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=falcon test=engine result=FAIL "
++			   "name=%s type=%d inst=%d stage=base_mismatch "
++			   "expected=0x%06x actual=0x%06x\n",
++			   desc->name, desc->type, desc->inst, desc->base, falcon->addr);
++		return 1;
++	}
++	base = falcon->addr;
++	cap108 = nvkm_rd32(device, base + 0x108);
++	cap12c = nvkm_rd32(device, base + 0x12c);
++	intr = nvkm_rd32(device, base + 0x008);
++	intr_enable = nvkm_rd32(device, base + 0x010);
++	intr_dest = nvkm_rd32(device, base + 0x01c);
++	fifo_chsw = nvkm_rd32(device, base + 0x048);
++	trigger = nvkm_rd32(device, base + 0x100);
++	entry = nvkm_rd32(device, base + 0x104);
++	block_on_fifo = nvkm_rd32(device, base + 0x10c);
+ 
+ 	cap_version = cap12c & 0x0f;
+ 	cap_secret = (cap12c & 0x30) >> 4;
+@@ -974,7 +994,10 @@
+ 		return 0;
+ 	}
+ 
+-	mutex_lock(&nouveau_selftest_falcon_lock);
++	if (!mutex_trylock(&nouveau_selftest_lock)) {
++		seq_puts(m, "NOUVEAU_SELFTEST suite=falcon result=FAIL reason=selftest_busy\n");
++		return 0;
++	}
+ 	ret = pm_runtime_get_sync(drm->dev->dev);
+ 	if (ret < 0 && ret != -EACCES) {
+ 		pm_runtime_put_autosuspend(drm->dev->dev);
+@@ -994,7 +1017,7 @@
+ out_summary:
+ 	seq_printf(m, "NOUVEAU_SELFTEST suite=falcon result=%s failures=%d\n",
+ 		   failures ? "FAIL" : "PASS", failures);
+-	mutex_unlock(&nouveau_selftest_falcon_lock);
++	mutex_unlock(&nouveau_selftest_lock);
+ 	return 0;
+ }
+ 

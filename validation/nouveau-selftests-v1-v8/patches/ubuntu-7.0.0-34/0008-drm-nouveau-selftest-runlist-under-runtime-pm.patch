@@ -1,0 +1,94 @@
+Subject: [PATCH] drm/nouveau: query selftest runlists under runtime PM
+
+Keep lazy NVIF runlist discovery inside the runtime-active interval. Use
+the GR runlist mask returned by the NVIF helper for the FIFO test.
+
+---
+diff --git a/drivers/gpu/drm/nouveau/nouveau_debugfs.c b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+--- a/drivers/gpu/drm/nouveau/nouveau_debugfs.c
++++ b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+@@ -277,6 +277,15 @@
+ 		return 0;
+ 	}
+ 
++	ret = pm_runtime_get_sync(drm->dev->dev);
++	if (ret < 0 && ret != -EACCES) {
++		failures++;
++		pm_runtime_put_autosuspend(drm->dev->dev);
++		seq_printf(m, "NOUVEAU_SELFTEST suite=safe result=FAIL stage=runtime_pm errno=%d\n",
++			   ret);
++		goto done;
++	}
++
+ 	(void)nvif_fifo_runlist(device, NV_DEVICE_HOST_RUNLIST_ENGINES_GR);
+ 
+ 	if (info->chipset && info->family) {
+@@ -343,16 +352,6 @@
+ 			   info->family, info->chipset);
+ 	}
+ 
+-	ret = pm_runtime_get_sync(drm->dev->dev);
+-	if (ret < 0 && ret != -EACCES) {
+-		failures++;
+-		pm_runtime_put_autosuspend(drm->dev->dev);
+-		seq_printf(m,
+-			   "NOUVEAU_SELFTEST suite=safe test=device_time "
+-			   "result=FAIL stage=runtime_pm errno=%d\n", ret);
+-		goto done;
+-	}
+-
+ 	ret = nvif_object_mthd(&device->object, NV_DEVICE_V0_TIME,
+ 			       &time_args, sizeof(time_args));
+ 	if (ret) {
+@@ -707,7 +706,6 @@
+ 	long wait_ret;
+ 	int fence_status;
+ 	int ret = 0;
+-	int i;
+ 
+ 	if (info->family != NV_DEVICE_INFO_V0_KEPLER || info->chipset != 0x00e4) {
+ 		seq_printf(m,
+@@ -733,35 +731,21 @@
+ 		return 0;
+ 	}
+ 
+-	(void)nvif_fifo_runlist(device, NV_DEVICE_HOST_RUNLIST_ENGINES_GR);
+-	if (device->runlists <= 0 || !device->runlist) {
+-		ret = -ENODEV;
+-		seq_printf(m,
+-			   "NOUVEAU_SELFTEST suite=fifo stage=runlist_inventory errno=%d\n",
++	ret = pm_runtime_get_sync(drm->dev->dev);
++	if (ret < 0 && ret != -EACCES) {
++		pm_runtime_put_autosuspend(drm->dev->dev);
++		seq_printf(m, "NOUVEAU_SELFTEST suite=fifo result=FAIL stage=runtime_pm errno=%d\n",
+ 			   ret);
+ 		goto out_summary;
+ 	}
+ 
+-	for (i = 0; i < device->runlists && i < 64; i++) {
+-		if (device->runlist[i].engines & NV_DEVICE_HOST_RUNLIST_ENGINES_GR)
+-			runm |= BIT_ULL(i);
+-	}
++	runm = nvif_fifo_runlist(device,
++				 NV_DEVICE_HOST_RUNLIST_ENGINES_GR);
+ 	if (!runm) {
+ 		ret = -ENODEV;
+-		seq_printf(m,
+-			   "NOUVEAU_SELFTEST suite=fifo stage=gr_runlist errno=%d\n",
+-			   ret);
+-		goto out_summary;
+-	}
+-
+-	ret = pm_runtime_get_sync(drm->dev->dev);
+-	if (ret < 0 && ret != -EACCES) {
+-		pm_runtime_put_autosuspend(drm->dev->dev);
+-		seq_printf(m,
+-			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
+-			   "result=FAIL stage=runtime_pm errno=%d\n",
++		seq_printf(m, "NOUVEAU_SELFTEST suite=fifo result=FAIL stage=gr_runlist errno=%d\n",
+ 			   ret);
+-		goto out_summary;
++		goto out_runtime_pm;
+ 	}
+ 
+ 	ret = nouveau_channel_new(&drm->client, false, runm,

@@ -1,0 +1,223 @@
+diff --git a/drivers/gpu/drm/nouveau/nouveau_debugfs.c b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+--- a/drivers/gpu/drm/nouveau/nouveau_debugfs.c
++++ b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+@@ -30,10 +30,13 @@
+ #include <linux/debugfs.h>
+ #include <linux/delay.h>
++#include <linux/jiffies.h>
+ #include <core/memory.h>
+ #include <nvif/class.h>
+ #include <nvif/device.h>
+ #include <nvif/if0001.h>
+ #include "nouveau_debugfs.h"
+ #include "nouveau_drv.h"
++#include "nouveau_dma.h"
++#include "nouveau_fence.h"
+ 
+ static int
+@@ -350,6 +350,196 @@
+ 	.llseek = seq_lseek,
+ 	.release = single_release,
+ };
++
++static DEFINE_MUTEX(nouveau_selftest_fifo_lock);
++
++#define NOUVEAU_SELFTEST_FENCE_TIMEOUT_MS 2000
++
++static int
++nouveau_debugfs_selftest_fifo_show(struct seq_file *m, void *data)
++{
++	struct drm_device *dev = m->private;
++	struct nouveau_drm *drm = nouveau_drm(dev);
++	struct nvif_device *device = &drm->client.device;
++	const struct nv_device_info_v0 *info = &device->info;
++	struct nouveau_channel *chan = NULL;
++	struct nouveau_fence *fence = NULL;
++	u64 runm = 0;
++	unsigned long timeout;
++	long wait_ret;
++	int fence_status;
++	int ret = 0;
++	int i;
++
++	if (info->family != NV_DEVICE_INFO_V0_KEPLER || info->chipset != 0x00e4) {
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
++			   "result=SKIP family=%u chipset=0x%04x "
++			   "reason=not_gk104_nve4\n",
++			   info->family, info->chipset);
++		seq_puts(m, "NOUVEAU_SELFTEST suite=fifo result=SKIP failures=0\n");
++		return 0;
++	}
++
++	if (!drm->fence) {
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
++			   "result=FAIL stage=fence_subsystem errno=%d\n",
++			   -ENODEV);
++		seq_puts(m, "NOUVEAU_SELFTEST suite=fifo result=FAIL failures=1\n");
++		return 0;
++	}
++
++	if (device->runlists <= 0 || !device->runlist) {
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
++			   "result=FAIL stage=runlist_inventory errno=%d\n",
++			   -ENODEV);
++		seq_puts(m, "NOUVEAU_SELFTEST suite=fifo result=FAIL failures=1\n");
++		return 0;
++	}
++
++	for (i = 0; i < device->runlists && i < 64; i++) {
++		if (device->runlist[i].engines & NV_DEVICE_HOST_RUNLIST_ENGINES_GR)
++			runm |= BIT_ULL(i);
++	}
++	if (!runm) {
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
++			   "result=FAIL stage=gr_runlist errno=%d\n",
++			   -ENODEV);
++		seq_puts(m, "NOUVEAU_SELFTEST suite=fifo result=FAIL failures=1\n");
++		return 0;
++	}
++
++	mutex_lock(&nouveau_selftest_fifo_lock);
++
++	ret = pm_runtime_get_sync(drm->dev->dev);
++	if (ret < 0 && ret != -EACCES) {
++		pm_runtime_put_autosuspend(drm->dev->dev);
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
++			   "result=FAIL stage=runtime_pm errno=%d\n",
++			   ret);
++		goto out_summary;
++	}
++
++	ret = nouveau_channel_new(&drm->client, false, runm,
++				  NvDmaFB, NvDmaTT, &chan);
++	if (ret) {
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
++			   "result=FAIL stage=channel_create errno=%d runm=0x%016llx\n",
++			   ret, (unsigned long long)runm);
++		goto out_runtime_pm;
++	}
++
++	if (!chan->fence || chan->runlist < 0 || chan->runlist >= 64 ||
++	    !(runm & BIT_ULL(chan->runlist))) {
++		ret = -EIO;
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
++			   "result=FAIL stage=channel_validate errno=%d "
++			   "runlist=%d chid=%d has_fence=%u runm=0x%016llx\n",
++			   ret, chan->runlist, chan->chid, !!chan->fence,
++			   (unsigned long long)runm);
++		goto out_channel;
++	}
++
++	ret = nouveau_fence_new(&fence, chan);
++	if (ret) {
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
++			   "result=FAIL stage=fence_emit errno=%d runlist=%d chid=%d\n",
++			   ret, chan->runlist, chan->chid);
++		goto out_channel;
++	}
++
++	timeout = msecs_to_jiffies(NOUVEAU_SELFTEST_FENCE_TIMEOUT_MS);
++	if (!timeout)
++		timeout = 1;
++	wait_ret = dma_fence_wait_timeout(&fence->base, false, timeout);
++	if (wait_ret < 0) {
++		ret = (int)wait_ret;
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
++			   "result=FAIL stage=fence_wait errno=%d runlist=%d chid=%d "
++			   "seqno=%llu\n",
++			   ret, chan->runlist, chan->chid,
++			   (unsigned long long)fence->base.seqno);
++		goto out_fence;
++	}
++	if (!wait_ret) {
++		ret = -ETIMEDOUT;
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
++			   "result=FAIL stage=fence_wait errno=%d runlist=%d chid=%d "
++			   "seqno=%llu timeout_ms=%u\n",
++			   ret, chan->runlist, chan->chid,
++			   (unsigned long long)fence->base.seqno,
++			   NOUVEAU_SELFTEST_FENCE_TIMEOUT_MS);
++		goto out_fence;
++	}
++
++	fence_status = dma_fence_get_status(&fence->base);
++	if (fence_status < 0 || atomic_read(&chan->killed)) {
++		ret = fence_status < 0 ? fence_status : -ENODEV;
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
++			   "result=FAIL stage=fence_status errno=%d runlist=%d chid=%d "
++			   "seqno=%llu killed=%d\n",
++			   ret, chan->runlist, chan->chid,
++			   (unsigned long long)fence->base.seqno,
++			   atomic_read(&chan->killed));
++		goto out_fence;
++	}
++	if (fence_status != 1) {
++		ret = -EIO;
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=fifo test=channel_fence "
++			   "result=FAIL stage=fence_status errno=%d status=%d "
++			   "runlist=%d chid=%d seqno=%llu\n",
++			   ret, fence_status, chan->runlist, chan->chid,
++			   (unsigned long long)fence->base.seqno);
++		goto out_fence;
++	}
++
++	seq_printf(m,
++		   "NOUVEAU_SELFTEST suite=fifo test=channel_fence result=PASS "
++		   "runlist=%d chid=%d seqno=%llu timeout_ms=%u "
++		   "remaining_jiffies=%ld\n",
++		   chan->runlist, chan->chid,
++		   (unsigned long long)fence->base.seqno,
++		   NOUVEAU_SELFTEST_FENCE_TIMEOUT_MS, wait_ret);
++
++out_fence:
++	nouveau_fence_unref(&fence);
++out_channel:
++	nouveau_channel_del(&chan);
++out_runtime_pm:
++	pm_runtime_mark_last_busy(drm->dev->dev);
++	pm_runtime_put_autosuspend(drm->dev->dev);
++out_summary:
++	seq_printf(m, "NOUVEAU_SELFTEST suite=fifo result=%s failures=%d\n",
++		   ret ? "FAIL" : "PASS", ret ? 1 : 0);
++	mutex_unlock(&nouveau_selftest_fifo_lock);
++	return 0;
++}
++
++static int
++nouveau_debugfs_selftest_fifo_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, nouveau_debugfs_selftest_fifo_show,
++			   inode->i_private);
++}
++
++static const struct file_operations nouveau_selftest_fifo_fops = {
++	.owner = THIS_MODULE,
++	.open = nouveau_debugfs_selftest_fifo_open,
++	.read = seq_read,
++	.llseek = seq_lseek,
++	.release = single_release,
++};
+ #endif
+ 
+ static const struct file_operations nouveau_pstate_fops = {
+@@ -380,6 +575,8 @@
+ 			    minor->dev, &nouveau_selftest_instmem_8k_fops);
+ 	debugfs_create_file("selftest_instmem_32k", S_IRUSR, minor->debugfs_root,
+ 			    minor->dev, &nouveau_selftest_instmem_32k_fops);
++	debugfs_create_file("selftest_fifo_fence", S_IRUSR, minor->debugfs_root,
++			    minor->dev, &nouveau_selftest_fifo_fops);
+ #endif
+ 
+ 	/* Set the size of the vbios since we know it, and it's confusing to

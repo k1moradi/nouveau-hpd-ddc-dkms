@@ -1,0 +1,97 @@
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c
+@@ -5,6 +5,7 @@
+ #include "runl.h"
+ #include "runq.h"
+ 
++#include <linux/moduleparam.h>
+ #include <core/gpuobj.h>
+ #include <subdev/bar.h>
+ #include <subdev/fault.h>
+@@ -14,6 +15,13 @@
+ 
+ #include <nvif/class.h>
+ 
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++static bool nouveau_diag_ctxsw;
++module_param_named(diag_ctxsw, nouveau_diag_ctxsw, bool, 0600);
++MODULE_PARM_DESC(diag_ctxsw,
++		 "Log source-defined GK104 FIFO CTXSW timeout state");
++#endif
++
+ void
+ gf100_chan_preempt(struct nvkm_chan *chan)
+ {
+@@ -33,6 +41,43 @@ gf100_fifo_intr_ctxsw_timeout(struct nvkm_fifo *fifo, u32 engm)
+ 		nvkm_runl_foreach_engn_cond(engn, runl, engm & BIT(engn->id)) {
+ 			/* Determine what channel (group) the engine is on. */
+ 			id = engn->func->cxid(engn, &cgid);
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++			if (READ_ONCE(nouveau_diag_ctxsw)) {
++				struct nvkm_subdev *esubdev = &engn->engine->subdev;
++				int diag_cgid = id >= 0 ? cgid : -1;
++
++				if (engn->func == &gk104_engn ||
++				    engn->func == &gk104_engn_ce) {
++					u32 raw = nvkm_rd32(engn->runl->fifo->engine.subdev.device,
++							    0x002640 + (engn->id * 0x08));
++
++					nvkm_error(&fifo->engine.subdev,
++						   "NOUVEAU_DIAG_CTXSW stage=engine arch=gk104 "
++						   "runlist=%d engine_id=%d type=%d inst=%d "
++						   "fault=%d cxid=%d cgid=%d "
++						   "raw_after_cxid=%08x busy=%u faulted=%u "
++						   "chsw=%u save=%u load=%u next_tsg=%u "
++						   "next_id=%u prev_tsg=%u prev_id=%u\n",
++						   runl->id, engn->id, esubdev->type,
++						   esubdev->inst, engn->fault, id, diag_cgid,
++						   raw, !!(raw & 0x80000000),
++						   !!(raw & 0x40000000),
++						   !!(raw & 0x00008000),
++						   !!(raw & 0x00004000),
++						   !!(raw & 0x00002000),
++						   !!(raw & 0x10000000),
++						   (raw & 0x0fff0000) >> 16,
++						   !!(raw & 0x00001000), raw & 0x00000fff);
++				} else {
++					nvkm_error(&fifo->engine.subdev,
++						   "NOUVEAU_DIAG_CTXSW stage=engine arch=other "
++						   "runlist=%d engine_id=%d type=%d inst=%d "
++						   "fault=%d cxid=%d cgid=%d\n",
++						   runl->id, engn->id, esubdev->type,
++						   esubdev->inst, engn->fault, id, diag_cgid);
++				}
++			}
++#endif
+ 			if (id >= 0) {
+ 				/* Trigger MMU fault on any engine(s) on that channel (group). */
+ 				nvkm_runl_foreach_engn_cond(engn2, runl, engn2->func->cxid) {
+@@ -63,6 +108,13 @@ gf100_fifo_intr_sched_ctxsw(struct nvkm_fifo *fifo)
+ 		}
+ 	}
+ 
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	if (READ_ONCE(nouveau_diag_ctxsw))
++		nvkm_error(&fifo->engine.subdev,
++			   "NOUVEAU_DIAG_CTXSW stage=sched_scan engm=%08x\n",
++			   engm);
++#endif
++
+ 	if (!engm)
+ 		return;
+ 
+@@ -88,6 +140,13 @@ gf100_fifo_intr_sched(struct nvkm_fifo *fifo)
+ 
+ 	nvkm_error(subdev, "SCHED_ERROR %02x [%s]\n", code, en ? en->name : "");
+ 
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	if (code == 0x0a && READ_ONCE(nouveau_diag_ctxsw))
++		nvkm_error(subdev,
++			   "NOUVEAU_DIAG_CTXSW stage=sched_error "
++			   "raw_intr=%08x code=%02x\n", intr, code);
++#endif
++
+ 	switch (code) {
+ 	case 0x0a:
+ 		gf100_fifo_intr_sched_ctxsw(fifo);

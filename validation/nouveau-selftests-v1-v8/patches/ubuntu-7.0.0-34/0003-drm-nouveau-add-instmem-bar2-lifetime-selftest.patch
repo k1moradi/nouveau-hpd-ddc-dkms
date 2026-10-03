@@ -1,0 +1,334 @@
+diff --git a/drivers/gpu/drm/nouveau/Kconfig b/drivers/gpu/drm/nouveau/Kconfig
+--- a/drivers/gpu/drm/nouveau/Kconfig
++++ b/drivers/gpu/drm/nouveau/Kconfig
+@@ -18,18 +18,19 @@ config DRM_NOUVEAU_KUNIT_TEST
+ 	  These tests do not submit GPU work or access MMIO.
+ 
+ config DRM_NOUVEAU_SELFTEST
+-	bool "Nouveau safe live hardware selftests"
++	bool "Nouveau live hardware selftests"
+ 	depends on DRM_NOUVEAU && DEBUG_FS
+ 	default n
+ 	help
+-	  Build explicitly-triggered, low-risk live hardware checks exposed
+-	  through debugfs.  The safe suite validates cached device identity
+-	  and runlist/engine inventory and exercises the existing device-time
+-	  query while holding a normal runtime-PM reference.
++	  Build explicitly-triggered live hardware checks exposed through
++	  debugfs.  The safe suite validates cached device identity, runlist
++	  inventory, and the device-time query without submitting GPU work.
+ 
+-	  Reading the selftest_safe debugfs file runs the suite.  It does not
+-	  submit channels, write MMIO, access scratch BAR memory, or issue
+-	  firmware commands.
++	  The instmem suite allocates only private scratch instance memory and
++	  exercises the normal BAR2 CPU mapping, nested acquire/release, data
++	  round-trip, reacquire, and object destruction paths.  It never writes
++	  an existing driver object, submits a channel, or issues firmware
++	  commands.  These tests are intended for diagnostic kernels only.
+ 
+ config NOUVEAU_PLATFORM_DRIVER
+ 	bool "Nouveau (NVIDIA) SoC GPUs"
+diff --git a/drivers/gpu/drm/nouveau/nouveau_debugfs.c b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+--- a/drivers/gpu/drm/nouveau/nouveau_debugfs.c
++++ b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+@@ -31,5 +31,6 @@
+ #include <linux/debugfs.h>
+ #include <linux/delay.h>
++#include <core/memory.h>
+ #include <nvif/class.h>
+ #include <nvif/device.h>
+ #include <nvif/if0001.h>
+@@ -37,6 +38,279 @@ static const struct file_operations nouveau_selftest_safe_fops = {
+ 	.llseek = seq_lseek,
+ 	.release = single_release,
+ };
++
++static DEFINE_MUTEX(nouveau_selftest_instmem_lock);
++
++static int
++nouveau_debugfs_selftest_instmem_show(struct seq_file *m, u32 size)
++{
++	static const u32 seeds[] = {
++		0x00000000,
++		0xffffffff,
++		0xaaaaaaaa,
++		0x55555555,
++		0x01234567,
++		0x89abcdef,
++	};
++	struct drm_device *dev = m->private;
++	struct nouveau_drm *drm = nouveau_drm(dev);
++	const struct nv_device_info_v0 *info = &drm->client.device.info;
++	struct nvkm_memory *memory = NULL;
++	void __iomem *first_map = NULL;
++	void __iomem *nested_map = NULL;
++	void __iomem *reacquired_map = NULL;
++	u32 offsets[ARRAY_SIZE(seeds)];
++	u32 expected[ARRAY_SIZE(seeds)];
++	u32 actual = 0;
++	int acquired = 0;
++	int ret = 0;
++	unsigned int i;
++
++	if (info->family != NV_DEVICE_INFO_V0_KEPLER || info->chipset != 0x00e4) {
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=instmem test=scratch_roundtrip "
++			   "result=SKIP size=%u family=%u chipset=0x%04x "
++			   "reason=not_gk104_nve4\n",
++			   size, info->family, info->chipset);
++		seq_puts(m, "NOUVEAU_SELFTEST suite=instmem result=SKIP failures=0\n");
++		return 0;
++	}
++
++	if (!drm->nvkm) {
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=instmem test=scratch_roundtrip "
++			   "result=FAIL size=%u stage=nvkm_device errno=%d\n",
++			   size, -ENODEV);
++		seq_puts(m, "NOUVEAU_SELFTEST suite=instmem result=FAIL failures=1\n");
++		return 0;
++	}
++
++	mutex_lock(&nouveau_selftest_instmem_lock);
++
++	ret = pm_runtime_get_sync(drm->dev->dev);
++	if (ret < 0 && ret != -EACCES) {
++		pm_runtime_put_autosuspend(drm->dev->dev);
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=instmem test=scratch_roundtrip "
++			   "result=FAIL size=%u stage=runtime_pm errno=%d\n",
++			   size, ret);
++		goto out_summary;
++	}
++
++	ret = nvkm_memory_new(drm->nvkm, NVKM_MEM_TARGET_INST, size, 0x1000,
++			      false, &memory);
++	if (ret) {
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=instmem test=scratch_roundtrip "
++			   "result=FAIL size=%u stage=allocate errno=%d\n",
++			   size, ret);
++		goto out_runtime_pm;
++	}
++
++	if (nvkm_memory_size(memory) < size) {
++		ret = -EIO;
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=instmem test=scratch_roundtrip "
++			   "result=FAIL size=%u stage=allocated_size actual=%llu\n",
++			   size, (unsigned long long)nvkm_memory_size(memory));
++		goto out_memory;
++	}
++
++	offsets[0] = 0;
++	offsets[1] = 4;
++	offsets[2] = 0x40;
++	offsets[3] = (size / 2) & ~3U;
++	offsets[4] = size - 8;
++	offsets[5] = size - 4;
++	for (i = 0; i < ARRAY_SIZE(seeds); i++)
++		expected[i] = seeds[i] ^ size ^ offsets[i];
++
++	first_map = nvkm_kmap(memory);
++	acquired++;
++	if (!first_map) {
++		ret = -ENXIO;
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=instmem test=scratch_roundtrip "
++			   "result=FAIL size=%u stage=first_kmap "
++			   "reason=no_direct_bar2_map\n",
++			   size);
++		goto out_memory;
++	}
++
++	nested_map = nvkm_kmap(memory);
++	acquired++;
++	if (!nested_map || nested_map != first_map) {
++		ret = -EIO;
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=instmem test=scratch_roundtrip "
++			   "result=FAIL size=%u stage=nested_kmap "
++			   "reason=mapping_changed\n",
++			   size);
++		goto out_memory;
++	}
++
++	for (i = 0; i < ARRAY_SIZE(seeds); i++)
++		nvkm_wo32(memory, offsets[i], expected[i]);
++
++	for (i = 0; i < ARRAY_SIZE(seeds); i++) {
++		actual = nvkm_ro32(memory, offsets[i]);
++		if (actual != expected[i]) {
++			ret = -EIO;
++			seq_printf(m,
++				   "NOUVEAU_SELFTEST suite=instmem "
++				   "test=scratch_roundtrip result=FAIL size=%u "
++				   "stage=first_read offset=0x%08x "
++				   "expected=0x%08x actual=0x%08x\n",
++				   size, offsets[i], expected[i], actual);
++			goto out_memory;
++		}
++	}
++
++	nvkm_done(memory);
++	acquired--;
++	actual = nvkm_ro32(memory, offsets[ARRAY_SIZE(seeds) - 1]);
++	if (actual != expected[ARRAY_SIZE(seeds) - 1]) {
++		ret = -EIO;
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=instmem test=scratch_roundtrip "
++			   "result=FAIL size=%u stage=nested_release "
++			   "expected=0x%08x actual=0x%08x\n",
++			   size, expected[ARRAY_SIZE(seeds) - 1], actual);
++		goto out_memory;
++	}
++
++	nvkm_done(memory);
++	acquired--;
++
++	reacquired_map = nvkm_kmap(memory);
++	acquired++;
++	if (!reacquired_map) {
++		ret = -ENXIO;
++		seq_printf(m,
++			   "NOUVEAU_SELFTEST suite=instmem test=scratch_roundtrip "
++			   "result=FAIL size=%u stage=reacquire "
++			   "reason=no_direct_bar2_map\n",
++			   size);
++		goto out_memory;
++	}
++
++	for (i = 0; i < ARRAY_SIZE(seeds); i++) {
++		actual = nvkm_ro32(memory, offsets[i]);
++		if (actual != expected[i]) {
++			ret = -EIO;
++			seq_printf(m,
++				   "NOUVEAU_SELFTEST suite=instmem "
++				   "test=scratch_roundtrip result=FAIL size=%u "
++				   "stage=reacquire_read offset=0x%08x "
++				   "expected=0x%08x actual=0x%08x\n",
++				   size, offsets[i], expected[i], actual);
++			goto out_memory;
++		}
++	}
++
++	for (i = 0; i < ARRAY_SIZE(seeds); i++) {
++		expected[i] = ~expected[i];
++		nvkm_wo32(memory, offsets[i], expected[i]);
++	}
++
++	for (i = 0; i < ARRAY_SIZE(seeds); i++) {
++		actual = nvkm_ro32(memory, offsets[i]);
++		if (actual != expected[i]) {
++			ret = -EIO;
++			seq_printf(m,
++				   "NOUVEAU_SELFTEST suite=instmem "
++				   "test=scratch_roundtrip result=FAIL size=%u "
++				   "stage=second_read offset=0x%08x "
++				   "expected=0x%08x actual=0x%08x\n",
++				   size, offsets[i], expected[i], actual);
++			goto out_memory;
++		}
++	}
++
++	seq_printf(m,
++		   "NOUVEAU_SELFTEST suite=instmem test=scratch_roundtrip "
++		   "result=PASS size=%u access=bar2 nested_acquire=PASS "
++		   "reacquire=PASS patterns=%zu\n",
++		   size, ARRAY_SIZE(seeds));
++
++out_memory:
++	while (acquired > 0) {
++		nvkm_done(memory);
++		acquired--;
++	}
++	nvkm_memory_unref(&memory);
++out_runtime_pm:
++	pm_runtime_mark_last_busy(drm->dev->dev);
++	pm_runtime_put_autosuspend(drm->dev->dev);
++out_summary:
++	seq_printf(m, "NOUVEAU_SELFTEST suite=instmem result=%s failures=%d\n",
++		   ret ? "FAIL" : "PASS", ret ? 1 : 0);
++	mutex_unlock(&nouveau_selftest_instmem_lock);
++	return 0;
++}
++
++static int
++nouveau_debugfs_selftest_instmem_4k_show(struct seq_file *m, void *data)
++{
++	return nouveau_debugfs_selftest_instmem_show(m, 0x1000);
++}
++
++static int
++nouveau_debugfs_selftest_instmem_8k_show(struct seq_file *m, void *data)
++{
++	return nouveau_debugfs_selftest_instmem_show(m, 0x2000);
++}
++
++static int
++nouveau_debugfs_selftest_instmem_32k_show(struct seq_file *m, void *data)
++{
++	return nouveau_debugfs_selftest_instmem_show(m, 0x8000);
++}
++
++static int
++nouveau_debugfs_selftest_instmem_4k_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, nouveau_debugfs_selftest_instmem_4k_show,
++			   inode->i_private);
++}
++
++static int
++nouveau_debugfs_selftest_instmem_8k_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, nouveau_debugfs_selftest_instmem_8k_show,
++			   inode->i_private);
++}
++
++static int
++nouveau_debugfs_selftest_instmem_32k_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, nouveau_debugfs_selftest_instmem_32k_show,
++			   inode->i_private);
++}
++
++static const struct file_operations nouveau_selftest_instmem_4k_fops = {
++	.owner = THIS_MODULE,
++	.open = nouveau_debugfs_selftest_instmem_4k_open,
++	.read = seq_read,
++	.llseek = seq_lseek,
++	.release = single_release,
++};
++
++static const struct file_operations nouveau_selftest_instmem_8k_fops = {
++	.owner = THIS_MODULE,
++	.open = nouveau_debugfs_selftest_instmem_8k_open,
++	.read = seq_read,
++	.llseek = seq_lseek,
++	.release = single_release,
++};
++
++static const struct file_operations nouveau_selftest_instmem_32k_fops = {
++	.owner = THIS_MODULE,
++	.open = nouveau_debugfs_selftest_instmem_32k_open,
++	.read = seq_read,
++	.llseek = seq_lseek,
++	.release = single_release,
++};
+ #endif
+ 
+ static const struct file_operations nouveau_pstate_fops = {
+@@ -75,6 +349,12 @@ nouveau_drm_debugfs_init(struct drm_minor *minor)
+ #if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
+ 	debugfs_create_file("selftest_safe", S_IRUSR, minor->debugfs_root,
+ 			    minor->dev, &nouveau_selftest_safe_fops);
++	debugfs_create_file("selftest_instmem_4k", S_IRUSR, minor->debugfs_root,
++			    minor->dev, &nouveau_selftest_instmem_4k_fops);
++	debugfs_create_file("selftest_instmem_8k", S_IRUSR, minor->debugfs_root,
++			    minor->dev, &nouveau_selftest_instmem_8k_fops);
++	debugfs_create_file("selftest_instmem_32k", S_IRUSR, minor->debugfs_root,
++			    minor->dev, &nouveau_selftest_instmem_32k_fops);
+ #endif
+ 
+ 	/* Set the size of the vbios since we know it, and it's confusing to
