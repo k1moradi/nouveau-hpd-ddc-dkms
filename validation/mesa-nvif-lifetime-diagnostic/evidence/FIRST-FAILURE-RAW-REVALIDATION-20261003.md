@@ -150,6 +150,57 @@ the key in that per-file list, destroys the NVIF object if present, and removes
 the entry (`nouveau_abi16.c`, lines 742-758). DRM-file/client finalization
 clears any remaining entries (`nouveau_abi16.c`, lines 212-230).
 
+### Mesa teardown and failed-constructor cleanup
+
+I followed the exact Mesa cleanup path on both sides of the proposed
+same-key transition. During destruction of a completed Kepler VP3 decoder,
+`nouveau_vp3_decoder_destroy()` calls `nouveau_object_del(&dec->bsp)` before
+destroying its pushbuf and freeing the channel (`nouveau_vp3_video.c`, lines
+205-238). For a channel object, `nouveau_object_channel_new()` stores the
+kernel-returned `req.channel` in `obj->handle`; subchannel NEW instead obtains
+the owning `nouveau_drm(parent)` and sends through `drm->fd`. Subchannel DEL
+puts `(uintptr_t)obj` in the ioctl key but passes `obj->parent->handle` as the
+`drmCommandWrite()` file descriptor (`nouveau.c`, lines 105-178 and 229-281).
+After that call returns, `nouveau_object_del()` unconditionally frees the
+userspace wrapper and clears the caller's pointer; it neither checks nor
+returns the DEL result. Thus, if that DEL fails or no-ops on another DRM file,
+Mesa discards the wrapper that held the stale kernel key. The numeric channel
+handle is not guaranteed by this source to be an invalid process file
+descriptor, so the runtime log must retain both the actual return value and
+the root DRM fd rather than assume a particular wrong-fd errno.
+
+The v5-observed second-constructor failure also has a complete cleanup path.
+After all three new channel/pushbuf pairs succeed, the GK104 branch requests
+the BSP object with class `0x95b1`. If that NEW returns `-EEXIST`,
+`nouveau_object_new()` frees its just-allocated wrapper and returns before
+assigning `dec->bsp`; `nvc0_create_decoder()` jumps to `fail`, which invokes
+the decoder destructor (`nvc0_video.c`, lines 157-185 and 344-347;
+`nouveau.c`, lines 180-215). The zero-initialized `dec->bsp` is therefore
+NULL, while the destructor still destroys the newly created channel/pushbuf
+pairs (`nouveau_vp3_video.c`, lines 219-238). Kernel channel cleanup removes
+the channel and its NVKM children but does not clear a stale entry in the
+separate per-file ABI16 object list. This cleanup cannot explain or repair the
+old key; it is consistent with a stale key surviving into the failed retry.
+
+For that sequence to produce the observed duplicate, the new wrapper address
+must equal a still-registered old key. Mesa's source makes that possible
+because the old wrapper is freed before the next `calloc()`, but neither the
+saved v5 trace nor the libva trace records the old and new key values. Address
+reuse and the stale-key causal chain therefore remain **runtime-unproven**.
+The required A capture is still: old BSP DEL key/fd/result, old channel-free
+result, then replacement BSP NEW with the same key and a same-route
+`layer=abi16` duplicate. If A does not capture that chain, B cannot establish a
+fix.
+
+The successful FFmpeg control is not a counterexample to this lifecycle
+candidate: its captured 10-frame run keeps the decoder context through the
+frames and does not exercise the MPV trace's destroy-then-recreate transition.
+It proves the initial H.264 decoder creation and subsequent frame submissions
+work in that run; it does not test reuse of a freed subchannel-wrapper key.
+This difference explains why the control can succeed without showing that
+the MPV context-recreation sequence is safe or that the wrong-fd DEL caused
+its failure.
+
 The inspected source files from the local Ubuntu 7.0.0-34 build tree have
 these SHA-256 identities:
 
