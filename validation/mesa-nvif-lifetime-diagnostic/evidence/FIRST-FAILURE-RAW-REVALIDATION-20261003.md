@@ -128,6 +128,27 @@ check (`drivers/gpu/drm/nouveau/nouveau_abi16.c`, around lines 118-135 and
 (`nvkm/core/ioctl.c`, around lines 132-148). The v5 probe did not identify
 which site returned the error.
 
+### Upstream Mesa source/history check
+
+I checked Mesa GitLab `main` at commit
+[`8fc4981d2d25a32732296a90bf9eaa0371f8c715`](https://gitlab.freedesktop.org/mesa/mesa/-/blob/8fc4981d2d25a32732296a90bf9eaa0371f8c715/src/gallium/winsys/nouveau/drm/nouveau.c).
+The raw `src/gallium/winsys/nouveau/drm/nouveau.c` file at that commit has
+SHA-256
+`fefb35c2e3923a42381bef37fb4cd240688786e97263d5dca10feb62a36bb311`.
+Its `nouveau_object_subchan_new()` passes `drm->fd` to
+`drmCommandWrite()`, while `nouveau_object_subchan_del()` passes
+`obj->parent->handle` and ignores the ioctl result, matching the Mesa 26.0.8
+source under investigation.
+
+The GitLab file-history query returned 17 commits. The only diff among those
+that touched the subchannel NEW/DEL functions or the parent-handle DEL call was
+the initial `nouveau: import libdrm_nouveau` commit
+`821f4c8d99a3068758db834a5c219082a9609b3c` from 2024-03-13; it introduced the
+same fd asymmetry. I found no later correction in the tracked file history up
+to the queried `main` commit. This makes the candidate worth testing against
+upstream, but does not prove that the DEL fd caused this runtime `-EEXIST` or
+that changing it alone fixes playback.
+
 The failed replacement picture parameter has no valid reference entries, so
 the later VP3 `vidbuf == refs[j]` assertion is not reached on this first
 failure path. The saved assertion belongs to a separate crash capture and
