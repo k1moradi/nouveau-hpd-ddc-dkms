@@ -1,0 +1,35 @@
+Subject: [PATCH] nouveau: log VP3 H.264 reference slot mismatch
+
+Report decoder and reference-slot identity before the existing H.264
+reference assertion. Keep the assertion and decode behavior intact.
+
+---
+diff --git a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+--- a/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
++++ b/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c
+@@ -281,10 +281,25 @@
+       if (!d->ref[i])
+          break;
+       refs[j] = (struct nouveau_vp3_video_buffer *)d->ref[i];
+       h->refs[j].fifo_idx = j + 1;
+       h->refs[j].tmp_idx = refs[j]->valid_ref;
++      const unsigned ref_slot = refs[j]->valid_ref;
++      const unsigned ref_slot_count = sizeof(dec->refs) / sizeof(dec->refs[0]);
++      struct nouveau_vp3_video_buffer *slot_buffer =
++         ref_slot < ref_slot_count ? dec->refs[ref_slot].vidbuf : NULL;
++
++      if (ref_slot >= ref_slot_count || slot_buffer != refs[j]) {
++         _debug_printf("NOUVEAU_DIAG_VP3_REF_MISMATCH dec=%p frame_num=%u "
++                       "ref_list_index=%u compact_ref_index=%u ref=%p "
++                       "valid_ref=%u slot_buffer=%p num_ref_frames=%u "
++                       "fence_seq=%u\n",
++                       (void *)dec, d->frame_num, i, j, (void *)refs[j],
++                       ref_slot, (void *)slot_buffer, d->num_ref_frames,
++                       dec->fence_seq);
++      }
++      assert(ref_slot < ref_slot_count);
+       assert(dec->refs[refs[j]->valid_ref].vidbuf == refs[j]);
+       h->refs[j].field_order_cnt[0] = d->field_order_cnt_list[i][0];
+       h->refs[j].field_order_cnt[1] = d->field_order_cnt_list[i][1];
+       h->refs[j].frame_idx = d->frame_num_list[i];
+       if (!dec->refs[refs[j]->valid_ref].field_pic_flag) {

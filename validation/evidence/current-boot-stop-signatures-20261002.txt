@@ -1,0 +1,82 @@
+Read-only current-boot diagnostic snapshot (2026-10-02)
+kernel=7.0.0-34-generic
+boot_id=8a436489-d363-4749-a3e0-2f134e34931a
+nouveau_srcversion=354DCD95A5804DE00E20EFB
+running_video_processes=none
+
+BAR2/HOST_CPU/PTE_count=0
+PROP RT width/height overrun_count=67
+CTXSW_TIMEOUT_count=1
+channel kill_count=1
+failed to idle_count=1
+
+[PROP RT width/height overrun] [ 3538.127672] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000020 [RT_HEIGHT_OVERRUN] x = 32, y = 16, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.128627] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000020 [RT_HEIGHT_OVERRUN] x = 48, y = 16, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.129623] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000020 [RT_HEIGHT_OVERRUN] x = 0, y = 16, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.130647] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000020 [RT_HEIGHT_OVERRUN] x = 16, y = 16, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.132501] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000020 [RT_HEIGHT_OVERRUN] x = 32, y = 16, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.133420] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000020 [RT_HEIGHT_OVERRUN] x = 48, y = 16, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.134533] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000020 [RT_HEIGHT_OVERRUN] x = 0, y = 16, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.135483] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000020 [RT_HEIGHT_OVERRUN] x = 16, y = 16, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.196633] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.197127] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.197485] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.197824] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.198486] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 320, y = 512, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.198818] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 928, y = 304, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.199160] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 224, y = 352, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.199484] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 240, y = 416, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.200137] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+[PROP RT width/height overrun] [ 3538.200466] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 352, y = 96, format = 2e, storage type = 0
+[PROP RT width/height overrun] [ 3538.200802] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 96, y = 208, format = 2e, storage type = 0
+[PROP RT width/height overrun] [ 3538.355559] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.356087] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.356496] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.356833] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.358472] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+[PROP RT width/height overrun] [ 3538.358848] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 816, y = 368, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.359511] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1712, y = 432, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.359998] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1344, y = 480, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.363800] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.364180] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.365565] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.367341] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.368043] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+[PROP RT width/height overrun] [ 3538.368430] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000020 [RT_HEIGHT_OVERRUN] x = 96, y = 416, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.368786] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1184, y = 464, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.370575] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1488, y = 512, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.371434] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.371817] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.372181] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.372525] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.373300] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1520, y = 432, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.373654] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 192, y = 256, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.373992] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 208, y = 320, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.374656] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1296, y = 368, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.375408] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+[PROP RT width/height overrun] [ 3538.375739] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 912, y = 48, format = 2e, storage type = 0
+[PROP RT width/height overrun] [ 3538.376087] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 544, y = 144, format = 2e, storage type = 0
+[PROP RT width/height overrun] [ 3538.376466] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000020 [RT_HEIGHT_OVERRUN] x = 80, y = 240, format = 2e, storage type = 0
+[PROP RT width/height overrun] [ 3538.378419] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.551882] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.552906] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.553781] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.556763] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+[PROP RT width/height overrun] [ 3538.557504] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 176, y = 336, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.558192] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 400, y = 400, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.558818] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 768, y = 448, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.560370] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 304, y = 256, format = 2e, storage type = 0
+[PROP RT width/height overrun] [ 3538.561615] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 160, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.562229] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 176, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.562727] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 128, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.563602] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000010 [RT_WIDTH_OVERRUN] x = 144, y = 0, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.564823] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 784, y = 496, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.566239] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1840, y = 288, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.566923] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1344, y = 352, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.567976] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC3/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 1152, y = 400, format = 37, storage type = 0
+[PROP RT width/height overrun] [ 3538.569116] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC0/PROP trap: 00000030 [RT_WIDTH_OVERRUN RT_HEIGHT_OVERRUN] x = 368, y = 16, format = 2e, storage type = 0
+[PROP RT width/height overrun] [ 3538.569561] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC1/PROP trap: 00000020 [RT_HEIGHT_OVERRUN] x = 0, y = 64, format = 2e, storage type = 0
+[PROP RT width/height overrun] [ 3538.569964] Inspiron1564Linux kernel: nouveau 0000:01:00.0: gr: GPC2/PROP trap: 00000020 [RT_HEIGHT_OVERRUN] x = 64, y = 176, format = 2e, storage type = 0
+[CTXSW_TIMEOUT] [ 3543.056153] Inspiron1564Linux kernel: nouveau 0000:01:00.0: fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]
+[channel kill] [ 3543.060863] Inspiron1564Linux kernel: nouveau 0000:01:00.0: Xorg[1495]: channel 6 killed!
+[failed to idle] [ 3567.324049] Inspiron1564Linux kernel: nouveau 0000:01:00.0: Xorg[1495]: failed to idle channel 9 [Xorg[1495]]
