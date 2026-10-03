@@ -40,6 +40,42 @@ The fault reports channel `-1` and an unknown channel address. The journal provi
 - This observation does not prove that BAR2 caused the MPV or ffplay failure, and it does not establish a BAR2 production fix.
 - The review-branch v1-v8 plus duplicate-layer diagnostic module is not loaded on this boot.
 
+## Bounded BAR2 lifecycle correlation
+
+A read-only query of this boot's kernel journal selected
+`NOUVEAU_DIAG_BAR2_MAP` records and compared their monotonic timestamps with
+the PTE event at `71315717737` usec (`0x5ea000`). There were **544** such
+lifecycle records in the captured journal and **zero within +/-120 seconds**
+of the PTE.
+
+The nearest preceding lifecycle record was:
+
+```text
+mono_usec=54751563175 delta_usec=-16564154562
+stage=destroy pages=0x3 object=0000000003d7c343
+vma_start=0x0000000000377000 vma_size=0x000000000002a000
+backing_addr=0x00000000ff657000 backing_size=0x000000000002a000
+backing_target=2 map=000000006922316d maps=0
+```
+
+This record is 4h36m04.154562s before the PTE. No later
+`NOUVEAU_DIAG_BAR2_MAP` record appears in the captured current-boot kernel
+journal. Across all 544 records, neither a recorded backing range
+`[backing_addr, backing_addr + backing_size)` nor VMA range
+`[vma_start, vma_start + vma_size)` contains `0x5ea000`.
+
+The numeric `map=000000006922316d` value appears in two distinct map/destroy
+pairs before the PTE: one for object `000000002b06330a` and a later one for
+object `0000000003d7c343`. Both pairs end with `stage=destroy` and `maps=0`.
+This demonstrates that the numeric map value alone does not identify one
+object lifetime. It does not link either earlier lifecycle to the later PTE.
+
+Result: **no logged BAR2 mapping candidate correlates with this PTE in the
+bounded window or by recorded address range**. The diagnostic mapping trace
+ends hours before the fault, so this is missing temporal coverage, not proof
+that the fault had no mapping/lifetime cause. The channel remains `-1` and
+the producer remains unknown.
+
 ## CPU-only checks in the same continuation
 
 - BAR2 matcher and detached supervisor: `19/19` unittest cases passed.
