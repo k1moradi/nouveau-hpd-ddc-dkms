@@ -1,0 +1,42 @@
+{
+  "base_dso_sha256": "aceac163eabeefe5e4c1f2eb38469239044e30671aebcec743e4277f5897b536",
+  "build_dirs": {
+    "A": "/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-functional-no-mesa-diag-20260930/mesa-nvif-lifetime-ab-build-20261003T082047Z-build-A",
+    "B": "/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-functional-no-mesa-diag-20260930/mesa-nvif-lifetime-ab-build-20261003T082047Z-build-B"
+  },
+  "build_job_limit": 1,
+  "build_priority": "nice -n 10",
+  "diagnostic_patch_sha256": "f89c752fc445d4534f46ce45813a877b4229efdeae7d6d306429fb7462f913b7",
+  "meson_coredata_sha256": "5fa21fef3f842c90196b57a5e1a9b8aefefcff39db25cef0c58a0c3e872dfed7",
+  "only_compile_command_difference": "-DNOUVEAU_DIAG_NVIF_CORRECT_DEL_FD",
+  "only_ninja_graph_difference": "-DNOUVEAU_DIAG_NVIF_CORRECT_DEL_FD",
+  "patched_source_sha256": "df3725267fc30b77ce80f49ffea86e7db55281000dc411ca707f53f292424940",
+  "schema": 1,
+  "source_file_sha256": "2140bca6de1666e4517ebabf97a63b417db43bfbc575198d7835d40ad92dc57f",
+  "status": "LINKED_BUILD_ONLY_NOT_INSTALLED_OR_RUN",
+  "variant_a": {
+    "defines": [
+      "-DNOUVEAU_DIAG_NVIF_LIFETIME"
+    ],
+    "diagnostic_strings": [
+      "NOUVEAU_DIAG_NVIF_NEW",
+      "NOUVEAU_DIAG_NVIF_DEL",
+      "NOUVEAU_DIAG_NVIF_CHANNEL_FREE"
+    ],
+    "dso": "/home/keivan/nouveau-vaapi-app-validation/mesa-nvif-lifetime-ab-build-20261003T082047Z/A/libgallium_drv_video.so",
+    "dso_sha256": "1d8f71c5ad0884a43496cfb199e7a38eb5528441e3f24daf4dbf3f7a7c4a28f9"
+  },
+  "variant_b": {
+    "defines": [
+      "-DNOUVEAU_DIAG_NVIF_LIFETIME",
+      "-DNOUVEAU_DIAG_NVIF_CORRECT_DEL_FD"
+    ],
+    "diagnostic_strings": [
+      "NOUVEAU_DIAG_NVIF_NEW",
+      "NOUVEAU_DIAG_NVIF_DEL",
+      "NOUVEAU_DIAG_NVIF_CHANNEL_FREE"
+    ],
+    "dso": "/home/keivan/nouveau-vaapi-app-validation/mesa-nvif-lifetime-ab-build-20261003T082047Z/B/libgallium_drv_video.so",
+    "dso_sha256": "0fe4c64811e3bc77ddd00842796dbd9a8c3906599c74612ec81433ba6ebfd056"
+  }
+}

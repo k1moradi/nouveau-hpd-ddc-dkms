@@ -1,8 +1,8 @@
 # Mesa Nouveau BSP NVIF lifetime A/B diagnostic
 
-**Status: diagnostic candidate only; not linked or run on hardware.** This
-patch prepares the missing userspace records for the stage-4 BSP NEW
-`-EEXIST` investigation. It complements the kernel duplicate-layer markers in
+**Status: matched A/B VA DSOs linked; neither installed nor run.** This patch
+prepares the missing userspace records for the stage-4 BSP NEW `-EEXIST`
+investigation. It complements the kernel duplicate-layer markers in
 `validation/nouveau-nvif-duplicate-diagnostic/`.
 
 The diagnostic records only class `0x95b1`, the BSP class observed by the v5
@@ -74,10 +74,11 @@ and verifies the shared logging fields and the two fd-selection branches.
 This is a source-contract check; it does not replace compilation or runtime
 causality evidence.
 
-The patched `nouveau.c` translation unit has also passed `-fsyntax-only` in
-both A/B macro configurations, using the saved Mesa compile-database flags
-with `-Werror=format`. No Mesa library/DSO was linked; see the validation record
-for the exact source and build-database identities.
+The patched `nouveau.c` translation unit first passed `-fsyntax-only` in both
+A/B macro configurations using saved Mesa compile-database flags with
+`-Werror=format`. At that initial checkpoint no DSO had been linked. The later
+matched VA DSO builds and their source/configuration identities are recorded
+separately below.
 
 The first source-validation checkpoint is recorded in
 [`evidence/CPU-VALIDATION.md`](evidence/CPU-VALIDATION.md). The diagnostic
@@ -86,3 +87,7 @@ patch SHA-256 is:
 ```text
 f89c752fc445d4534f46ce45813a877b4229efdeae7d6d306429fb7462f913b7
 ```
+
+The matched VA DSO link builds are recorded in
+[`evidence/DSO-BUILD-VALIDATION.md`](evidence/DSO-BUILD-VALIDATION.md). They
+are build-only artifacts; neither variant was installed or run.

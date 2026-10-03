@@ -1,0 +1,6 @@
+target=src/gallium/targets/va/libgallium_drv_video.so
+command_count=940
+changed_command_count=1
+changed_command_index=746
+changed_command_target=nouveau.c.o
+only_normalized_difference=-DNOUVEAU_DIAG_NVIF_CORRECT_DEL_FD
