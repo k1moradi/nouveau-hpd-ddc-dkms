@@ -177,7 +177,7 @@ SHARED ROOT CAUSE:
   NO EVIDENCE; a deeper common lifetime cause is not ruled out
 
 FIX STATUS:
-  NOT SOURCE-PROVEN; wrong-fd and progressive-staging changes are candidates
+  CANDIDATE: wrong-fd and progressive-staging changes; neither is accepted
 
 VISIBLE HARDWARE PLAYBACK:
   FAIL
