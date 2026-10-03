@@ -1,0 +1,52 @@
+Subject: [PATCH] drm/nouveau: identify NVIF duplicate-key return layer
+
+The BSP NEW failure can be rejected by the ABI16 per-client key table before
+NVKM, or by NVKM's object tree. Add diagnostic-only markers at those existing
+duplicate returns so a bounded reproduction identifies the layer.
+
+--- a/drivers/gpu/drm/nouveau/nouveau_abi16.c
++++ b/drivers/gpu/drm/nouveau/nouveau_abi16.c
+@@ -789,8 +789,17 @@
+ 		return -EINVAL;
+ 
+ 	obj = nouveau_abi16_obj_new(abi16, ENGOBJ, args->object);
+-	if (IS_ERR(obj))
+-		return PTR_ERR(obj);
++	if (IS_ERR(obj)) {
++		ret = PTR_ERR(obj);
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++		if (ret == -EEXIST)
++			NV_INFO(abi16->cli->drm,
++				"NOUVEAU_DIAG_NVIF_DUP layer=abi16 key=%#llx class=%#x channel=%#llx\n",
++				(unsigned long long)args->object, (u32)args->oclass,
++				(unsigned long long)ioctl->token);
++#endif
++		return ret;
++	}
+ 
+ 	ret = nvif_object_ctor(&chan->chan->user, "abi16EngObj", args->handle, args->oclass,
+ 			       NULL, 0, &obj->engobj);
+--- a/drivers/gpu/drm/nouveau/nvkm/core/ioctl.c
++++ b/drivers/gpu/drm/nouveau/nvkm/core/ioctl.c
+@@ -21,6 +21,9 @@
+  *
+  * Authors: Ben Skeggs <bskeggs@redhat.com>
+  */
++#include <linux/kconfig.h>
++#include <linux/printk.h>
++
+ #include <core/ioctl.h>
+ #include <core/client.h>
+ #include <core/engine.h>
+@@ -139,6 +142,11 @@
+ 				client->data = object;
+ 				return 0;
+ 			}
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++			pr_info("NOUVEAU_DIAG_NVIF_DUP layer=nvkm key=%#llx class=%#x\n",
++				(unsigned long long)object->object,
++				(u32)oclass.base.oclass);
++#endif
+ 			ret = -EEXIST;
+ 		}
+ 		nvkm_object_fini(object, NVKM_POWEROFF);
