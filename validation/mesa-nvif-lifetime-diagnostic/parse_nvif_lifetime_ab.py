@@ -266,6 +266,35 @@ def _sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
+def _validate_termination_reason_sources(
+    termination_reason: str,
+    hard_stops: list[dict[str, Any]],
+    *,
+    variant: str,
+) -> None:
+    sources: set[str] = set()
+    for index, record in enumerate(hard_stops):
+        if not isinstance(record, dict):
+            raise ValueError(
+                f"{variant} postrun hard-stop record {index} is not an object"
+            )
+        source = record.get("source")
+        if not isinstance(source, str) or source not in {"kernel", "workload"}:
+            raise ValueError(
+                f"{variant} postrun hard-stop record {index} has an invalid source"
+            )
+        sources.add(source)
+
+    if termination_reason == "kernel-hard-stop" and "kernel" not in sources:
+        raise ValueError(
+            f"{variant} kernel-hard-stop termination lacks a kernel hard-stop record"
+        )
+    if termination_reason == "workload-hard-stop" and "workload" not in sources:
+        raise ValueError(
+            f"{variant} workload-hard-stop termination lacks a workload hard-stop record"
+        )
+
+
 def journal_boot_ids(data: bytes) -> set[str]:
     boot_ids: set[str] = set()
     for index, raw_line in enumerate(data.splitlines(), 1):
@@ -769,6 +798,11 @@ def read_manifest(path: Path, expected_variant: str) -> dict[str, Any]:
         raise ValueError(f"{expected_variant} preflight hard-stop records mismatch")
     if not isinstance(manifest["postrun_hard_stops"], list):
         raise ValueError(f"{expected_variant} postrun hard-stop field is invalid")
+    _validate_termination_reason_sources(
+        manifest["termination_reason"],
+        manifest["postrun_hard_stops"],
+        variant=expected_variant,
+    )
     if type(manifest["workload_returncode"]) is not int:
         raise ValueError(f"{expected_variant} workload return code is invalid")
     if not isinstance(manifest["workload_timed_out"], bool):

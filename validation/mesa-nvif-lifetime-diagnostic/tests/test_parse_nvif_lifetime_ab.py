@@ -24,6 +24,7 @@ def journal_line(
     *,
     pid: int | None = 222,
     boot_id: str = "boot-a",
+    syslog_identifier: str | None = None,
 ) -> str:
     record: dict[str, object] = {
         "MESSAGE": message,
@@ -35,6 +36,8 @@ def journal_line(
         record["TID"] = str(pid + 1)
     else:
         record["_TRANSPORT"] = "kernel"
+    if syslog_identifier is not None:
+        record["SYSLOG_IDENTIFIER"] = syslog_identifier
     return json.dumps(record)
 
 
@@ -566,8 +569,38 @@ class NvifLifetimeParserTests(unittest.TestCase):
             with mock.patch.object(parser, "_sha256_file", side_effect=fake_hash):
                 loaded = parser.read_manifest(path, "A")
 
+                item["termination_reason"] = "kernel-hard-stop"
+                path.write_text(json.dumps(item), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "lacks a kernel"):
+                    parser.read_manifest(path, "A")
+
+                item["termination_reason"] = "workload-hard-stop"
+                item["postrun_hard_stops"] = []
+                path.write_text(json.dumps(item), encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "lacks a workload"):
+                    parser.read_manifest(path, "A")
+
         self.assertEqual(loaded["termination_reason"], "workload-hard-stop")
         self.assertEqual(loaded["postrun_hard_stops"][0]["source"], "workload")
+
+    def test_workload_termination_allows_later_kernel_tail_record(self) -> None:
+        parser._validate_termination_reason_sources(
+            "workload-hard-stop",
+            [
+                {"source": "workload", "kinds": ["SIGBUS"]},
+                {"source": "kernel", "kinds": ["PTE"]},
+            ],
+            variant="A",
+        )
+
+    def test_termination_source_validator_rejects_malformed_records(self) -> None:
+        for stops in ([None], [{"source": []}], [{"source": "other"}]):
+            with self.subTest(stops=stops), self.assertRaises(ValueError):
+                parser._validate_termination_reason_sources(
+                    "workload-hard-stop",
+                    stops,
+                    variant="A",
+                )
 
     def test_runtime_profile_is_pinned_and_has_stage4_command(self) -> None:
         profile = parser.load_runtime_profile()
@@ -778,6 +811,85 @@ class NvifLifetimeParserTests(unittest.TestCase):
             json.loads(output.getvalue())["outcome"],
             "A_REPRODUCED_B_LIFECYCLE_SUCCEEDED",
         )
+
+    def test_cli_classifies_workload_hard_stop_end_to_end(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal_a = root / "a.jsonl"
+            journal_b = root / "b.jsonl"
+            manifest_a = root / "A" / "manifest.json"
+            manifest_b = root / "B" / "manifest.json"
+            data_a = baseline_records().encode("utf-8")
+            text_b = candidate_records() + journal_line(
+                "Bus error",
+                500,
+                boot_id="boot-b",
+                syslog_identifier="nouveau-nvif-lifetime",
+            ) + "\n"
+            data_b = text_b.encode("utf-8")
+            journal_a.write_bytes(data_a)
+            journal_b.write_bytes(data_b)
+            item_a = manifest("A")
+            item_b = manifest("B")
+            item_a["journal_delta_sha256"] = hashlib.sha256(data_a).hexdigest()
+            item_b["journal_delta_sha256"] = hashlib.sha256(data_b).hexdigest()
+            item_b["termination_reason"] = "workload-hard-stop"
+            item_b["postrun_hard_stops"] = parser.hard_stop_records(data_b)
+            item_b["workload_returncode"] = -7
+
+            for variant, item in (("A", item_a), ("B", item_b)):
+                dso = root / variant / "libgallium_drv_video.so"
+                alias = root / variant / "driver" / "nouveau_drv_video.so"
+                dso.parent.mkdir(parents=True)
+                alias.parent.mkdir(parents=True)
+                dso.write_bytes(b"synthetic dso content")
+                alias.symlink_to(dso)
+                item["dso_resolved_path"] = str(dso)
+                item["dso_alias_path"] = str(alias)
+                preflight = root / variant / "journal-preflight.jsonl"
+                preflight.write_text(
+                    json.dumps({
+                        "MESSAGE": "nouveau: initialized",
+                        "_BOOT_ID": item["boot_id"],
+                        "_TRANSPORT": "kernel",
+                    }) + "\n",
+                    encoding="utf-8",
+                )
+                item["preflight_journal_sha256"] = hashlib.sha256(
+                    preflight.read_bytes()
+                ).hexdigest()
+                item["nouveau_module_path"] = str(TEST_MODULE_PATH.resolve())
+                item["nouveau_module_file_sha256"] = TEST_MODULE_SHA256
+                (root / variant / "manifest.json").write_text(
+                    json.dumps(item),
+                    encoding="utf-8",
+                )
+
+            output = io.StringIO()
+
+            def fake_hash(path: Path) -> str:
+                if path.name == "libgallium_drv_video.so":
+                    return parser.EXPECTED_DSO_SHA256[path.parent.name]
+                if path == Path(parser.load_runtime_profile()["argv"][-1]):
+                    return parser.EXPECTED_INPUT_SHA256
+                if path == TEST_MODULE_PATH.resolve():
+                    return TEST_MODULE_SHA256
+                return hashlib.sha256(path.read_bytes()).hexdigest()
+
+            with (
+                mock.patch.object(parser, "_sha256_file", side_effect=fake_hash),
+                redirect_stdout(output),
+            ):
+                status = parser.main([
+                    "--journal-a", str(journal_a),
+                    "--manifest-a", str(manifest_a),
+                    "--journal-b", str(journal_b),
+                    "--manifest-b", str(manifest_b),
+                ])
+
+        result = json.loads(output.getvalue())
+        self.assertEqual(result["outcome"], "WORKLOAD_FAILURE")
+        self.assertEqual(status, 4)
 
     def test_cli_returns_nonzero_for_inconclusive_and_kernel_failure(self) -> None:
         cases = (
