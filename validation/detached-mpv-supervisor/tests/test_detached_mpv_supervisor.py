@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import json
+import os
+import signal
+import copy
 import socket
 import subprocess
 import sys
@@ -12,8 +15,11 @@ import threading
 import time
 import unittest
 from pathlib import Path
+from unittest.mock import MagicMock, patch
 
+import detached_mpv_supervisor as supervisor
 from detached_mpv_supervisor import (
+    ARM_TOKEN_ENV,
     FINAL_JOURNAL_QUERY_TIMEOUT_SECONDS,
     LIBVA_DRIVER_ALIAS,
     POST_STOP_OBSERVATION_SECONDS,
@@ -23,14 +29,23 @@ from detached_mpv_supervisor import (
     SYSTEMD_STOP_MARGIN_SECONDS,
     SYSTEMD_STOP_TIMEOUT_SECONDS,
     classify_mpv_hardware_decode,
+    child_environment,
+    consume_arm_token,
+    create_arm_token,
     detached_unit_properties,
     final_run_status,
-    mpv_ipc_request,
+    mpv_screenshot_request,
     mpv_run_exit_code,
+    mapped_driver_status,
     passive_post_stop_snapshot,
     first_stop_signature,
+    _read_module_parameter,
     process_group_members,
     stop_reason_for_line,
+    sync_journal,
+    validate_deployment_manifest,
+    verify_deployment_manifest,
+    visible_x11_session_errors,
 )
 
 
@@ -56,6 +71,21 @@ class FinalJournalClassificationTests(unittest.TestCase):
         self.assertEqual(reason, "kernel-signature-in-final-journal-delta")
         self.assertEqual(trigger, line)
         self.assertEqual(signature, ("CTXSW_TIMEOUT", line))
+        self.assertTrue(failed)
+
+    def test_journal_sync_failure_is_not_ignored(self) -> None:
+        failure = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="journal unavailable"
+        )
+        with patch.object(supervisor, "journal", return_value=failure):
+            with self.assertRaisesRegex(RuntimeError, "journal sync failed"):
+                sync_journal()
+
+    def test_unavailable_final_journal_fails_closed(self) -> None:
+        reason, trigger, signature, failed = final_run_status({}, "", "journalctl failed")
+        self.assertEqual(reason, "post-run-journal-unavailable")
+        self.assertIsNone(trigger)
+        self.assertIsNone(signature)
         self.assertTrue(failed)
 
 
@@ -143,13 +173,367 @@ class ProcessGroupStopperTests(unittest.TestCase):
         self.assertEqual(signature, ("BAR2/HOST_CPU/PTE", line))
         self.assertTrue(failed)
 
-    def test_unavailable_final_journal_fails_closed(self) -> None:
-        reason, trigger, signature, failed = final_run_status({}, "", "journalctl failed")
-        self.assertEqual(reason, "post-run-journal-unavailable")
-        self.assertIsNone(trigger)
-        self.assertIsNone(signature)
-        self.assertTrue(failed)
+    def test_sigkill_survivor_is_reported_as_stop_failure(self) -> None:
+        proc = MagicMock()
+        proc.pid = 99999999
+        proc.poll.return_value = 0
+        stopper = ProcessGroupStopper(proc)
+        with (
+            patch.object(supervisor, "process_group_members", return_value=[(99, "D")]),
+            patch.object(supervisor, "signal_process_group"),
+            patch.object(supervisor, "_wait_group_gone", return_value=False),
+        ):
+            self.assertFalse(stopper.stop())
+        self.assertIn("still has live members after SIGKILL", stopper.error or "")
 
+
+class ArmTokenTests(unittest.TestCase):
+    def test_direct_run_without_token_refuses_before_journal_cursor(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="nvmpv-no-arm-") as temporary:
+            with patch.dict(os.environ, {}, clear=True):
+                with patch.object(supervisor, "cursor_now") as cursor:
+                    self.assertEqual(supervisor.service_run(Path(temporary)), 2)
+                    cursor.assert_not_called()
+
+    def test_wrong_token_refuses_before_journal_cursor(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="nvmpv-bad-arm-") as temporary:
+            run_dir = Path(temporary)
+            token = create_arm_token(run_dir)
+            self.assertNotEqual(token, "wrong-token")
+            with patch.dict(os.environ, {ARM_TOKEN_ENV: "wrong-token"}, clear=True):
+                with patch.object(supervisor, "cursor_now") as cursor:
+                    self.assertEqual(supervisor.service_run(run_dir), 2)
+                    cursor.assert_not_called()
+            self.assertTrue((run_dir / "arm-token").exists())
+
+    def test_valid_token_is_consumed_once_and_replay_is_refused(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="nvmpv-good-arm-") as temporary:
+            run_dir = Path(temporary)
+            token = create_arm_token(run_dir)
+            with patch.dict(os.environ, {ARM_TOKEN_ENV: token}, clear=True):
+                consume_arm_token(run_dir)
+                self.assertNotIn(ARM_TOKEN_ENV, os.environ)
+            self.assertFalse((run_dir / "arm-token").exists())
+            with patch.dict(os.environ, {ARM_TOKEN_ENV: token}, clear=True):
+                with self.assertRaisesRegex(RuntimeError, "missing one-use"):
+                    consume_arm_token(run_dir)
+
+
+class DeploymentManifestTests(unittest.TestCase):
+    @staticmethod
+    def valid_manifest() -> dict[str, object]:
+        digest = "a" * 64
+        return {
+            "schema": 1,
+            "kernel": "7.0.0-34-generic",
+            "nouveau": {
+                "srcversion": "reviewed-srcversion",
+                "module_path": "/lib/modules/7.0.0-34-generic/updates/dkms/nouveau.ko.zst",
+                "module_sha256": digest,
+                "vermagic": "7.0.0-34-generic SMP preempt mod_unload modversions",
+                "parameters": {"diag_ctxsw": "N"},
+            },
+            "initramfs": {
+                "path": "/boot/initrd.img-7.0.0-34-generic",
+                "sha256": digest,
+                "module_sha256": digest,
+            },
+            "mesa": {"dso_path": "/opt/review/libgallium_drv_video.so", "dso_sha256": digest},
+            "mpv": {"path": "/usr/bin/mpv", "sha256": digest},
+            "input": {"path": "/home/user/test.mkv", "sha256": digest},
+        }
+
+    def test_strict_deployment_manifest_is_accepted(self) -> None:
+        manifest = validate_deployment_manifest(self.valid_manifest())
+        self.assertEqual(manifest["schema"], 1)
+
+    def test_manifest_rejects_missing_or_unexpected_fields(self) -> None:
+        manifest = self.valid_manifest()
+        del manifest["initramfs"]
+        with self.assertRaisesRegex(ValueError, "keys must be exactly"):
+            validate_deployment_manifest(manifest)
+        manifest = self.valid_manifest()
+        manifest["unexpected"] = True
+        with self.assertRaisesRegex(ValueError, "keys must be exactly"):
+            validate_deployment_manifest(manifest)
+
+    def test_manifest_rejects_relative_path_and_bad_digest(self) -> None:
+        manifest = self.valid_manifest()
+        manifest["nouveau"]["module_path"] = "relative/nouveau.ko"
+        with self.assertRaisesRegex(ValueError, "absolute path"):
+            validate_deployment_manifest(manifest)
+        manifest = self.valid_manifest()
+        manifest["mesa"]["dso_sha256"] = "bad"
+        with self.assertRaisesRegex(ValueError, "SHA-256"):
+            validate_deployment_manifest(manifest)
+
+    def test_manifest_requires_exact_disabled_ctxsw_parameter(self) -> None:
+        manifest = self.valid_manifest()
+        manifest["nouveau"]["parameters"] = {}
+        with self.assertRaisesRegex(ValueError, "must be a nonempty string map"):
+            validate_deployment_manifest(manifest)
+
+        manifest = self.valid_manifest()
+        manifest["nouveau"]["parameters"] = {"diag_bar2_map": "N"}
+        with self.assertRaisesRegex(ValueError, "exactly pin"):
+            validate_deployment_manifest(manifest)
+
+        manifest = self.valid_manifest()
+        manifest["nouveau"]["parameters"] = {"diag_ctxsw": "Y"}
+        with self.assertRaisesRegex(ValueError, "exactly pin"):
+            validate_deployment_manifest(manifest)
+
+    def test_runtime_verifier_checks_module_initrd_driver_and_workload_artifacts(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="nvmpv-deployment-") as temporary:
+            root = Path(temporary)
+            module = root / "nouveau.ko.zst"
+            initrd_module = root / "embedded" / "nouveau.ko.zst"
+            initrd_module.parent.mkdir()
+            initramfs = root / "initrd.img"
+            mesa = root / "libgallium_drv_video.so"
+            alias = root / "nouveau_drv_video.so"
+            mpv = root / "mpv"
+            media = root / "test.mkv"
+            for path, payload in (
+                (module, b"module bytes"),
+                (initrd_module, b"module bytes"),
+                (initramfs, b"initramfs bytes"),
+                (mesa, b"mesa bytes"),
+                (mpv, b"mpv bytes"),
+                (media, b"media bytes"),
+            ):
+                path.write_bytes(payload)
+            alias.symlink_to(mesa)
+            digest = supervisor.sha256
+            srcversion = "reviewed-srcversion"
+            loaded_srcversion = [srcversion]
+            vermagic = "7.0.0-34-generic SMP preempt mod_unload modversions"
+            manifest = {
+                "schema": 1,
+                "kernel": "7.0.0-34-generic",
+                "nouveau": {
+                    "srcversion": srcversion,
+                    "module_path": str(module),
+                    "module_sha256": digest(module),
+                    "vermagic": vermagic,
+                    "parameters": {"diag_ctxsw": "N"},
+                },
+                "initramfs": {
+                    "path": str(initramfs),
+                    "sha256": digest(initramfs),
+                    "module_sha256": digest(initrd_module),
+                },
+                "mesa": {"dso_path": str(mesa), "dso_sha256": digest(mesa)},
+                "mpv": {"path": str(mpv), "sha256": digest(mpv)},
+                "input": {"path": str(media), "sha256": digest(media)},
+            }
+
+            original_read_text = Path.read_text
+
+            def fake_read_text(path: Path, *args, **kwargs) -> str:
+                if str(path) == "/sys/module/nouveau/srcversion":
+                    return loaded_srcversion[0] + "\n"
+                if str(path) == "/sys/module/nouveau/parameters/diag_ctxsw":
+                    return "N\n"
+                return original_read_text(path, *args, **kwargs)
+
+            def modinfo(field: str, module_path: Path | None = None) -> str:
+                if field == "filename":
+                    return str(module)
+                if field == "srcversion":
+                    return srcversion
+                if field == "vermagic":
+                    return vermagic
+                raise AssertionError(field)
+
+            with (
+                patch.object(supervisor, "PLUGIN", mesa),
+                patch.object(supervisor, "LIBVA_DRIVER_ALIAS", alias),
+                patch.object(supervisor, "MPV", mpv),
+                patch.object(supervisor, "INPUT", media),
+                patch.object(supervisor, "_modinfo", side_effect=modinfo),
+                patch.object(
+                    supervisor,
+                    "_initramfs_module_hashes",
+                    return_value=[(str(initrd_module), digest(initrd_module))],
+                ),
+                patch.object(supervisor.os, "uname", return_value=type("Uname", (), {"release": "7.0.0-34-generic"})()),
+                patch.object(Path, "read_text", new=fake_read_text),
+            ):
+                errors, observed = verify_deployment_manifest(
+                    validate_deployment_manifest(manifest)
+                )
+                self.assertEqual(errors, [])
+                self.assertEqual(observed["nouveau_loaded_srcversion"], srcversion)
+                self.assertEqual(observed["initramfs_sha256"], digest(initramfs))
+
+                bad_hash = copy.deepcopy(manifest)
+                bad_hash["nouveau"]["module_sha256"] = "f" * 64
+                errors, _ = verify_deployment_manifest(
+                    validate_deployment_manifest(bad_hash)
+                )
+                self.assertTrue(any("nouveau_module_sha256 mismatch" in item for item in errors))
+
+                bad_vermagic = copy.deepcopy(manifest)
+                bad_vermagic["nouveau"]["vermagic"] = "wrong-kernel"
+                errors, _ = verify_deployment_manifest(
+                    validate_deployment_manifest(bad_vermagic)
+                )
+                self.assertTrue(any("nouveau_vermagic mismatch" in item for item in errors))
+
+                loaded_srcversion[0] = "different-loaded-build"
+                errors, _ = verify_deployment_manifest(
+                    validate_deployment_manifest(manifest)
+                )
+                self.assertTrue(
+                    any("nouveau_loaded_srcversion mismatch" in item for item in errors)
+                )
+
+
+class ProtectedModuleParameterTests(unittest.TestCase):
+    def test_root_only_parameter_uses_noninteractive_read_only_cat(self) -> None:
+        parameter = Path("/sys/module/nouveau/parameters/diag_ctxsw")
+        original_read_text = Path.read_text
+
+        def permission_denied(path: Path, *args, **kwargs) -> str:
+            if path == parameter:
+                raise PermissionError("root-owned sysfs parameter")
+            return original_read_text(path, *args, **kwargs)
+
+        result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout="N\n", stderr=""
+        )
+        with (
+            patch.object(Path, "read_text", new=permission_denied),
+            patch.object(supervisor.subprocess, "run", return_value=result) as run,
+        ):
+            self.assertEqual(_read_module_parameter("diag_ctxsw"), "N")
+        run.assert_called_once_with(
+            ["/usr/bin/sudo", "-n", "/usr/bin/cat", str(parameter)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+
+    def test_root_only_parameter_fails_when_noninteractive_access_is_denied(self) -> None:
+        parameter = Path("/sys/module/nouveau/parameters/diag_ctxsw")
+        original_read_text = Path.read_text
+
+        def permission_denied(path: Path, *args, **kwargs) -> str:
+            if path == parameter:
+                raise PermissionError("root-owned sysfs parameter")
+            return original_read_text(path, *args, **kwargs)
+
+        result = subprocess.CompletedProcess(
+            args=[], returncode=1, stdout="", stderr="a password is required"
+        )
+        with (
+            patch.object(Path, "read_text", new=permission_denied),
+            patch.object(supervisor.subprocess, "run", return_value=result),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "password is required"):
+                _read_module_parameter("diag_ctxsw")
+
+
+class DesktopSessionTests(unittest.TestCase):
+    def test_visible_session_requires_active_local_x11_user_on_seat0(self) -> None:
+        valid_output = (
+            "Active=yes\nRemote=no\nType=x11\nClass=user\n"
+            "Seat=seat0\nVTNr=2\nDisplay=:0\n"
+        )
+        fake_loginctl = Path("/usr/bin/loginctl")
+        result = subprocess.CompletedProcess(
+            args=[], returncode=0, stdout=valid_output, stderr=""
+        )
+        with (
+            patch.object(supervisor, "LOGINCTL", fake_loginctl),
+            patch.object(supervisor.subprocess, "run", return_value=result),
+            patch.dict(os.environ, {"XDG_SESSION_ID": "7", "DISPLAY": ":0"}, clear=True),
+        ):
+            self.assertEqual(visible_x11_session_errors(), [])
+
+        remote_result = subprocess.CompletedProcess(
+            args=[], returncode=0,
+            stdout=valid_output.replace("Remote=no", "Remote=yes"), stderr="",
+        )
+        with (
+            patch.object(supervisor, "LOGINCTL", fake_loginctl),
+            patch.object(supervisor.subprocess, "run", return_value=remote_result),
+            patch.dict(os.environ, {"XDG_SESSION_ID": "7", "DISPLAY": ":0"}, clear=True),
+        ):
+            self.assertTrue(any("Remote must be 'no'" in item for item in visible_x11_session_errors()))
+
+        with (
+            patch.object(supervisor, "LOGINCTL", fake_loginctl),
+            patch.object(supervisor.subprocess, "run", return_value=result),
+            patch.dict(os.environ, {"XDG_SESSION_ID": "7", "DISPLAY": ":99"}, clear=True),
+        ):
+            self.assertTrue(any("does not match active session display" in item for item in visible_x11_session_errors()))
+
+
+class ChildEnvironmentTests(unittest.TestCase):
+    def test_child_environment_drops_loader_and_debug_overrides(self) -> None:
+        parent = {
+            "DISPLAY": ":0",
+            "HOME": "/home/user",
+            "XDG_RUNTIME_DIR": "/run/user/1000",
+            "LD_PRELOAD": "/tmp/inject.so",
+            "LD_LIBRARY_PATH": "/tmp/lib",
+            "LIBVA_TRACE": "/tmp/trace",
+            "LIBVA_MESSAGING_LEVEL": "2",
+            "MESA_DEBUG": "1",
+            "MESA_LOADER_DRIVER_OVERRIDE": "llvmpipe",
+            "NOUVEAU_DEBUG": "all",
+            "WAYLAND_DISPLAY": "wayland-0",
+            "DRI_PRIME": "1",
+        }
+        with patch.dict(os.environ, parent, clear=True):
+            env = child_environment()
+        self.assertEqual(env["DISPLAY"], ":0")
+        self.assertEqual(env["LIBVA_DRIVER_NAME"], "nouveau")
+        self.assertEqual(
+            set(env),
+            {
+                "DISPLAY", "HOME", "XDG_RUNTIME_DIR", "PATH", "LC_ALL",
+                "LIBVA_DRIVER_NAME", "LIBVA_DRIVERS_PATH",
+            },
+        )
+        for name in (
+            "LD_PRELOAD", "LD_LIBRARY_PATH", "LIBVA_TRACE",
+            "LIBVA_MESSAGING_LEVEL", "MESA_DEBUG", "MESA_LOADER_DRIVER_OVERRIDE",
+            "NOUVEAU_DEBUG", "WAYLAND_DISPLAY", "DRI_PRIME",
+        ):
+            self.assertNotIn(name, env)
+
+
+class MappedDriverTests(unittest.TestCase):
+    def test_expected_inode_and_hash_must_be_mapped_by_mpv(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="nvmpv-map-test-") as temporary:
+            dso = Path(temporary) / "libgallium_drv_video.so"
+            dso.write_bytes(b"pinned DSO")
+            info = dso.stat()
+            dev = f"{os.major(info.st_dev):x}:{os.minor(info.st_dev):x}"
+            maps = (
+                f"7f000000-7f001000 r-xp 00000000 {dev} {info.st_ino} "
+                f"{dso}\n"
+            )
+            original_read_text = Path.read_text
+
+            def fake_read_text(path: Path, *args, **kwargs) -> str:
+                if str(path) == "/proc/12345/maps":
+                    return maps
+                return original_read_text(path, *args, **kwargs)
+
+            with patch.object(Path, "read_text", new=fake_read_text):
+                matched, detail = mapped_driver_status(
+                    12345, dso, supervisor.sha256(dso)
+                )
+                self.assertTrue(matched, detail)
+                self.assertIn(f"inode={info.st_ino}", detail)
+                self.assertFalse(
+                    mapped_driver_status(12345, dso, "0" * 64)[0]
+                )
 
 class PassivePostStopObservationTests(unittest.TestCase):
     def test_delayed_pte_is_included_after_passive_window(self) -> None:
@@ -219,7 +603,7 @@ class MpvHardwareDecodeEvidenceTests(unittest.TestCase):
         saved_log = Path(__file__).with_name("mpv-vaapi-positive-fixture.log").read_text(
             encoding="utf-8", errors="replace"
         )
-        evidence = classify_mpv_hardware_decode(saved_log)
+        evidence = classify_mpv_hardware_decode(saved_log, actual_driver_mapping=True)
 
         self.assertTrue(evidence.confirmed, evidence.missing_evidence())
         self.assertEqual(evidence.missing_evidence(), [])
@@ -235,7 +619,10 @@ class MpvHardwareDecodeEvidenceTests(unittest.TestCase):
         evidence = classify_mpv_hardware_decode(log)
 
         self.assertFalse(evidence.confirmed)
-        self.assertEqual(evidence.missing_evidence(), ["active-vaapi-copy"])
+        self.assertEqual(
+            evidence.missing_evidence(),
+            ["active-vaapi-copy", "actual-driver-mapping"],
+        )
 
     def test_active_vaapi_with_unpinned_driver_path_is_not_confirmed(self) -> None:
         log = f"""[vaapi] libva: User environment variable requested driver 'nouveau'
@@ -248,7 +635,10 @@ class MpvHardwareDecodeEvidenceTests(unittest.TestCase):
         evidence = classify_mpv_hardware_decode(log)
 
         self.assertFalse(evidence.confirmed)
-        self.assertEqual(evidence.missing_evidence(), ["pinned-driver-path"])
+        self.assertEqual(
+            evidence.missing_evidence(),
+            ["pinned-driver-path", "actual-driver-mapping"],
+        )
 
     def test_zero_exit_requires_positive_hardware_evidence(self) -> None:
         self.assertEqual(
@@ -257,6 +647,7 @@ class MpvHardwareDecodeEvidenceTests(unittest.TestCase):
                 child_returncode=0,
                 final_failed_closed=False,
                 hardware_decode_confirmed=True,
+                post_window_complete=True,
             ),
             0,
         )
@@ -266,6 +657,7 @@ class MpvHardwareDecodeEvidenceTests(unittest.TestCase):
                 child_returncode=0,
                 final_failed_closed=False,
                 hardware_decode_confirmed=False,
+                post_window_complete=True,
             ),
             8,
         )
@@ -277,6 +669,7 @@ class MpvHardwareDecodeEvidenceTests(unittest.TestCase):
                 child_returncode=0,
                 final_failed_closed=False,
                 hardware_decode_confirmed=True,
+                post_window_complete=True,
             ),
             7,
         )
@@ -286,8 +679,41 @@ class MpvHardwareDecodeEvidenceTests(unittest.TestCase):
                 child_returncode=1,
                 final_failed_closed=False,
                 hardware_decode_confirmed=True,
+                post_window_complete=True,
             ),
             6,
+        )
+
+    def test_operator_stop_or_incomplete_tail_can_never_succeed(self) -> None:
+        self.assertEqual(
+            mpv_run_exit_code(
+                reason="external-signal-SIGINT",
+                child_returncode=-signal.SIGINT,
+                final_failed_closed=False,
+                hardware_decode_confirmed=True,
+                post_window_complete=False,
+            ),
+            9,
+        )
+        self.assertEqual(
+            mpv_run_exit_code(
+                reason="natural-exit",
+                child_returncode=0,
+                final_failed_closed=False,
+                hardware_decode_confirmed=True,
+                post_window_complete=False,
+            ),
+            9,
+        )
+        self.assertEqual(
+            mpv_run_exit_code(
+                reason="external-signal-SIGINT",
+                child_returncode=0,
+                final_failed_closed=False,
+                hardware_decode_confirmed=True,
+                post_window_complete=True,
+            ),
+            9,
         )
 
 
@@ -298,28 +724,60 @@ class MpvIpcTests(unittest.TestCase):
             received: list[dict[str, object]] = []
             server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             server.bind(str(socket_path))
-            server.listen(1)
+            server.listen(2)
 
             def respond() -> None:
-                connection, _ = server.accept()
-                with connection:
-                    request = bytearray()
-                    while b"\n" not in request:
-                        request.extend(connection.recv(4096))
-                    received.append(json.loads(bytes(request).split(b"\n", 1)[0]))
-                    connection.sendall(b'{"request_id":1,"error":"success"}\n')
+                for request_id in (1, 2):
+                    connection, _ = server.accept()
+                    with connection:
+                        request = bytearray()
+                        while b"\n" not in request:
+                            request.extend(connection.recv(4096))
+                        parsed = json.loads(bytes(request).split(b"\n", 1)[0])
+                        received.append(parsed)
+                        if parsed["command"][0] == "get_property":
+                            response = {
+                                "request_id": request_id,
+                                "error": "success",
+                                "data": 530.083,
+                            }
+                        else:
+                            response = {"request_id": request_id, "error": "success"}
+                        connection.sendall(
+                            json.dumps(response).encode("utf-8") + b"\n"
+                        )
 
             thread = threading.Thread(target=respond)
             thread.start()
             try:
-                reply = mpv_ipc_request(socket_path, ["screenshot", "video"])
+                reply = mpv_screenshot_request(socket_path)
             finally:
                 thread.join(timeout=2)
                 server.close()
 
         self.assertFalse(thread.is_alive())
-        self.assertEqual(received, [{"command": ["screenshot", "video"]}])
-        self.assertEqual(reply, {"request_id": 1, "error": "success"})
+        self.assertEqual(
+            received,
+            [
+                {"command": ["get_property", "time-pos"]},
+                {"command": ["screenshot", "video"]},
+            ],
+        )
+        self.assertEqual(reply["time_pos_seconds"], 530.083)
+        self.assertEqual(
+            reply["screenshot_response"],
+            {"request_id": 2, "error": "success"},
+        )
+
+    def test_screenshot_requires_a_valid_media_timestamp(self) -> None:
+        with patch.object(
+            supervisor,
+            "mpv_ipc_request",
+            return_value={"error": "success", "data": "not-a-number"},
+        ) as ipc:
+            with self.assertRaisesRegex(RuntimeError, "invalid time-pos"):
+                mpv_screenshot_request(Path("/unused"))
+        ipc.assert_called_once_with(Path("/unused"), ["get_property", "time-pos"])
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

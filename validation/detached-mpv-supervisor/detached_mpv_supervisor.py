@@ -13,15 +13,20 @@ from __future__ import annotations
 
 import argparse
 import datetime as dt
+import hmac
 import hashlib
 import io
 import json
+import math
 import os
 import re
+import secrets
+import shutil
 import signal
 import socket
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 from dataclasses import dataclass
@@ -41,17 +46,23 @@ PLUGIN = Path(
 LIBVA_DRIVER_ALIAS = PLUGIN.parent / "nouveau_drv_video.so"
 RUN_ROOT = HERE / "detached-mpv-runs"
 EXPECTED_INPUT_SHA256 = "d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2"
-EXPECTED_PLUGIN_SHA256 = "938dc0ff6c22cc2141e111431f6d56344529b3507e0d7d121ad7333ceaf80512"
-EXPECTED_SRCVERSION = "57AE1B168D50DB546CD87A1"
-EXPECTED_KERNEL = "7.0.0-34-generic"
 MPV = Path("/usr/bin/mpv")
 JOURNALCTL = Path("/usr/bin/journalctl")
 SYSTEMD_RUN = Path("/usr/bin/systemd-run")
 SYSTEMCTL = Path("/usr/bin/systemctl")
 XDPYINFO = Path("/usr/bin/xdpyinfo")
+LOGINCTL = Path("/usr/bin/loginctl")
+MODINFO = Path("/usr/sbin/modinfo")
+SUDO = Path("/usr/bin/sudo")
+CAT = Path("/usr/bin/cat")
+ARM_TOKEN_ENV = "NVMPV_ARM_TOKEN"
+ARM_TOKEN_FILE = "arm-token"
+DEPLOYMENT_MANIFEST_NAME = "deployment-manifest.json"
+REQUIRED_DIAGNOSTIC_PARAMETERS = {"diag_ctxsw": "N"}
 POST_STOP_OBSERVATION_SECONDS = 30.0
 FIRST_SCREENSHOT_DELAY_SECONDS = 2.0
 SCREENSHOT_INTERVAL_SECONDS = 10.0
+DRIVER_MAP_WAIT_SECONDS = 10.0
 PROCESS_GROUP_SIGINT_GRACE_SECONDS = 5.0
 PROCESS_GROUP_SIGTERM_GRACE_SECONDS = 2.0
 PROCESS_GROUP_SIGKILL_GRACE_SECONDS = 2.0
@@ -77,6 +88,8 @@ HARD_STOP_PATTERNS = {
     "channel-killed": re.compile(r"channel .*killed", re.I),
     "failed-to-idle": re.compile(r"failed to idle", re.I),
     "PROP/RT-overrun": re.compile(r"PROP.*(?:trap|overrun)|RT_(?:WIDTH|HEIGHT)_OVERRUN", re.I),
+    # This matcher consumes only journalctl -k output. A userspace SIGBUS is
+    # classified from MPV's process return code instead.
     "SIGBUS": re.compile(r"SIGBUS", re.I),
     "GPU-reset/fallen-off-bus": re.compile(r"GPU reset|GPU has fallen off the bus|fallen off the bus", re.I),
     "kernel-BUG": re.compile(r"\bBUG:\s", re.I),
@@ -109,6 +122,12 @@ def journal(args: list[str], timeout: float = 8.0) -> subprocess.CompletedProces
     )
 
 
+def sync_journal() -> None:
+    result = journal(["--sync"], timeout=5)
+    if result.returncode:
+        raise RuntimeError(f"journal sync failed: {result.stderr.strip()}")
+
+
 def hard_stop_matches(lines: Iterable[str]) -> list[tuple[str, str]]:
     found: list[tuple[str, str]] = []
     for line in lines:
@@ -127,6 +146,7 @@ class MpvHardwareDecodeEvidence:
     h264_vaapi_requested: bool
     vaapi_pixel_format_requested: bool
     hardware_decode_active: bool
+    actual_driver_mapping: bool
 
     @property
     def confirmed(self) -> bool:
@@ -138,6 +158,7 @@ class MpvHardwareDecodeEvidence:
                 self.h264_vaapi_requested,
                 self.vaapi_pixel_format_requested,
                 self.hardware_decode_active,
+                self.actual_driver_mapping,
             )
         )
 
@@ -149,11 +170,14 @@ class MpvHardwareDecodeEvidence:
             ("h264-vaapi-request", self.h264_vaapi_requested),
             ("vaapi-pixel-format", self.vaapi_pixel_format_requested),
             ("active-vaapi-copy", self.hardware_decode_active),
+            ("actual-driver-mapping", self.actual_driver_mapping),
         )
         return [name for name, present in requirements if not present]
 
 
-def classify_mpv_hardware_decode(log_text: str) -> MpvHardwareDecodeEvidence:
+def classify_mpv_hardware_decode(
+    log_text: str, *, actual_driver_mapping: bool = False
+) -> MpvHardwareDecodeEvidence:
     """Require runtime log evidence, not merely the requested mpv options."""
     lowered = log_text.lower()
     return MpvHardwareDecodeEvidence(
@@ -163,6 +187,7 @@ def classify_mpv_hardware_decode(log_text: str) -> MpvHardwareDecodeEvidence:
         h264_vaapi_requested="trying hardware decoding via h264-vaapi-copy" in lowered,
         vaapi_pixel_format_requested="requesting pixfmt 'vaapi' from decoder" in lowered,
         hardware_decode_active="using hardware decoding (vaapi-copy)" in lowered,
+        actual_driver_mapping=actual_driver_mapping,
     )
 
 
@@ -178,35 +203,344 @@ def current_players() -> list[str]:
     return found
 
 
-def preflight(require_desktop: bool = True) -> tuple[list[str], str, str]:
+def _exact_keys(value: object, expected: set[str], label: str) -> dict[str, object]:
+    if not isinstance(value, dict) or set(value) != expected:
+        raise ValueError(f"{label} keys must be exactly {sorted(expected)}")
+    return value
+
+
+def _absolute_path(value: object, label: str) -> Path:
+    if not isinstance(value, str) or not value.startswith("/"):
+        raise ValueError(f"{label} must be an absolute path")
+    return Path(value)
+
+
+def _sha256_value(value: object, label: str) -> str:
+    if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+        raise ValueError(f"{label} must be a lowercase SHA-256 digest")
+    return value
+
+
+def validate_deployment_manifest(data: object) -> dict[str, object]:
+    """Validate the frozen deployment record before consulting the machine."""
+    root = _exact_keys(
+        data, {"schema", "kernel", "nouveau", "initramfs", "mesa", "mpv", "input"},
+        "deployment manifest",
+    )
+    if root["schema"] != 1:
+        raise ValueError("unsupported deployment manifest schema")
+    if not isinstance(root["kernel"], str) or not root["kernel"]:
+        raise ValueError("kernel must be a nonempty string")
+
+    nouveau = _exact_keys(
+        root["nouveau"],
+        {"srcversion", "module_path", "module_sha256", "vermagic", "parameters"},
+        "nouveau",
+    )
+    initramfs = _exact_keys(
+        root["initramfs"],
+        {"path", "sha256", "module_sha256"},
+        "initramfs",
+    )
+    mesa = _exact_keys(root["mesa"], {"dso_path", "dso_sha256"}, "mesa")
+    mpv = _exact_keys(root["mpv"], {"path", "sha256"}, "mpv")
+    media = _exact_keys(root["input"], {"path", "sha256"}, "input")
+
+    for section, key, label in (
+        (nouveau, "module_path", "nouveau.module_path"),
+        (initramfs, "path", "initramfs.path"),
+        (mesa, "dso_path", "mesa.dso_path"),
+        (mpv, "path", "mpv.path"),
+        (media, "path", "input.path"),
+    ):
+        _absolute_path(section[key], label)
+    for section, key, label in (
+        (nouveau, "module_sha256", "nouveau.module_sha256"),
+        (initramfs, "sha256", "initramfs.sha256"),
+        (initramfs, "module_sha256", "initramfs.module_sha256"),
+        (mesa, "dso_sha256", "mesa.dso_sha256"),
+        (mpv, "sha256", "mpv.sha256"),
+        (media, "sha256", "input.sha256"),
+    ):
+        _sha256_value(section[key], label)
+    if not isinstance(nouveau["srcversion"], str) or not nouveau["srcversion"]:
+        raise ValueError("nouveau.srcversion must be a nonempty string")
+    if not isinstance(nouveau["vermagic"], str) or not nouveau["vermagic"]:
+        raise ValueError("nouveau.vermagic must be a nonempty string")
+    parameters = nouveau["parameters"]
+    if not isinstance(parameters, dict) or not parameters:
+        raise ValueError("nouveau.parameters must be a nonempty string map")
+    for name, value in parameters.items():
+        if not re.fullmatch(r"[A-Za-z0-9_]+", str(name)) or not isinstance(value, str):
+            raise ValueError("nouveau.parameters must map names to string values")
+    if parameters != REQUIRED_DIAGNOSTIC_PARAMETERS:
+        raise ValueError(
+            "nouveau.parameters must exactly pin the reviewed MPV setting "
+            f"{REQUIRED_DIAGNOSTIC_PARAMETERS!r}"
+        )
+    return root
+
+
+def load_deployment_manifest(path: Path) -> dict[str, object]:
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot read deployment manifest {path}: {exc}") from exc
+    return validate_deployment_manifest(data)
+
+
+def _modinfo(field: str, module_path: Path | None = None) -> str:
+    command = [str(MODINFO), "-F", field]
+    command.append(str(module_path) if module_path is not None else "nouveau")
+    result = subprocess.run(
+        command, check=False, capture_output=True, text=True, timeout=5
+    )
+    if result.returncode:
+        raise RuntimeError(result.stderr.strip() or f"modinfo {field} failed")
+    return result.stdout.strip()
+
+
+def _read_module_parameter(name: str) -> str:
+    path = Path("/sys/module/nouveau/parameters") / name
+    try:
+        return path.read_text(encoding="utf-8").strip()
+    except PermissionError:
+        result = subprocess.run(
+            [str(SUDO), "-n", str(CAT), str(path)],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=5,
+        )
+        if result.returncode:
+            raise RuntimeError(
+                result.stderr.strip() or f"cannot read protected Nouveau parameter {name}"
+            )
+        return result.stdout.strip()
+
+
+def _initramfs_module_hashes(initramfs_path: Path) -> list[tuple[str, str]]:
+    unmkinitramfs = shutil.which("unmkinitramfs")
+    if not unmkinitramfs:
+        raise RuntimeError("unmkinitramfs is unavailable")
+    with tempfile.TemporaryDirectory(prefix="nvmpv-initramfs-") as temporary:
+        result = subprocess.run(
+            [unmkinitramfs, str(initramfs_path), temporary],
+            check=False,
+            capture_output=True,
+            text=True,
+            timeout=60,
+        )
+        if result.returncode:
+            raise RuntimeError(result.stderr.strip() or "initramfs extraction failed")
+        candidates = sorted(
+            path for path in Path(temporary).rglob("nouveau.ko*")
+            if path.is_file()
+            and re.fullmatch(r"nouveau\.ko(?:\.(?:zst|xz|gz))?", path.name)
+        )
+        return [(str(path), sha256(path)) for path in candidates]
+
+
+def verify_deployment_manifest(
+    manifest: dict[str, object],
+) -> tuple[list[str], dict[str, object]]:
     errors: list[str] = []
-    if os.uname().release != EXPECTED_KERNEL:
-        errors.append(f"kernel mismatch: expected {EXPECTED_KERNEL}, got {os.uname().release}")
+    observed: dict[str, object] = {}
+    nouveau = manifest["nouveau"]
+    initramfs = manifest["initramfs"]
+    mesa = manifest["mesa"]
+    mpv = manifest["mpv"]
+    media = manifest["input"]
+    assert isinstance(nouveau, dict) and isinstance(initramfs, dict)
+    assert isinstance(mesa, dict) and isinstance(mpv, dict) and isinstance(media, dict)
+
+    def compare(label: str, actual: object, expected: object) -> None:
+        observed[label] = actual
+        if actual != expected:
+            errors.append(f"{label} mismatch: expected {expected!r}, got {actual!r}")
+
+    compare("kernel", os.uname().release, manifest["kernel"])
+    try:
+        selected = Path(_modinfo("filename")).resolve(strict=True)
+        expected_module_path = Path(str(nouveau["module_path"])).resolve(strict=True)
+        compare("nouveau_module_path", str(selected), str(expected_module_path))
+        compare("nouveau_module_sha256", sha256(selected), nouveau["module_sha256"])
+        compare("nouveau_file_srcversion", _modinfo("srcversion", selected), nouveau["srcversion"])
+        compare("nouveau_vermagic", _modinfo("vermagic", selected), nouveau["vermagic"])
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        errors.append(f"selected Nouveau module verification failed: {exc}")
+    try:
+        loaded_srcversion = Path("/sys/module/nouveau/srcversion").read_text().strip()
+    except OSError as exc:
+        loaded_srcversion = ""
+        errors.append(f"cannot read loaded Nouveau srcversion: {exc}")
+    compare("nouveau_loaded_srcversion", loaded_srcversion, nouveau["srcversion"])
+
+    try:
+        selected_initramfs = Path(str(initramfs["path"])).resolve(strict=True)
+        compare("initramfs_path", str(selected_initramfs), str(Path(str(initramfs["path"])).resolve()))
+        compare("initramfs_sha256", sha256(selected_initramfs), initramfs["sha256"])
+        embedded = _initramfs_module_hashes(selected_initramfs)
+        observed["initramfs_modules"] = embedded
+        unique_hashes = {digest for _name, digest in embedded}
+        if not embedded:
+            errors.append("initramfs contains no Nouveau module")
+        elif unique_hashes != {initramfs["module_sha256"]}:
+            errors.append(
+                "initramfs Nouveau module hash mismatch: "
+                f"expected {initramfs['module_sha256']!r}, got {sorted(unique_hashes)!r}"
+            )
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+        errors.append(f"initramfs verification failed: {exc}")
+
+    for label, section, path_key, hash_key, configured_path in (
+        ("mesa", mesa, "dso_path", "dso_sha256", PLUGIN),
+        ("mpv", mpv, "path", "sha256", MPV),
+        ("input", media, "path", "sha256", INPUT),
+    ):
+        try:
+            actual_path = configured_path.resolve(strict=True)
+            expected_path = Path(str(section[path_key])).resolve(strict=True)
+            compare(f"{label}_path", str(actual_path), str(expected_path))
+            compare(f"{label}_sha256", sha256(actual_path), section[hash_key])
+        except OSError as exc:
+            errors.append(f"{label} artifact verification failed: {exc}")
+    try:
+        alias_path = LIBVA_DRIVER_ALIAS.resolve(strict=True)
+        plugin_path = PLUGIN.resolve(strict=True)
+        compare("libva_driver_alias", str(alias_path), str(plugin_path))
+    except OSError as exc:
+        errors.append(f"VA driver alias verification failed: {exc}")
+
+    parameters = nouveau["parameters"]
+    assert isinstance(parameters, dict)
+    observed_parameters: dict[str, str] = {}
+    for name, expected in parameters.items():
+        try:
+            actual = _read_module_parameter(name)
+        except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+            errors.append(f"cannot read Nouveau parameter {name}: {exc}")
+            continue
+        observed_parameters[name] = actual
+        if actual != expected:
+            errors.append(
+                f"Nouveau parameter {name} mismatch: expected {expected!r}, got {actual!r}"
+            )
+    observed["nouveau_parameters"] = observed_parameters
+    return errors, observed
+
+
+def _session_properties(text: str) -> dict[str, str]:
+    return dict(
+        line.split("=", 1) for line in text.splitlines() if "=" in line
+    )
+
+
+def visible_x11_session_errors() -> list[str]:
+    errors: list[str] = []
+    session_id = os.environ.get("XDG_SESSION_ID", "")
+    display = os.environ.get("DISPLAY", "")
+    if not session_id:
+        return ["XDG_SESSION_ID is unset; launch from the logged-in desktop session"]
+    if not display:
+        errors.append("DISPLAY is unset; run from the logged-in X11 desktop")
+    if not LOGINCTL.exists():
+        return errors + ["loginctl is unavailable; cannot verify a local desktop session"]
+    try:
+        result = subprocess.run(
+            [str(LOGINCTL), "show-session", session_id,
+             "-p", "Active", "-p", "Remote", "-p", "Type",
+             "-p", "Class", "-p", "Seat", "-p", "VTNr", "-p", "Display"],
+            check=False, capture_output=True, text=True, timeout=4,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return errors + [f"desktop session query failed: {exc}"]
+    if result.returncode:
+        return errors + [f"desktop session query failed: {result.stderr.strip()}"]
+    props = _session_properties(result.stdout)
+    expected = {
+        "Active": "yes", "Remote": "no", "Type": "x11",
+        "Class": "user", "Seat": "seat0",
+    }
+    for name, value in expected.items():
+        if props.get(name) != value:
+            errors.append(f"desktop session {name} must be {value!r}, got {props.get(name)!r}")
+    session_display = props.get("Display", "")
+    if not session_display:
+        errors.append("active login session does not report its X11 display")
+    elif display and session_display != display:
+        errors.append(
+            f"DISPLAY {display!r} does not match active session display {session_display!r}"
+        )
+    try:
+        if int(props.get("VTNr", "0")) <= 0:
+            errors.append("active X11 session is not attached to a physical VT")
+    except ValueError:
+        errors.append("active X11 session has an invalid VT number")
+    return errors
+
+
+def child_environment() -> dict[str, str]:
+    required = ("DISPLAY", "HOME", "XDG_RUNTIME_DIR")
+    missing = [name for name in required if not os.environ.get(name)]
+    if missing:
+        raise RuntimeError("required desktop environment missing: " + ", ".join(missing))
+    env = {
+        "DISPLAY": os.environ["DISPLAY"],
+        "HOME": os.environ["HOME"],
+        "XDG_RUNTIME_DIR": os.environ["XDG_RUNTIME_DIR"],
+        "PATH": "/usr/bin:/bin",
+        "LC_ALL": "C",
+        "LIBVA_DRIVER_NAME": "nouveau",
+        "LIBVA_DRIVERS_PATH": str(PLUGIN.parent),
+    }
+    for name in ("XAUTHORITY", "DBUS_SESSION_BUS_ADDRESS", "PULSE_SERVER", "PIPEWIRE_REMOTE"):
+        value = os.environ.get(name)
+        if value:
+            env[name] = value
+    return env
+
+
+def preflight(
+    require_desktop: bool = True,
+    deployment_manifest: dict[str, object] | None = None,
+    require_deployment: bool = False,
+) -> tuple[list[str], str, str, dict[str, object]]:
+    errors: list[str] = []
     try:
         srcversion = Path("/sys/module/nouveau/srcversion").read_text().strip()
     except OSError as exc:
         srcversion = ""
         errors.append(f"cannot read loaded Nouveau srcversion: {exc}")
-    if srcversion and srcversion != EXPECTED_SRCVERSION:
-        errors.append(f"loaded Nouveau srcversion mismatch: {srcversion}")
+    deployment_observed: dict[str, object] = {}
+    if deployment_manifest is not None:
+        deployment_errors, deployment_observed = verify_deployment_manifest(deployment_manifest)
+        errors.extend(deployment_errors)
+    elif require_deployment:
+        errors.append("a reviewed deployment manifest is required before starting mpv")
 
-    for label, path, expected in (
-        ("input", INPUT, EXPECTED_INPUT_SHA256),
-        ("Mesa plugin", PLUGIN, EXPECTED_PLUGIN_SHA256),
-    ):
+    if deployment_manifest is not None:
+        observed_input = deployment_observed.get("input_sha256")
+        if observed_input != EXPECTED_INPUT_SHA256:
+            errors.append(
+                f"input hash does not match the pinned workload: {observed_input!r}"
+            )
+    else:
         try:
-            actual = sha256(path)
+            actual = sha256(INPUT)
+            if actual != EXPECTED_INPUT_SHA256:
+                errors.append(f"input hash mismatch: {actual}")
         except OSError as exc:
-            errors.append(f"cannot hash {label}: {exc}")
-            continue
-        if actual != expected:
-            errors.append(f"{label} hash mismatch: {actual}")
-
+            errors.append(f"cannot hash input: {exc}")
     if require_desktop:
+        errors.extend(visible_x11_session_errors())
+    for label, path in (("input", INPUT), ("Mesa plugin", PLUGIN)):
+        if not path.is_file():
+            errors.append(f"{label} is missing or not a regular file: {path}")
+
+    if require_desktop and os.environ.get("DISPLAY"):
         display = os.environ.get("DISPLAY", "")
-        if not display:
-            errors.append("DISPLAY is unset; run from the logged-in X11 desktop")
-        elif not XDPYINFO.exists():
+        if not XDPYINFO.exists():
             errors.append("xdpyinfo is missing; cannot verify X11 connection")
         else:
             try:
@@ -243,7 +577,7 @@ def preflight(require_desktop: bool = True) -> tuple[list[str], str, str]:
         critical = hard_stop_matches(snapshot_text.splitlines())
         if critical:
             errors.append(f"clean-boot hard-stop baseline required; found {len(critical)}")
-    return errors, srcversion, snapshot_text
+    return errors, srcversion, snapshot_text, deployment_observed
 
 
 def cursor_now() -> str:
@@ -315,8 +649,16 @@ def stop_process_group(
         proc.wait(timeout=PROCESS_WAIT_TIMEOUT_SECONDS)
         return
     signal_process_group(proc, signal.SIGKILL)
-    _wait_group_gone(pgid, PROCESS_GROUP_SIGKILL_GRACE_SECONDS)
-    proc.wait(timeout=PROCESS_WAIT_TIMEOUT_SECONDS)
+    gone = _wait_group_gone(pgid, PROCESS_GROUP_SIGKILL_GRACE_SECONDS)
+    try:
+        proc.wait(timeout=PROCESS_WAIT_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired as exc:
+        raise RuntimeError(f"process-group leader {proc.pid} was not reaped") from exc
+    survivors = process_group_members(pgid)
+    if not gone or survivors:
+        raise RuntimeError(
+            f"process group {pgid} still has live members after SIGKILL: {survivors}"
+        )
 
 
 class ProcessGroupStopper:
@@ -334,20 +676,34 @@ class ProcessGroupStopper:
         self.sigterm_grace = sigterm_grace
         self._lock = threading.Lock()
         self._stopped = False
+        self.error: str | None = None
 
-    def stop(self) -> None:
+    def stop(self) -> bool:
         with self._lock:
             if self._stopped:
-                return
-            if process_group_members(self.proc.pid) or self.proc.poll() is None:
-                stop_process_group(
-                    self.proc,
-                    sigint_grace=self.sigint_grace,
-                    sigterm_grace=self.sigterm_grace,
-                )
-            else:
-                self.proc.wait(timeout=PROCESS_WAIT_TIMEOUT_SECONDS)
+                return self.error is None
+            try:
+                if process_group_members(self.proc.pid) or self.proc.poll() is None:
+                    stop_process_group(
+                        self.proc,
+                        sigint_grace=self.sigint_grace,
+                        sigterm_grace=self.sigterm_grace,
+                    )
+                else:
+                    self.proc.wait(timeout=PROCESS_WAIT_TIMEOUT_SECONDS)
+                survivors = process_group_members(self.proc.pid)
+                if survivors:
+                    raise RuntimeError(
+                        f"process group {self.proc.pid} still has live members: {survivors}"
+                    )
+                if self.proc.poll() is None:
+                    raise RuntimeError(f"process-group leader {self.proc.pid} was not reaped")
+            except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
+                self.error = str(exc)
+                self._stopped = True
+                return False
             self._stopped = True
+            return True
 
 
 def stop_reason_for_line(line: str) -> str | None:
@@ -390,12 +746,17 @@ def mpv_run_exit_code(
     child_returncode: int | None,
     final_failed_closed: bool,
     hardware_decode_confirmed: bool,
+    post_window_complete: bool,
 ) -> int:
     if final_failed_closed:
         return 7
-    if reason not in ("natural-exit", "external-signal-SIGINT", "external-signal-SIGUSR1"):
+    if reason.startswith("external-signal-"):
+        return 9
+    if reason != "natural-exit":
         return 7
-    if child_returncode not in (0, -signal.SIGINT):
+    if not post_window_complete:
+        return 9
+    if child_returncode != 0:
         return 6
     return 0 if hardware_decode_confirmed else 8
 
@@ -440,6 +801,86 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def create_arm_token(run_dir: Path) -> str:
+    token = secrets.token_hex(32)
+    token_path = run_dir / ARM_TOKEN_FILE
+    fd = os.open(token_path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        payload = (token + "\n").encode("ascii")
+        if os.write(fd, payload) != len(payload):
+            raise OSError("short write while saving one-use arm token")
+        os.fsync(fd)
+    finally:
+        os.close(fd)
+    return token
+
+
+def consume_arm_token(run_dir: Path) -> None:
+    supplied = os.environ.pop(ARM_TOKEN_ENV, "")
+    if not supplied:
+        raise RuntimeError("missing manager authorization; direct run is refused")
+    token_path = run_dir / ARM_TOKEN_FILE
+    try:
+        expected = token_path.read_text(encoding="ascii").strip()
+    except OSError as exc:
+        raise RuntimeError("missing one-use manager authorization file") from exc
+    if not hmac.compare_digest(expected, supplied):
+        raise RuntimeError("invalid manager authorization token")
+    token_path.unlink()
+
+
+def mapped_driver_status(
+    pid: int, expected_path: Path, expected_sha256: str
+) -> tuple[bool, str]:
+    try:
+        expected = expected_path.resolve(strict=True)
+        expected_stat = expected.stat()
+        maps_text = Path(f"/proc/{pid}/maps").read_text(encoding="utf-8")
+    except OSError as exc:
+        return False, f"cannot inspect mpv driver mapping: {exc}"
+    expected_dev = (os.major(expected_stat.st_dev), os.minor(expected_stat.st_dev))
+    for line in maps_text.splitlines():
+        fields = line.split(maxsplit=5)
+        if len(fields) != 6 or not fields[5].startswith("/"):
+            continue
+        mapped_name = fields[5].removesuffix(" (deleted)")
+        try:
+            mapped_path = Path(mapped_name).resolve(strict=True)
+            major, minor = fields[3].split(":", 1)
+            mapped_dev = (int(major, 16), int(minor, 16))
+            mapped_inode = int(fields[4])
+        except (OSError, ValueError):
+            continue
+        if mapped_path != expected:
+            continue
+        if mapped_dev != expected_dev or mapped_inode != expected_stat.st_ino:
+            continue
+        actual_sha256 = sha256(expected)
+        if actual_sha256 != expected_sha256:
+            return False, f"mapped VA DSO hash mismatch: {actual_sha256}"
+        return True, f"path={expected} sha256={actual_sha256} inode={mapped_inode}"
+    return False, f"pinned VA DSO is not mapped by mpv pid {pid}"
+
+
+def wait_for_mapped_driver(
+    pid: int,
+    expected_path: Path,
+    expected_sha256: str,
+    *,
+    timeout: float = DRIVER_MAP_WAIT_SECONDS,
+    process_alive: Callable[[int], bool] | None = None,
+) -> tuple[bool, str]:
+    alive = process_alive or (lambda process_id: Path(f"/proc/{process_id}").exists())
+    deadline = time.monotonic() + timeout
+    last_detail = "mapping has not appeared"
+    while time.monotonic() < deadline and alive(pid):
+        matched, last_detail = mapped_driver_status(pid, expected_path, expected_sha256)
+        if matched:
+            return True, last_detail
+        time.sleep(0.1)
+    return False, last_detail
+
+
 def mpv_ipc_request(
     socket_path: Path,
     command: list[object],
@@ -463,7 +904,24 @@ def mpv_ipc_request(
 
 
 def mpv_screenshot_request(socket_path: Path) -> dict[str, object]:
-    return mpv_ipc_request(socket_path, ["screenshot", "video"])
+    position = mpv_ipc_request(socket_path, ["get_property", "time-pos"])
+    if position.get("error") != "success":
+        raise RuntimeError(
+            f"mpv time-pos query failed: {position.get('error')!r}"
+        )
+    raw_time = position.get("data")
+    if (
+        isinstance(raw_time, bool)
+        or not isinstance(raw_time, (int, float))
+        or not math.isfinite(float(raw_time))
+    ):
+        raise RuntimeError(f"mpv returned an invalid time-pos: {raw_time!r}")
+    screenshot = mpv_ipc_request(socket_path, ["screenshot", "video"])
+    return {
+        "time_pos_response": position,
+        "time_pos_seconds": float(raw_time),
+        "screenshot_response": screenshot,
+    }
 
 
 def mpv_argv(run_dir: Path, ipc_path: Path) -> list[str]:
@@ -487,18 +945,38 @@ def mpv_argv(run_dir: Path, ipc_path: Path) -> list[str]:
 
 
 def service_run(run_dir: Path) -> int:
+    try:
+        consume_arm_token(run_dir)
+    except (OSError, RuntimeError) as exc:
+        print(f"REFUSED: {exc}", file=sys.stderr, flush=True)
+        return 2
+    try:
+        manifest_path = run_dir / DEPLOYMENT_MANIFEST_NAME
+        deployment_manifest = load_deployment_manifest(manifest_path)
+    except (OSError, ValueError) as exc:
+        print(f"PREFLIGHT_FAIL: deployment manifest: {exc}", file=sys.stderr, flush=True)
+        return 2
     run_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
     os.chmod(run_dir, 0o700)
     # Save the cursor before scanning the full boot log. The later delta check
     # catches any fault racing with that scan; the follower starts at the same
     # cursor, so there is no gap between preflight and live monitoring.
     try:
+        sync_journal()
         cursor = cursor_now()
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         write_text(run_dir / "supervisor-error.txt", f"journal cursor query failed: {exc}\n")
         return 3
-    errors, srcversion, snapshot = preflight(require_desktop=True)
+    errors, srcversion, snapshot, deployment_observed = preflight(
+        require_desktop=True,
+        deployment_manifest=deployment_manifest,
+        require_deployment=True,
+    )
     write_text(run_dir / "preflight-kernel.log", snapshot)
+    write_text(
+        run_dir / "deployment-observed.json",
+        json.dumps(deployment_observed, indent=2, sort_keys=True) + "\n",
+    )
     write_text(
         run_dir / "preflight.txt",
         "\n".join(
@@ -536,11 +1014,12 @@ def service_run(run_dir: Path) -> int:
         unit = os.environ.get("SYSTEMD_UNIT", "manual")
     ipc_path = Path(os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}")) / f"nvmpv-{run_dir.name}.sock"
     argv = mpv_argv(run_dir, ipc_path)
-    env = os.environ.copy()
-    env["LIBVA_DRIVER_NAME"] = "nouveau"
-    env["LIBVA_DRIVERS_PATH"] = str(PLUGIN.parent)
-    env.pop("LD_LIBRARY_PATH", None)
-    write_text(run_dir / "command.txt", " ".join(argv) + "\n")
+    try:
+        env = child_environment()
+    except RuntimeError as exc:
+        write_text(run_dir / "supervisor-error.txt", f"child environment refused: {exc}\n")
+        return 2
+    write_text(run_dir / "command-argv.json", json.dumps(argv, indent=2) + "\n")
     write_text(run_dir / "journal-cursor.txt", cursor + "\n")
     write_text(run_dir / "unit.txt", unit + "\n")
 
@@ -650,6 +1129,20 @@ def service_run(run_dir: Path) -> int:
         previous_handlers[sig] = signal.signal(sig, external_stop)
 
     print(f"MPV_STARTED pid={child.pid} run_dir={run_dir}", flush=True)
+    mesa_section = deployment_manifest["mesa"]
+    assert isinstance(mesa_section, dict)
+    mapped_driver, driver_map_detail = wait_for_mapped_driver(
+        child.pid,
+        PLUGIN,
+        str(mesa_section["dso_sha256"]),
+        process_alive=lambda _pid: child.poll() is None,
+    )
+    write_text(
+        run_dir / "driver-mapping.txt",
+        f"mapped={str(mapped_driver).lower()}\n{driver_map_detail}\n",
+    )
+    if not mapped_driver:
+        request_stop("va-driver-mapping-unconfirmed", driver_map_detail)
     screenshot_dir = run_dir / "mpv-screenshots"
     screenshot_attempts = 0
     screenshot_ipc_successes = 0
@@ -670,7 +1163,12 @@ def service_run(run_dir: Path) -> int:
                     next_screenshot_at = now + FIRST_SCREENSHOT_DELAY_SECONDS
                 else:
                     record["response"] = response
-                    succeeded = response.get("error") == "success"
+                    record["media_time_seconds"] = response.get("time_pos_seconds")
+                    screenshot_response = response.get("screenshot_response")
+                    succeeded = (
+                        isinstance(screenshot_response, dict)
+                        and screenshot_response.get("error") == "success"
+                    )
                     record["command_succeeded"] = succeeded
                     if succeeded:
                         screenshot_ipc_successes += 1
@@ -701,10 +1199,15 @@ def service_run(run_dir: Path) -> int:
     post_start_utc = dt.datetime.now(dt.timezone.utc)
     post_start_monotonic = time.monotonic()
     post_window_complete = False
+
+    def final_journal_snapshot() -> str:
+        sync_journal()
+        return journal_delta(cursor)
+
     try:
         delta, post_window_complete = passive_post_stop_snapshot(
             wait_for_cancel=post_stop_cancel.wait,
-            snapshot=lambda: journal_delta(cursor),
+            snapshot=final_journal_snapshot,
         )
     except (OSError, RuntimeError, subprocess.TimeoutExpired) as exc:
         delta_error = str(exc)
@@ -736,13 +1239,19 @@ def service_run(run_dir: Path) -> int:
     reason, trigger_line, late_signature, final_failed_closed = final_run_status(
         stopped, delta, delta_error
     )
+    stop_error = child_stopper.error
+    if stop_error:
+        write_text(run_dir / "process-group-stop-error.txt", stop_error + "\n")
+        final_failed_closed = True
     mpv_log_error = None
     try:
         mpv_log_text = (run_dir / "mpv.log").read_text(encoding="utf-8", errors="replace")
     except OSError as exc:
         mpv_log_text = ""
         mpv_log_error = str(exc)
-    hardware_evidence = classify_mpv_hardware_decode(mpv_log_text)
+    hardware_evidence = classify_mpv_hardware_decode(
+        mpv_log_text, actual_driver_mapping=mapped_driver
+    )
     hardware_status = (
         "CONFIRMED_NOUVEAU_VAAPI_H264"
         if hardware_evidence.confirmed
@@ -754,6 +1263,9 @@ def service_run(run_dir: Path) -> int:
         f"stop_reason={reason}\n"
         f"hardware_decode={hardware_status}\n"
         f"hardware_decode_missing={','.join(hardware_evidence.missing_evidence()) or 'none'}\n"
+        f"actual_driver_mapping={str(mapped_driver).lower()}\n"
+        f"post_window_complete={str(post_window_complete).lower()}\n"
+        f"process_group_stopped={str(stop_error is None).lower()}\n"
         f"video_screenshots={len(screenshot_files)}\n"
         "visible_video_confirmation=USER_REQUIRED\n"
         + (f"mpv_log_read_error={mpv_log_error}\n" if mpv_log_error else "")
@@ -766,25 +1278,49 @@ def service_run(run_dir: Path) -> int:
         )
         + (f"final_journal_error={delta_error}\n" if delta_error else ""),
     )
+    stop_error = child_stopper.error
+    if stop_error:
+        write_text(run_dir / "process-group-stop-error.txt", stop_error + "\n")
+        final_failed_closed = True
     print(f"MPV_FINISHED returncode={child.returncode} stop_reason={reason}", flush=True)
     return mpv_run_exit_code(
         reason=reason,
         child_returncode=child.returncode,
         final_failed_closed=final_failed_closed,
         hardware_decode_confirmed=hardware_evidence.confirmed,
+        post_window_complete=post_window_complete,
     )
 
 
-def manager_start(run_dir: Path) -> int:
-    errors, _srcversion, _snapshot = preflight(require_desktop=True)
+def manager_start(run_dir: Path, deployment_manifest_path: Path) -> int:
+    run_dir = run_dir.expanduser().resolve()
+    deployment_manifest_path = deployment_manifest_path.expanduser().resolve()
+    try:
+        manifest_bytes = deployment_manifest_path.read_bytes()
+        deployment_manifest = validate_deployment_manifest(json.loads(manifest_bytes))
+    except (OSError, json.JSONDecodeError, ValueError) as exc:
+        print(f"PREFLIGHT_FAIL deployment manifest: {exc}")
+        return 2
+    errors, _srcversion, _snapshot, _observed = preflight(
+        require_desktop=True,
+        deployment_manifest=deployment_manifest,
+        require_deployment=True,
+    )
     if errors:
         print("PREFLIGHT_FAIL", *errors, sep="\n")
         return 2
-    if not os.environ.get("DISPLAY"):
-        print("PREFLIGHT_FAIL DISPLAY is unset")
-        return 2
     run_dir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     run_dir.mkdir(mode=0o700, exist_ok=False)
+    manifest_snapshot = run_dir / DEPLOYMENT_MANIFEST_NAME
+    manifest_fd = os.open(
+        manifest_snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
+    )
+    try:
+        os.write(manifest_fd, manifest_bytes)
+        os.fsync(manifest_fd)
+    finally:
+        os.close(manifest_fd)
+    token = create_arm_token(run_dir)
     unit = "nouveau-mpv-" + run_dir.name[-18:].replace("_", "-") + ".service"
     command = [
         str(SYSTEMD_RUN), "--user", "--unit", unit, "--description",
@@ -795,13 +1331,35 @@ def manager_start(run_dir: Path) -> int:
         "--setenv=XDG_RUNTIME_DIR=" + os.environ.get("XDG_RUNTIME_DIR", f"/run/user/{os.getuid()}"),
         "--setenv=LIBVA_DRIVER_NAME=nouveau",
         "--setenv=LIBVA_DRIVERS_PATH=" + str(PLUGIN.parent),
+        f"--setenv={ARM_TOKEN_ENV}={token}",
     ]
-    for name in ("XAUTHORITY",):
+    for name in (
+        "XAUTHORITY",
+        "XDG_SESSION_ID",
+        "DBUS_SESSION_BUS_ADDRESS",
+        "PULSE_SERVER",
+        "PIPEWIRE_REMOTE",
+    ):
         if os.environ.get(name):
             command.append(f"--setenv={name}={os.environ[name]}")
     command += [sys.executable, str(Path(__file__).resolve()), "run", str(run_dir)]
-    result = subprocess.run(command, check=False, text=True, capture_output=True, timeout=10)
+    try:
+        result = subprocess.run(
+            command, check=False, text=True, capture_output=True, timeout=10
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        try:
+            (run_dir / ARM_TOKEN_FILE).unlink()
+        except FileNotFoundError:
+            pass
+        write_text(run_dir / "supervisor-error.txt", f"systemd-run failed: {exc}\n")
+        print(f"REFUSED: could not start detached unit: {exc}")
+        return 3
     if result.returncode:
+        try:
+            (run_dir / ARM_TOKEN_FILE).unlink()
+        except FileNotFoundError:
+            pass
         print(result.stderr.strip() or result.stdout.strip())
         return result.returncode
     write_text(run_dir / "unit.txt", unit + "\n")
@@ -822,7 +1380,7 @@ def manager_stop(unit: str) -> int:
     if result.returncode:
         print(result.stderr.strip() or result.stdout.strip())
         return result.returncode
-    print(f"STOPPED={unit}; systemd KillMode=control-group reaped the full run cgroup")
+    print(f"STOP_REQUEST_COMPLETED={unit}; inspect run result for process-group status")
     return 0
 
 
@@ -935,9 +1493,11 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="action", required=True)
     check = sub.add_parser("check-only", help="CPU/read-only baseline check; no VA device is opened")
     check.add_argument("--no-desktop", action="store_true", help="skip X11 checks for CPU-only inspection")
+    check.add_argument("--deployment-manifest", type=Path)
     start = sub.add_parser("start", help="prepare and start detached test (requires --arm)")
     start.add_argument("--arm", action="store_true", help="explicitly authorize this one VA workload")
     start.add_argument("--run-dir", type=Path)
+    start.add_argument("--deployment-manifest", type=Path, required=True)
     run = sub.add_parser("run", help=argparse.SUPPRESS)
     run.add_argument("run_dir", type=Path)
     stop = sub.add_parser("stop", help="stop one detached test via its user-systemd unit")
@@ -950,10 +1510,23 @@ def main(argv: list[str] | None = None) -> int:
     if args.action == "self-test":
         return run_self_test()
     if args.action == "check-only":
-        errors, srcversion, snapshot = preflight(require_desktop=not args.no_desktop)
+        try:
+            deployment = (
+                load_deployment_manifest(args.deployment_manifest)
+                if args.deployment_manifest else None
+            )
+        except ValueError as exc:
+            print(f"PREFLIGHT_FAIL deployment manifest: {exc}")
+            return 2
+        errors, srcversion, snapshot, observed = preflight(
+            require_desktop=not args.no_desktop,
+            deployment_manifest=deployment,
+        )
         print(f"kernel={os.uname().release}")
         print(f"loaded_srcversion={srcversion}")
         print(f"BAR2_HOST_CPU_PTE_COUNT={len(matching_lines(snapshot.splitlines()))}")
+        if observed:
+            print("DEPLOYMENT_OBSERVED=" + json.dumps(observed, sort_keys=True))
         if errors:
             print("PREFLIGHT_FAIL")
             for error in errors:
@@ -967,7 +1540,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%dT%H%M%SZ")
         run_dir = args.run_dir or RUN_ROOT / f"pixelation-08m47-{stamp}"
-        return manager_start(run_dir)
+        return manager_start(run_dir, args.deployment_manifest)
     if args.action == "run":
         return service_run(args.run_dir)
     if args.action == "stop":
