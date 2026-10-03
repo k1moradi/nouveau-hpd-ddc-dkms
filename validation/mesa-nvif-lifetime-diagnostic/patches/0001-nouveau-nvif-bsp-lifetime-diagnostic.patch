@@ -1,0 +1,67 @@
+Subject: [PATCH] nouveau: trace BSP NVIF object lifetime for fd A/B
+
+Add diagnostic-only records for the BSP NVIF NEW/DEL operations and channel
+free. The default diagnostic build retains the existing DEL fd; defining
+NOUVEAU_DIAG_NVIF_CORRECT_DEL_FD selects the root Nouveau DRM fd for the
+candidate build. Both variants use the same logging code and differ only in
+that fd selection.
+
+--- a/src/gallium/winsys/nouveau/drm/nouveau.c
++++ b/src/gallium/winsys/nouveau/drm/nouveau.c
+@@ -22,0 +23,10 @@
++
++#if defined(NOUVEAU_DIAG_NVIF_CORRECT_DEL_FD) && \
++    !defined(NOUVEAU_DIAG_NVIF_LIFETIME)
++#error "the NVIF DEL fd candidate requires lifetime diagnostics"
++#endif
++
++#ifdef NOUVEAU_DIAG_NVIF_LIFETIME
++/* BSP class observed at the v5 decoder-construction failure. */
++#define NOUVEAU_DIAG_NVIF_BSP_CLASS 0x95b1
++#endif
+@@ -173,0 +184,15 @@
++#ifdef NOUVEAU_DIAG_NVIF_LIFETIME
++   int ret = drmCommandWrite(drm->fd, DRM_NOUVEAU_NVIF, &args, sizeof(args));
++   if (oclass == NOUVEAU_DIAG_NVIF_BSP_CLASS)
++      fprintf(stderr,
++              "NOUVEAU_DIAG_NVIF_NEW key=0x%016" PRIx64
++              " obj=%p object_token=0x%016" PRIx64
++              " route_token=0x%016" PRIx64
++              " parent=%p parent_handle=0x%016" PRIx64
++              " fd=%d class=0x%08" PRIx32 " ret=%d\n",
++              (uint64_t)args.new.object, (void *)obj,
++              (uint64_t)args.new.token, (uint64_t)args.ioctl.token,
++              (void *)parent, (uint64_t)parent->handle,
++              drm->fd, oclass, ret);
++   return ret;
++#else
+@@ -174,0 +200 @@
++#endif
+@@ -225,0 +252,6 @@
++#ifdef NOUVEAU_DIAG_NVIF_LIFETIME
++   fprintf(stderr,
++           "NOUVEAU_DIAG_NVIF_CHANNEL_FREE channel=0x%016" PRIx64
++           " fd=%d ret=%d\n",
++           (uint64_t)req.channel, drm->fd, ret);
++#endif
+@@ -244,0 +277,18 @@
++#ifdef NOUVEAU_DIAG_NVIF_LIFETIME
++   struct nouveau_drm *drm = nouveau_drm(obj->parent);
++#ifdef NOUVEAU_DIAG_NVIF_CORRECT_DEL_FD
++   const int delete_fd = drm->fd;
++#else
++   const int delete_fd = obj->parent->handle;
++#endif
++   const int ret = drmCommandWrite(delete_fd, DRM_NOUVEAU_NVIF, &args, sizeof(args));
++   if (obj->oclass == NOUVEAU_DIAG_NVIF_BSP_CLASS)
++      fprintf(stderr,
++              "NOUVEAU_DIAG_NVIF_DEL key=0x%016" PRIx64
++              " obj=%p parent=%p parent_handle=0x%016" PRIx64
++              " object_handle=0x%016" PRIx64
++              " fd=%d drm_fd=%d class=0x%08" PRIx32 " ret=%d\n",
++              (uint64_t)args.ioctl.object, (void *)obj, (void *)obj->parent,
++              (uint64_t)obj->parent->handle, (uint64_t)obj->handle,
++              delete_fd, drm->fd, obj->oclass, ret);
++#else
+@@ -245,0 +296 @@
++#endif
