@@ -33,6 +33,7 @@ PROFILE_PATH = ROOT / "runtime-profile.json"
 EXPECTED_KERNEL = correlator.EXPECTED_KERNEL
 EXPECTED_SRCVERSION = correlator.EXPECTED_NOUVEAU_SRCVERSION
 EXPECTED_PARAMS = {"diag_ctxsw": "N"}
+VALID_TERMINATION_REASONS = correlator.VALID_TERMINATION_REASONS
 FORBIDDEN_ENV = {
     "LD_LIBRARY_PATH",
     "LD_PRELOAD",
@@ -108,6 +109,23 @@ def hard_stop_records(data: bytes) -> list[dict[str, Any]]:
         return correlator.hard_stop_records(data)
     except ValueError as exc:
         raise RuntimeError(str(exc)) from exc
+
+
+def hard_stop_termination_reason(hard_stops: list[dict[str, Any]]) -> str:
+    if not hard_stops:
+        raise ValueError("a hard-stop termination requires at least one signature")
+    sources = {item.get("source") for item in hard_stops}
+    if not sources <= {"kernel", "workload"}:
+        raise ValueError("hard-stop signature has an unsupported source")
+    primary_source = (
+        "kernel"
+        if any(item["source"] == "kernel" for item in hard_stops)
+        else "workload"
+    )
+    reason = f"{primary_source}-hard-stop"
+    if reason not in VALID_TERMINATION_REASONS:
+        raise RuntimeError(f"capture produced an unsupported termination reason: {reason}")
+    return reason
 
 
 def parse_cursor(output: str) -> str:
@@ -626,12 +644,7 @@ def execute_capture(
                             break
                     if hard_stops:
                         _terminate_process_group(process)
-                        primary_source = (
-                            "kernel"
-                            if any(item["source"] == "kernel" for item in hard_stops)
-                            else "workload"
-                        )
-                        termination_reason = f"{primary_source}-hard-stop"
+                        termination_reason = hard_stop_termination_reason(hard_stops)
                         if stop_deadline is None:
                             stop_deadline = (
                                 time.monotonic()

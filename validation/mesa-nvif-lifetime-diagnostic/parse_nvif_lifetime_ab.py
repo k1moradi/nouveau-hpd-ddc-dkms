@@ -47,6 +47,14 @@ DECIMAL_FIELDS = {"fd", "drm_fd", "ret"}
 FIELD_RE = re.compile(r"([A-Za-z_][A-Za-z_0-9]*)=([^\s]+)")
 ERRNO_EEXIST = -17
 BSP_CLASS = 0x95B1
+VALID_TERMINATION_REASONS = frozenset({
+    "process-exit",
+    "bsp-eexist",
+    "kernel-hard-stop",
+    "workload-hard-stop",
+    "deadline",
+    "monitor-error",
+})
 EXPECTED_INPUT_SHA256 = (
     "d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2"
 )
@@ -708,9 +716,7 @@ def read_manifest(path: Path, expected_variant: str) -> dict[str, Any]:
             raise ValueError(f"{expected_variant} manifest has invalid {name}")
     if manifest["working_directory"] != profile["controlled_execution"]["working_directory"]:
         raise ValueError(f"{expected_variant} working directory is not pinned")
-    if manifest["termination_reason"] not in {
-        "process-exit", "bsp-eexist", "kernel-hard-stop", "deadline", "monitor-error",
-    }:
+    if manifest["termination_reason"] not in VALID_TERMINATION_REASONS:
         raise ValueError(f"{expected_variant} termination reason is invalid")
     if not isinstance(manifest["xauthority_sha256"], str) or not re.fullmatch(
         r"[0-9a-f]{64}", manifest["xauthority_sha256"]

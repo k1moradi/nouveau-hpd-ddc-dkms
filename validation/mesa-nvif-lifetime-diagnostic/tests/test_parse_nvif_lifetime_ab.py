@@ -514,6 +514,61 @@ class NvifLifetimeParserTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "DSO SHA-256"):
                 parser.read_manifest(path, "A")
 
+    def test_manifest_loader_accepts_workload_hard_stop_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            item = manifest("A", boot_id="boot-a")
+            dso = root / "libgallium_drv_video.so"
+            dso.write_bytes(b"synthetic DSO")
+            alias = root / "nouveau_drv_video.so"
+            alias.symlink_to(dso)
+            module = root / "nouveau.ko.zst"
+            module.write_bytes(b"synthetic installed module")
+            preflight = root / "journal-preflight.jsonl"
+            preflight.write_text(
+                json.dumps({
+                    "MESSAGE": "nouveau: initialized",
+                    "_BOOT_ID": "boot-a",
+                    "_TRANSPORT": "kernel",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            item.update({
+                "dso_resolved_path": str(dso),
+                "dso_alias_path": str(alias),
+                "nouveau_module_path": str(module),
+                "nouveau_module_file_sha256": hashlib.sha256(
+                    module.read_bytes()
+                ).hexdigest(),
+                "preflight_journal_sha256": hashlib.sha256(
+                    preflight.read_bytes()
+                ).hexdigest(),
+                "termination_reason": "workload-hard-stop",
+                "postrun_hard_stops": [{
+                    "source": "workload",
+                    "kinds": ["SIGBUS"],
+                    "message": "Bus error",
+                }],
+                "workload_returncode": -7,
+            })
+            path = root / "manifest.json"
+            path.write_text(json.dumps(item), encoding="utf-8")
+            media = Path(parser.load_runtime_profile()["argv"][-1])
+            original_hash = parser._sha256_file
+
+            def fake_hash(candidate: Path) -> str:
+                if candidate == media:
+                    return parser.EXPECTED_INPUT_SHA256
+                if candidate == dso:
+                    return parser.EXPECTED_DSO_SHA256["A"]
+                return original_hash(candidate)
+
+            with mock.patch.object(parser, "_sha256_file", side_effect=fake_hash):
+                loaded = parser.read_manifest(path, "A")
+
+        self.assertEqual(loaded["termination_reason"], "workload-hard-stop")
+        self.assertEqual(loaded["postrun_hard_stops"][0]["source"], "workload")
+
     def test_runtime_profile_is_pinned_and_has_stage4_command(self) -> None:
         profile = parser.load_runtime_profile()
         self.assertEqual(

@@ -19,6 +19,31 @@ import parse_nvif_lifetime_ab as correlator
 
 
 class NvifLifetimeCaptureTests(unittest.TestCase):
+    def test_capture_and_parser_share_termination_reason_contract(self) -> None:
+        self.assertEqual(
+            capture.VALID_TERMINATION_REASONS,
+            correlator.VALID_TERMINATION_REASONS,
+        )
+        self.assertEqual(
+            capture.hard_stop_termination_reason(
+                [{"source": "workload", "kinds": ["SIGBUS"]}]
+            ),
+            "workload-hard-stop",
+        )
+        self.assertEqual(
+            capture.hard_stop_termination_reason(
+                [
+                    {"source": "workload", "kinds": ["SIGBUS"]},
+                    {"source": "kernel", "kinds": ["PTE"]},
+                ]
+            ),
+            "kernel-hard-stop",
+        )
+        with self.assertRaisesRegex(ValueError, "at least one signature"):
+            capture.hard_stop_termination_reason([])
+        with self.assertRaisesRegex(ValueError, "unsupported source"):
+            capture.hard_stop_termination_reason([{"source": "unknown"}])
+
     def test_profile_pins_saved_stage4_command_and_limits(self) -> None:
         profile = capture.load_profile()
         self.assertEqual(profile["input_sha256"], correlator.EXPECTED_INPUT_SHA256)
