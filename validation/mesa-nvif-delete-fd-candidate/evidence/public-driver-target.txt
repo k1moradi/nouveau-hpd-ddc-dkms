@@ -1,0 +1,1 @@
+/home/keivan/nouveau-vaapi-app-validation/mpv-eexist-delete-fd-candidate-20261001/prefix/lib/x86_64-linux-gnu/dri/libgallium_drv_video.so

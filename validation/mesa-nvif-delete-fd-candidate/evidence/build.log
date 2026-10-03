@@ -1,0 +1,5 @@
+ninja: Entering directory `/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-functional-no-mesa-diag-20260930/build-x11-va-sysroot'
+[1/8] Generating src/git_sha1.h with a custom command
+[2/4] Compiling C object src/gallium/winsys/nouveau/drm/libnouveauwinsys.a.p/nouveau.c.o
+[3/4] Linking static target src/gallium/winsys/nouveau/drm/libnouveauwinsys.a
+[4/4] Linking target src/gallium/targets/va/libgallium_drv_video.so

@@ -1,0 +1,5 @@
+--- a/src/gallium/winsys/nouveau/drm/nouveau.c
++++ b/src/gallium/winsys/nouveau/drm/nouveau.c
+@@ -245 +245 @@
+-   drmCommandWrite(obj->parent->handle, DRM_NOUVEAU_NVIF, &args, sizeof(args));
++   drmCommandWrite(nouveau_drm(obj->parent)->fd, DRM_NOUVEAU_NVIF, &args, sizeof(args));
