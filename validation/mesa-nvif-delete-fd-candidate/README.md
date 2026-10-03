@@ -60,6 +60,42 @@ successful decoder B creation. Channel teardown and the ABI16 per-file object
 table's behavior must remain part of the review; source plausibility alone is
 not causal proof.
 
+## Kernel duplicate-key path (source audited)
+
+The exact Ubuntu 7.0.0-34 source stack used for the v1-v8 build confirms a
+specific ABI16 path that can explain the observed error:
+
+1. `nouveau_abi16_obj_new()` searches the per-client `abi16->objects` list by
+   the NVIF object key and returns `ERR_PTR(-EEXIST)` when that key is already
+   present.
+2. `nouveau_abi16_ioctl_new()` inserts an `ENGOBJ` entry using
+   `args->object` before forwarding the request to `nvif_object_ctor()`.
+3. `nouveau_abi16_ioctl_del()` removes that list entry when DEL reaches the
+   correct DRM client's ioctl path.
+4. `nouveau_abi16_chan_fini()` destroys the channel and its child NVIF objects,
+   but does not remove the separate `abi16->objects` entry. The entries are
+   drained by `nouveau_abi16_fini()` when that DRM client is torn down.
+
+The exact source files and SHA-256 values in the v1-v8 scratch source are:
+
+```text
+drivers/gpu/drm/nouveau/nouveau_abi16.c
+3d4c81dd87c8e426b7e948eb448a49075d1df54ab22c68b8e181a0b88bd28fec
+
+drivers/gpu/drm/nouveau/nvkm/core/ioctl.c
+2a18013840cee2298edadd19171b083cfed2bb7227a13303ac9afad34a107e18
+
+drivers/gpu/drm/nouveau/nvkm/core/object.c
+7dc1fca97b143da107a1234d467774608b0808ca84f88f368313941126890c6d
+```
+
+There is a second possible `-EEXIST` source: `nvkm_ioctl_new()` returns
+`-EEXIST` if `nvkm_object_insert()` finds an equal object key in the NVKM
+client tree. The v5 constructor-stage result did not identify which layer
+returned the error. Source makes the ABI16 stale-key path especially
+consistent with the wrong-fd candidate, but hardware capture of the `DEL`
+result/key and kernel duplicate layer is still needed to prove that path.
+
 This candidate does not address the separately observed VP3 H.264 reference
 slot assertion or ffplay's interlaced VA-surface export rejection. Visible
 hardware playback remains unaccepted, and `main` remains HOLD.
@@ -76,3 +112,17 @@ MESA_NOUVEAU_C_SOURCE=/path/to/mesa-26.0.8/src/gallium/winsys/nouveau/drm/nouvea
 The test checks the source SHA, applies the patch with zero fuzz to a temporary
 copy, and verifies that the only source-line change is the first argument to
 the subchannel `DEL` ioctl.
+
+The kernel duplicate-key source audit has its own source-contract tests:
+
+```bash
+NOUVEAU_KERNEL_SOURCE_ROOT=/path/to/v1-v8-linux-source \
+  PYTHONDONTWRITEBYTECODE=1 \
+  python3 -m unittest -v tests/test_linux_abi16_duplicate_key.py
+```
+
+The combined Mesa-patch and kernel-source contract suite passed **9/9** on
+2026-10-02 against the pinned source hashes above. These checks validate patch
+application and source control flow; they are not runtime proof that the
+observed hardware `-EEXIST` came from ABI16 or that corrected DEL restores
+visible playback.
