@@ -48,10 +48,11 @@ the same build steps and configuration.
 
 The build helper is
 [`../build_nvif_lifetime_ab.py`](../build_nvif_lifetime_ab.py). It verifies the
-pinned source and baseline DSO hashes, applies the diagnostic patch with
-`--fuzz=0`, creates separate build copies, asserts the one-define A/B command
-delta, links the VA target, and checks the diagnostic strings. It performs no
-install, loader, module, or GPU action.
+pinned source, diagnostic patch, baseline DSO and baseline build metadata;
+applies the diagnostic patch with `--fuzz=0`; creates separate build copies;
+checks the one-define A/B command delta before and after linking; verifies the
+original baseline tree stayed unchanged; and checks the diagnostic strings.
+It performs no install, loader, module, or GPU action.
 
 The full logs, exact compiler commands, Meson options, manifest, and SHA256
 manifest are in [`linked-ab-20261003/`](linked-ab-20261003/). The linked DSO
@@ -63,9 +64,48 @@ files and complete 940-command Ninja listings remain under:
 
 Their SHA-256 values are recorded above and in that directory's `manifest.json`.
 
+## Post-link verification and future-run pins
+
+After the `87d44e9` link checkpoint, the existing A/B build trees were checked
+again without invoking a build. The post-link target command graphs still have
+940 entries and differ at exactly one command, index 746: the `nouveau.c.o`
+compile, with only B's `NOUVEAU_DIAG_NVIF_CORRECT_DEL_FD` define. Both current
+post-link graphs byte-match the command listings captured for the original
+build. The baseline VA DSO still hashes to
+`aceac163eabeefe5e4c1f2eb38469239044e30671aebcec743e4277f5897b536`.
+
+The one reference to the original build tree in each command graph is the
+read-only linker input `src/gallium/targets/va/va.sym`, passed as a GNU ld
+version-script argument. The output DSO and intermediate outputs are relative
+to each private A/B build directory; no command references another baseline
+build-tree output. The updated helper checks this explicitly.
+
+The following baseline metadata hashes were measured during this post-link
+audit and are now mandatory pins for future helper runs:
+
+| Baseline input | SHA-256 |
+|---|---|
+| `build.ninja` | `ba2acdaa119fb43ef5c98780e19bc59af2d5cfc51bf4cf34769af06534c71ff7` |
+| `meson-private/coredata.dat` | `5fa21fef3f842c90196b57a5e1a9b8aefefcff39db25cef0c58a0c3e872dfed7` |
+| `compile_commands.json` | `c6824053b21c8d8f6b7d68021da7f75e4ad947a41008201259543e4576206151` |
+
+The read-only VA version-script input `src/gallium/targets/va/va.sym` hashes
+to `61fc96386f8ab4ca3473c7d48d2aaec54681b2ac6192bd21752518949d34a7f2` and
+is checked before and after future A/B link runs.
+
+These are post-link observations; they are **not** claimed as pre-link checks
+for the original build. The machine-readable audit is
+[`linked-ab-20261003/post-link-audit-20261003.json`](linked-ab-20261003/post-link-audit-20261003.json).
+The build-helper invariant suite passes **9/9**, the combined focused NVIF
+suite passes **27/27**, and `py_compile` passes for all six Python files.
+
 ## Runtime status
 
 Neither DSO was installed, selected by libva, or executed. No kernel module or
 initramfs was changed; no reboot or VA/GPU workload was run. The corrected-fd
 variant remains a diagnostic A/B candidate, not a validated playback fix.
 `main` remains HOLD.
+
+For the eventual runtime comparison, Variant A must first reproduce the
+relevant `-EEXIST` lifecycle. If A does not reproduce it, a successful B run
+is inconclusive and cannot establish that the fd change fixed the failure.

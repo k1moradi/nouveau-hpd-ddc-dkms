@@ -1,0 +1,71 @@
+{
+  "base_build_metadata_sha256_post_link": {
+    "build.ninja": "ba2acdaa119fb43ef5c98780e19bc59af2d5cfc51bf4cf34769af06534c71ff7",
+    "compile_commands.json": "c6824053b21c8d8f6b7d68021da7f75e4ad947a41008201259543e4576206151",
+    "meson-private/coredata.dat": "5fa21fef3f842c90196b57a5e1a9b8aefefcff39db25cef0c58a0c3e872dfed7"
+  },
+  "base_dso_sha256_post_link": "aceac163eabeefe5e4c1f2eb38469239044e30671aebcec743e4277f5897b536",
+  "base_dso_unchanged": true,
+  "base_version_script_sha256_post_link": "61fc96386f8ab4ca3473c7d48d2aaec54681b2ac6192bd21752518949d34a7f2",
+  "baseline_tree_reference": {
+    "classification": "read-only linker version-script input",
+    "count_per_graph": 1,
+    "other_baseline_tree_path_references": 0,
+    "path": "src/gallium/targets/va/va.sym",
+    "sha256": "61fc96386f8ab4ca3473c7d48d2aaec54681b2ac6192bd21752518949d34a7f2",
+    "writes_into_baseline_build_tree": 0
+  },
+  "checks": {
+    "A_compiler_command_matches_captured": true,
+    "A_dso_matches_frozen_sha256": true,
+    "A_exit_zero": true,
+    "A_post_graph_matches_captured_prebuild_commands": true,
+    "B_compiler_command_matches_captured": true,
+    "B_dso_matches_frozen_sha256": true,
+    "B_exit_zero": true,
+    "B_post_graph_matches_captured_prebuild_commands": true
+  },
+  "claim_boundary": "Hashes here are post-link observations and future-run pins; they are not claimed as pre-link checks for the original A/B build.",
+  "cloned_meson_metadata_sha256": {
+    "A": {
+      "compile_commands.json": "c6824053b21c8d8f6b7d68021da7f75e4ad947a41008201259543e4576206151",
+      "meson-private/coredata.dat": "5fa21fef3f842c90196b57a5e1a9b8aefefcff39db25cef0c58a0c3e872dfed7"
+    },
+    "B": {
+      "compile_commands.json": "c6824053b21c8d8f6b7d68021da7f75e4ad947a41008201259543e4576206151",
+      "meson-private/coredata.dat": "5fa21fef3f842c90196b57a5e1a9b8aefefcff39db25cef0c58a0c3e872dfed7"
+    }
+  },
+  "diagnostic_patch_sha256": "f89c752fc445d4534f46ce45813a877b4229efdeae7d6d306429fb7462f913b7",
+  "evidence_kind": "POST_LINK_REVALIDATION_OF_EXISTING_87D44E9_ARTIFACTS",
+  "linked_dsos": {
+    "A": {
+      "exit": 0,
+      "sha256": "1d8f71c5ad0884a43496cfb199e7a38eb5528441e3f24daf4dbf3f7a7c4a28f9"
+    },
+    "B": {
+      "exit": 0,
+      "sha256": "0fe4c64811e3bc77ddd00842796dbd9a8c3906599c74612ec81433ba6ebfd056"
+    }
+  },
+  "post_link_graph": {
+    "changed_command_index": 746,
+    "hashes": {
+      "build_ninja_a_sha256": "18b88a0d12e12232cf7fbe5fcb456d1a77346c16e4948b7b8a108d3626bc693f",
+      "build_ninja_b_sha256": "45f2e85ad46e5d21fb0a715e0f84297a74c9cc5f07f1c2cb1ea362c960770d35",
+      "nouveau_compile_a_sha256": "12ab022c6b116a68ac7ffa25e835907110c8da94b58ea364e9b3dcadf924069e",
+      "nouveau_compile_b_sha256": "c79199644f319efbbeea0aeaaf4b09b0754effbe497e7a0c741a145d26758225",
+      "target_commands_a_sha256": "b3d1751df7a56333232e26cfc5f6ed8d90c0621fc8156c58a5f43de3c58441ac",
+      "target_commands_b_sha256": "a1961c0313b65a75c1aea1e14e74c681927daaeda2044c5eed1020655173ec30"
+    },
+    "matches_captured_prebuild_commands": {
+      "A": true,
+      "B": true
+    },
+    "only_difference": "-DNOUVEAU_DIAG_NVIF_CORRECT_DEL_FD",
+    "target_command_count": 940
+  },
+  "review_branch_commit": "87d44e97cab662663160097c4f2b9e48371c5e2e",
+  "runtime_status": "NEITHER_DSO_INSTALLED_OR_EXECUTED; NO_GPU_WORKLOAD",
+  "schema": 1
+}
