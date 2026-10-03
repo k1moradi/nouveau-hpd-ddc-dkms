@@ -26,6 +26,9 @@ Kernel duplicate-layer diagnostic:
 - Combined result: **18/18 tests passed**.
 - `py_compile` passed for all four test files.
 - Added-line whitespace checks passed for the new files and patch payload.
+- The patched `nouveau.c` translation unit passed `-fsyntax-only` twice with
+  the saved Mesa build flags, including `-Werror=format`: once with the
+  baseline diagnostic macro and once with the correct-DEL-fd candidate macro.
 
 The tests confirm that both A/B builds use the same BSP NEW/DEL and channel
 free logging, that the diagnostic baseline retains the existing parent-handle
@@ -35,7 +38,15 @@ object key/token fields and ioctl return values are included in the records.
 
 ## Not performed
 
-No Mesa diagnostic DSO was built. No module was installed, loaded, or
+The syntax-only compiler check used this existing compile database:
+
+```text
+/home/keivan/.cache/nouveau-vaapi-followup-20260928/
+private-functional-no-mesa-diag-20260930/build-x11-va-sysroot/compile_commands.json
+```
+
+It compiled a temporary copy of the pinned source after zero-fuzz patch
+application. It did not link the Mesa library/DSO. No module was installed, loaded, or
 unloaded; no initramfs was changed; no reboot or GPU workload was run. This is
 an instrumentation source-review checkpoint, not hardware evidence and not a
 BAR2/PTE or playback fix.

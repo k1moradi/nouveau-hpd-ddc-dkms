@@ -1,6 +1,6 @@
 # Mesa Nouveau BSP NVIF lifetime A/B diagnostic
 
-**Status: diagnostic candidate only; not built or run on hardware.** This
+**Status: diagnostic candidate only; not linked or run on hardware.** This
 patch prepares the missing userspace records for the stage-4 BSP NEW
 `-EEXIST` investigation. It complements the kernel duplicate-layer markers in
 `validation/nouveau-nvif-duplicate-diagnostic/`.
@@ -73,6 +73,11 @@ The test checks the pristine source identity, applies the patch with zero fuzz,
 and verifies the shared logging fields and the two fd-selection branches.
 This is a source-contract check; it does not replace compilation or runtime
 causality evidence.
+
+The patched `nouveau.c` translation unit has also passed `-fsyntax-only` in
+both A/B macro configurations, using the saved Mesa compile-database flags
+with `-Werror=format`. No Mesa library/DSO was linked; see the validation record
+for the exact source and build-database identities.
 
 The first source-validation checkpoint is recorded in
 [`evidence/CPU-VALIDATION.md`](evidence/CPU-VALIDATION.md). The diagnostic
