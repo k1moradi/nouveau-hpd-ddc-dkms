@@ -178,6 +178,32 @@ This is an export-representation failure after decode, distinct from MPV's
 replacement-decoder construction failure. It does not prove the two have no
 deeper shared lifetime cause.
 
+### Upstream Mesa source comparison
+
+At the same Mesa GitLab `main` commit recorded above, `vlVaExportSurfaceHandle()`
+still returns `VA_STATUS_ERROR_INVALID_SURFACE` when
+`surf->buffer->interlaced` is true, before retrieving surfaces or exporting a
+resource (`src/gallium/frontends/va/surface.c`, lines 1188-1193 at that
+revision). The raw file SHA-256 is
+`6efb729716e91593a78af8e2c07e42091a41343a8fd9431afd3ba63c54dd2023`. The
+current Nouveau VP3 buffer code still sets `interlaced = true` and allocates
+`PIPE_TEXTURE_2D_ARRAY` storage; its file SHA-256 is
+`d5cc2a6692f0db2a7218957c98d8ccf4e3792c70b8393d3e5cbc89ac46489a48`.
+Therefore this upstream snapshot has not removed the captured export rejection
+or supplied a progressive representation for these field-separated buffers.
+
+Two later VA frontend commits in that upstream history are relevant to retained
+surface/decoder lifetime, but not a demonstrated fix for either first failure:
+[`dcf4b9426814c4aa698c3a54ff73579f252d8ad9`](https://gitlab.freedesktop.org/mesa/mesa/-/commit/dcf4b9426814c4aa698c3a54ff73579f252d8ad9)
+adds `pipe_video_codec` refcounting, and
+[`96c11b68e7f479ecbdc715ab0f28fa0113e09e28`](https://gitlab.freedesktop.org/mesa/mesa/-/commit/96c11b68e7f479ecbdc715ab0f28fa0113e09e28)
+retains codec references in surfaces/buffers for fence wait/destruction. Their
+diffs may change when an old decoder is destroyed while surfaces remain alive;
+they do not change the NVIF subchannel DEL fd, and the current export function
+still has the interlaced guard. Treat these changes as a separate later
+lifecycle comparison, not as evidence that the wrong-fd or export candidates
+are fixed.
+
 ## Evidence caveat and status
 
 The MPV trace directory's historical `result-audit.txt` says
