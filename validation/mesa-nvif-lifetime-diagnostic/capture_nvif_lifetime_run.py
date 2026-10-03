@@ -85,8 +85,15 @@ def load_profile(path: Path = PROFILE_PATH) -> dict[str, Any]:
     return profile
 
 
-def hard_stop_kinds(message: str) -> tuple[str, ...]:
-    return correlator.hard_stop_kinds(message)
+def journal_records(data: bytes) -> list[dict[str, Any]]:
+    try:
+        return correlator.journal_records(data)
+    except ValueError as exc:
+        raise RuntimeError(str(exc)) from exc
+
+
+def hard_stop_kinds(record: dict[str, Any]) -> tuple[str, ...]:
+    return correlator.journal_record_hard_stop_kinds(record)
 
 
 def journal_messages(data: bytes) -> list[str]:
@@ -216,6 +223,53 @@ def require_parameter_disabled(name: str, value: str) -> str:
     raise RuntimeError(f"{name} must be disabled; observed {value!r}")
 
 
+def _modinfo_field(modinfo: str, field: str, target: str) -> str:
+    try:
+        output = run_checked(
+            [modinfo, "-F", field, target],
+            timeout=5,
+        ).decode("utf-8", "replace")
+    except RuntimeError as exc:
+        raise RuntimeError(f"cannot read Nouveau modinfo field {field}: {exc}") from exc
+    values = [line.strip() for line in output.splitlines() if line.strip()]
+    if len(values) != 1:
+        raise RuntimeError(
+            f"modinfo returned {len(values)} values for Nouveau field {field}"
+        )
+    return values[0]
+
+
+def installed_module_identity() -> dict[str, str]:
+    """Fingerprint the module file selected by modinfo after install/sign/compress."""
+    modinfo = shutil.which("modinfo")
+    if not modinfo:
+        raise RuntimeError("modinfo is unavailable; installed Nouveau is unverified")
+    selected = _modinfo_field(modinfo, "filename", "nouveau")
+    if selected in {"(builtin)", "builtin"}:
+        raise RuntimeError("Nouveau is built in; expected an installed module file")
+    try:
+        module_path = Path(selected).resolve(strict=True)
+    except OSError as exc:
+        raise RuntimeError(f"selected Nouveau module file is unavailable: {exc}") from exc
+    if not module_path.is_file():
+        raise RuntimeError("selected Nouveau module path is not a regular file")
+
+    srcversion = _modinfo_field(modinfo, "srcversion", str(module_path))
+    vermagic = _modinfo_field(modinfo, "vermagic", str(module_path))
+    if srcversion != EXPECTED_SRCVERSION:
+        raise RuntimeError(f"installed Nouveau srcversion mismatch: {srcversion}")
+    fields = vermagic.split()
+    if not fields or fields[0] != EXPECTED_KERNEL:
+        raise RuntimeError(f"installed Nouveau vermagic mismatch: {vermagic}")
+
+    return {
+        "path": str(module_path),
+        "file_sha256": sha256_file(module_path),
+        "srcversion": srcversion,
+        "vermagic": vermagic,
+    }
+
+
 def observed_runtime(*, variant: str, dso: Path) -> dict[str, Any]:
     if variant not in {"A", "B"}:
         raise RuntimeError("variant must be A or B")
@@ -245,14 +299,19 @@ def observed_runtime(*, variant: str, dso: Path) -> dict[str, Any]:
         ).strip()
     except OSError as exc:
         raise RuntimeError(f"cannot read required live Nouveau provenance: {exc}") from exc
-    param = require_parameter_disabled(
-        "diag_ctxsw",
-        read_module_parameter("diag_ctxsw"),
-    )
     if not boot_id:
         raise RuntimeError("current boot ID is empty")
     if srcversion != EXPECTED_SRCVERSION:
         raise RuntimeError(f"unexpected loaded Nouveau srcversion: {srcversion}")
+    module_identity = installed_module_identity()
+    if module_identity["srcversion"] != srcversion:
+        raise RuntimeError(
+            "selected installed Nouveau module does not match the loaded srcversion"
+        )
+    param = require_parameter_disabled(
+        "diag_ctxsw",
+        read_module_parameter("diag_ctxsw"),
+    )
 
     display = os.environ.get("DISPLAY", "")
     xauthority_text = os.environ.get("XAUTHORITY", "")
@@ -321,6 +380,10 @@ def observed_runtime(*, variant: str, dso: Path) -> dict[str, Any]:
         ),
         "kernel": platform.release(),
         "nouveau_srcversion": srcversion,
+        "nouveau_module_path": module_identity["path"],
+        "nouveau_module_file_sha256": module_identity["file_sha256"],
+        "nouveau_module_srcversion": module_identity["srcversion"],
+        "nouveau_module_vermagic": module_identity["vermagic"],
         "nouveau_parameters": {"diag_ctxsw": param.upper()},
         "dso_sha256": dso_hash,
         "dso_resolved_path": str(dso),
@@ -343,19 +406,55 @@ def observed_runtime(*, variant: str, dso: Path) -> dict[str, Any]:
     }
 
 
-def _terminate_process_group(proc: subprocess.Popen[str]) -> None:
-    if proc.poll() is not None:
-        return
-    for sig, timeout in ((signal.SIGINT, 2), (signal.SIGTERM, 2), (signal.SIGKILL, 2)):
+def _terminate_process_group(
+    proc: subprocess.Popen[str],
+    *,
+    sigint_grace: float = 2.0,
+    sigterm_grace: float = 2.0,
+    sigkill_grace: float = 2.0,
+) -> None:
+    pgid = proc.pid
+    for sig, timeout in (
+        (signal.SIGINT, sigint_grace),
+        (signal.SIGTERM, sigterm_grace),
+        (signal.SIGKILL, sigkill_grace),
+    ):
         try:
-            os.killpg(proc.pid, sig)
+            # The launcher can exit before a descendant. Keep signaling and
+            # checking the process group even when Popen's leader has exited.
+            os.killpg(pgid, sig)
         except ProcessLookupError:
-            break
+            proc.wait(timeout=5)
+            return
+
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if not process_group_members(pgid):
+                proc.wait(timeout=5)
+                return
+            time.sleep(0.05)
+
+    if process_group_members(pgid):
+        raise RuntimeError(
+            f"process group {pgid} remains after SIGKILL escalation"
+        )
+    proc.wait(timeout=5)
+
+
+def process_group_members(pgid: int) -> list[tuple[int, str]]:
+    """Return non-zombie members of a process group, including after leader exit."""
+    members: list[tuple[int, str]] = []
+    for stat_path in Path("/proc").glob("[0-9]*/stat"):
         try:
-            proc.wait(timeout=timeout)
-            break
-        except subprocess.TimeoutExpired:
+            raw = stat_path.read_text(encoding="ascii")
+            tail = raw[raw.rfind(")") + 2 :].split()
+            state = tail[0]
+            process_group = int(tail[2])
+            if process_group == pgid and state != "Z":
+                members.append((int(stat_path.parent.name), state))
+        except (OSError, ValueError, IndexError):
             continue
+    return members
 
 
 def _consume_follower(selector: selectors.BaseSelector, fd: int) -> list[bytes]:
@@ -482,7 +581,7 @@ def execute_capture(
                     pending = bytearray(remainder)
                     line += b"\n"
                     try:
-                        messages = journal_messages(line)
+                        records = journal_records(line)
                     except RuntimeError as exc:
                         monitor_error = str(exc)
                         _terminate_process_group(process)
@@ -493,10 +592,17 @@ def execute_capture(
                                 + profile["post_stop_observation_seconds"]
                             )
                         break
-                    for message in messages:
-                        kinds = hard_stop_kinds(message)
+                    for record in records:
+                        message = record.get("MESSAGE")
+                        if not isinstance(message, str):
+                            continue
+                        kinds = hard_stop_kinds(record)
                         if kinds:
-                            hard_stops.append({"kinds": list(kinds), "message": message})
+                            hard_stops.append({
+                                "source": correlator.journal_record_hard_stop_source(record),
+                                "kinds": list(kinds),
+                                "message": message,
+                            })
                         try:
                             eexist = correlator.is_bsp_new_eexist(message)
                         except ValueError as exc:
@@ -520,7 +626,12 @@ def execute_capture(
                             break
                     if hard_stops:
                         _terminate_process_group(process)
-                        termination_reason = "kernel-hard-stop"
+                        primary_source = (
+                            "kernel"
+                            if any(item["source"] == "kernel" for item in hard_stops)
+                            else "workload"
+                        )
+                        termination_reason = f"{primary_source}-hard-stop"
                         if stop_deadline is None:
                             stop_deadline = (
                                 time.monotonic()
@@ -589,8 +700,10 @@ def execute_capture(
         "journal_monitor_error": monitor_error,
         "journal_boundary_proven": not bool(monitor_error),
     })
-    if all_stops:
+    if any(record.get("source") == "kernel" for record in all_stops):
         manifest["outcome"] = "KERNEL_FAILURE"
+    elif all_stops:
+        manifest["outcome"] = "WORKLOAD_FAILURE"
     elif monitor_error:
         manifest["outcome"] = "JOURNAL_BOUNDARY_UNPROVEN"
     elif timed_out:
@@ -622,6 +735,8 @@ def capture_exit_status(result: dict[str, Any], *, variant: str) -> int:
         raise ValueError("variant must be A or B")
     outcome = result.get("outcome")
     if result.get("postrun_hard_stops") or outcome == "KERNEL_FAILURE":
+        return 4
+    if outcome == "WORKLOAD_FAILURE":
         return 4
     if (
         result.get("workload_timed_out")

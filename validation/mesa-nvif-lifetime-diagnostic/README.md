@@ -143,25 +143,47 @@ hard-stop signature.
 ### Generated capture and journal boundary
 
 Do not hand-edit run manifests. `capture_nvif_lifetime_run.py` generates
-schema-2 manifests from the current boot, loaded Nouveau srcversion, module
-parameter, pinned media, resolved private VA DSO, environment, and journal
-cursor. It writes the full-boot preflight journal as
+schema-2 manifests from the current boot, loaded Nouveau srcversion, the module
+file selected by `modinfo`, its post-install file SHA-256, srcversion and
+vermagic, the module parameter, pinned media, resolved private VA DSO,
+environment, and journal cursor. It checks that the selected file's srcversion
+matches the loaded module and that its vermagic targets the pinned kernel. The
+parser re-hashes that same module file when validating the manifest and requires
+its path, hash and metadata to match across A/B. It writes the full-boot
+preflight journal as
 `journal-preflight.jsonl`, then stores only the records after the captured
 cursor in `journal-delta.jsonl`. The parser verifies both files against the
 manifest hashes and boot ID. Preflight also requires visible `_TRANSPORT=kernel`
 records so restricted journal access cannot masquerade as a clean kernel log.
 
+The module-file SHA is observed after installation/signing/compression on each
+run, rather than compared against a deployment hash frozen before install.
+That deployment-specific pin cannot be made until the reviewed diagnostic
+module is installed. The current checks prove the selected installed file did
+not change between capture and analysis and that A/B used the same file
+identity; they do not yet prove that file is the planned signed/compressed
+deployment artifact.
+
 The cursor is obtained before the full-boot snapshot, avoiding a gap between
 the clean-baseline scan and the journal boundary. The workload is launched
 through `systemd-cat` to capture Mesa diagnostics with kernel records. The
-runner stops the MPV process group on the first pinned BSP NEW `-EEXIST`, a
-kernel hard stop, a monitor error, or the 18-second bound. It then passively
-collects journal records for 30 seconds. No additional decoder is launched.
+runner stops the entire MPV process group, including surviving descendants
+after the launcher exits, on the first pinned BSP NEW `-EEXIST`, a classified
+hard stop, a monitor error, or the 18-second bound. It verifies that no live
+non-zombie process remains in the group after signal escalation. It then
+passively collects journal records for 30 seconds. No additional decoder is
+launched.
 The generated manifest records hashes and resolved paths for the MPV and
 `systemd-cat` executables; the pair comparator requires them to match. The
-hard-stop classifier includes `PRIV_VIOLATION`, `SIGBUS`/`Bus error`, GPU
-reset messages, CTXSW, BAR2/PTE, channel kill, failed-idle, sanitizer, lockdep,
-and PROP RT-overrun records.
+hard-stop classifier uses journal source metadata. Kernel signatures such as
+`PRIV_VIOLATION`, GPU reset, CTXSW, BAR2/PTE, channel kill, failed-idle,
+sanitizer, lockdep, kernel `WARNING`, and PROP RT-overrun are accepted only on
+`_TRANSPORT=kernel` records. `SIGBUS`/`Bus error` is accepted as a workload
+failure only when the record's `SYSLOG_IDENTIFIER` is the pinned
+`nouveau-nvif-lifetime` runner identifier. Unrelated userspace text containing
+words such as `WARNING`, `BAR2`, or `PTE` is ignored. Any kernel hard stop
+overrides workload/lifecycle success; a tagged workload fatal also prevents a
+successful A/B outcome.
 
 The current kernel exposes `diag_ctxsw` as a root-readable-only sysfs
 parameter. The runner reads it directly when allowed and otherwise uses only
@@ -203,9 +225,9 @@ python3 validation/mesa-nvif-lifetime-diagnostic/parse_nvif_lifetime_ab.py \
 ```
 
 The parser requires separate boots, matching workload/environment/kernel and
-module identity, pinned per-variant DSO hashes, verified journal hashes and
-clean preflight artifacts. A hard-stop event from either run overrides the
-NVIF lifecycle result. It accepts the A baseline only for a successful first
+observed installed-module identity, pinned per-variant DSO hashes, verified
+journal hashes and clean preflight artifacts. A kernel hard-stop event from
+either run overrides the NVIF lifecycle result. It accepts the A baseline only for a successful first
 NEW, wrong-fd DEL attempt, successful old-channel free, replacement NEW
 returning `-EEXIST`, and a same-key/channel ABI16 duplicate marker. The DEL
 return is retained and can be zero or nonzero, as described above. An NVKM

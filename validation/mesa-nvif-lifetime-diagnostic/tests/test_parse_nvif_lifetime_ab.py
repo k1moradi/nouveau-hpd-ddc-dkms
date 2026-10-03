@@ -14,6 +14,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import parse_nvif_lifetime_ab as parser
 
 
+TEST_MODULE_PATH = Path(__file__).parent / "fixtures" / "synthetic-nouveau-module.bin"
+TEST_MODULE_SHA256 = hashlib.sha256(TEST_MODULE_PATH.read_bytes()).hexdigest()
+
+
 def journal_line(
     message: str,
     stamp: int,
@@ -139,6 +143,12 @@ def manifest(variant: str, *, boot_id: str | None = None) -> dict[str, object]:
         "normalized_environment": environment,
         "kernel": "7.0.0-34-generic",
         "nouveau_srcversion": parser.EXPECTED_NOUVEAU_SRCVERSION,
+        "nouveau_module_path": str(TEST_MODULE_PATH.resolve()),
+        "nouveau_module_file_sha256": TEST_MODULE_SHA256,
+        "nouveau_module_srcversion": parser.EXPECTED_NOUVEAU_SRCVERSION,
+        "nouveau_module_vermagic": (
+            "7.0.0-34-generic SMP preempt mod_unload modversions"
+        ),
         "nouveau_parameters": {"diag_ctxsw": "N"},
         "dso_sha256": parser.EXPECTED_DSO_SHA256[variant],
         "dso_resolved_path": f"/tmp/{variant}/libgallium_drv_video.so",
@@ -357,11 +367,26 @@ class NvifLifetimeParserTests(unittest.TestCase):
             manifest("A"),
             manifest("B"),
             hard_stops_b=[{
+                "source": "kernel",
                 "kinds": ["CTXSW_TIMEOUT"],
                 "message": "nouveau fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]",
             }],
         )
         self.assertEqual(result["outcome"], "KERNEL_FAILURE")
+
+    def test_workload_fatal_is_scoped_and_overrides_lifecycle_success(self) -> None:
+        result = parser.compare_runs(
+            self.parse(baseline_records()),
+            self.parse(candidate_records()),
+            manifest("A"),
+            manifest("B"),
+            hard_stops_b=[{
+                "source": "workload",
+                "kinds": ["SIGBUS"],
+                "message": "Bus error",
+            }],
+        )
+        self.assertEqual(result["outcome"], "WORKLOAD_FAILURE")
 
     def test_unproven_journal_boundary_overrides_lifecycle_success(self) -> None:
         candidate = manifest("B")
@@ -387,12 +412,18 @@ class NvifLifetimeParserTests(unittest.TestCase):
 
     def test_hard_stop_classifier_catches_delayed_bar2_and_ctxsw(self) -> None:
         self.assertEqual(
-            parser.hard_stop_kinds("fault engine 05 [BAR2] client 07 [HOST_CPU] reason [PTE]"),
+            parser.journal_record_hard_stop_kinds({
+                "MESSAGE": "fault engine 05 [BAR2] client 07 [HOST_CPU] reason [PTE]",
+                "_TRANSPORT": "kernel",
+            }),
             ("BAR2", "HOST_CPU", "PTE"),
         )
         self.assertIn(
             "CTXSW_TIMEOUT",
-            parser.hard_stop_kinds("fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]"),
+            parser.journal_record_hard_stop_kinds({
+                "MESSAGE": "fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]",
+                "_TRANSPORT": "kernel",
+            }),
         )
 
     def test_hard_stop_classifier_catches_privilege_bus_and_gpu_reset(self) -> None:
@@ -403,7 +434,67 @@ class NvifLifetimeParserTests(unittest.TestCase):
         )
         for message, expected in cases:
             with self.subTest(message=message):
-                self.assertIn(expected, parser.hard_stop_kinds(message))
+                if expected == "SIGBUS":
+                    record = {
+                        "MESSAGE": message,
+                        "SYSLOG_IDENTIFIER": "nouveau-nvif-lifetime",
+                        "_TRANSPORT": "stdout",
+                    }
+                else:
+                    record = {"MESSAGE": message, "_TRANSPORT": "kernel"}
+                self.assertIn(expected, parser.journal_record_hard_stop_kinds(record))
+
+    def test_unrelated_userspace_messages_do_not_trip_kernel_classifier(self) -> None:
+        records = "\n".join(
+            json.dumps({
+                "MESSAGE": message,
+                "_TRANSPORT": "journal",
+                "SYSLOG_IDENTIFIER": "unrelated-process",
+            })
+            for message in (
+                "WARNING: this text mentions PTE",
+                "BAR2 HOST_CPU PTE",
+                "process received SIGBUS",
+            )
+        ) + "\n"
+        self.assertEqual(parser.hard_stop_records(records.encode()), [])
+
+    def test_kernel_warning_is_classified_but_workload_bus_error_is_scoped(self) -> None:
+        records = "\n".join(
+            json.dumps(record)
+            for record in (
+                {
+                    "MESSAGE": "WARNING: Nouveau reports a kernel warning",
+                    "_TRANSPORT": "kernel",
+                },
+                {
+                    "MESSAGE": "Bus error",
+                    "_TRANSPORT": "stdout",
+                    "SYSLOG_IDENTIFIER": "nouveau-nvif-lifetime",
+                },
+                {
+                    "MESSAGE": "Bus error",
+                    "_TRANSPORT": "stdout",
+                    "SYSLOG_IDENTIFIER": "unrelated-process",
+                },
+            )
+        ) + "\n"
+        stops = parser.hard_stop_records(records.encode())
+        self.assertEqual(
+            stops,
+            [
+                {
+                    "source": "kernel",
+                    "kinds": ["kernel-WARNING"],
+                    "message": "WARNING: Nouveau reports a kernel warning",
+                },
+                {
+                    "source": "workload",
+                    "kinds": ["SIGBUS"],
+                    "message": "Bus error",
+                },
+            ],
+        )
 
     def test_pair_comparison_rejects_same_boot(self) -> None:
         with self.assertRaisesRegex(ValueError, "separate boots"):
@@ -472,6 +563,12 @@ class NvifLifetimeParserTests(unittest.TestCase):
             )
             item["dso_resolved_path"] = str(dso)
             item["dso_alias_path"] = str(alias)
+            module = root / "nouveau.ko.zst"
+            module.write_bytes(b"synthetic installed compressed module")
+            item["nouveau_module_path"] = str(module)
+            item["nouveau_module_file_sha256"] = hashlib.sha256(
+                module.read_bytes()
+            ).hexdigest()
             item["preflight_journal_sha256"] = hashlib.sha256(
                 preflight.read_bytes()
             ).hexdigest()
@@ -498,6 +595,65 @@ class NvifLifetimeParserTests(unittest.TestCase):
             path.write_text(json.dumps(bad), encoding="utf-8")
             with self.assertRaisesRegex(ValueError, "srcversion"):
                 parser.read_manifest(path, "A")
+
+    def test_manifest_loader_requires_selected_module_to_match_loaded_srcversion(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "manifest.json"
+            bad = manifest("A")
+            bad["nouveau_module_srcversion"] = "different-installed-module"
+            path.write_text(json.dumps(bad), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "does not match the loaded module"):
+                parser.read_manifest(path, "A")
+
+    def test_manifest_loader_rejects_changed_installed_module_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            module = root / "nouveau.ko.zst"
+            module.write_bytes(b"installed module A")
+            bad = manifest("A")
+            bad["nouveau_module_path"] = str(module)
+            bad["nouveau_module_file_sha256"] = "0" * 64
+            path = root / "manifest.json"
+            path.write_text(json.dumps(bad), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "module file hash changed"):
+                parser.read_manifest(path, "A")
+
+    def test_manifest_loader_rejects_missing_installed_module_file(self) -> None:
+        bad = manifest("A")
+        bad["nouveau_module_path"] = "/no/such/nouveau.ko.zst"
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "manifest.json"
+            path.write_text(json.dumps(bad), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "module file is unavailable"):
+                parser.read_manifest(path, "A")
+
+    def test_manifest_loader_rejects_module_symlink_alias(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            module = root / "nouveau.ko.zst"
+            module.write_bytes(b"synthetic installed module")
+            alias = root / "nouveau-selected.ko.zst"
+            alias.symlink_to(module)
+            bad = manifest("A")
+            bad["nouveau_module_path"] = str(alias)
+            bad["nouveau_module_file_sha256"] = hashlib.sha256(
+                module.read_bytes()
+            ).hexdigest()
+            path = root / "manifest.json"
+            path.write_text(json.dumps(bad), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "path is not canonical"):
+                parser.read_manifest(path, "A")
+
+    def test_pair_comparison_rejects_different_installed_module_files(self) -> None:
+        candidate = manifest("B")
+        candidate["nouveau_module_file_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "nouveau_module_file_sha256"):
+            parser.compare_runs(
+                self.parse(baseline_records()),
+                self.parse(candidate_records()),
+                manifest("A"),
+                candidate,
+            )
 
     def test_cli_emits_machine_readable_pair_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -535,6 +691,8 @@ class NvifLifetimeParserTests(unittest.TestCase):
                 item["preflight_journal_sha256"] = hashlib.sha256(
                     preflight.read_bytes()
                 ).hexdigest()
+                item["nouveau_module_path"] = str(TEST_MODULE_PATH.resolve())
+                item["nouveau_module_file_sha256"] = TEST_MODULE_SHA256
             item_a["journal_delta_sha256"] = hashlib.sha256(data_a).hexdigest()
             item_b["journal_delta_sha256"] = hashlib.sha256(data_b).hexdigest()
             manifest_a.write_text(json.dumps(item_a), encoding="utf-8")
@@ -543,7 +701,11 @@ class NvifLifetimeParserTests(unittest.TestCase):
             def fake_hash(path: Path) -> str:
                 if path.name == "libgallium_drv_video.so":
                     return parser.EXPECTED_DSO_SHA256[path.parent.name]
-                return parser.EXPECTED_INPUT_SHA256
+                if path == Path(parser.load_runtime_profile()["argv"][-1]):
+                    return parser.EXPECTED_INPUT_SHA256
+                if path == TEST_MODULE_PATH.resolve():
+                    return TEST_MODULE_SHA256
+                return hashlib.sha256(path.read_bytes()).hexdigest()
 
             with (
                 mock.patch.object(parser, "_sha256_file", side_effect=fake_hash),
@@ -581,6 +743,7 @@ class NvifLifetimeParserTests(unittest.TestCase):
                     boot_id="boot-b",
                 ) + "\n",
                 [{
+                    "source": "kernel",
                     "kinds": ["CTXSW_TIMEOUT"],
                     "message": "nouveau fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]",
                 }],

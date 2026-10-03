@@ -66,13 +66,12 @@ REQUIRED_ENVIRONMENT_KEYS = {
     "LIBVA_TRACE", "LIBVA_MESSAGING_LEVEL", "MESA_LOADER_DRIVER_OVERRIDE",
     "MESA_DEBUG", "NOUVEAU_DEBUG", "WAYLAND_DISPLAY",
 }
-HARD_STOP_PATTERNS = {
+KERNEL_HARD_STOP_PATTERNS = {
     "CTXSW_TIMEOUT": re.compile(r"CTXSW_TIMEOUT|SCHED_ERROR\s+0a\b", re.I),
     "PRIV_VIOLATION": re.compile(r"\bPRIV[_ ]VIOLATION\b", re.I),
     "BAR2": re.compile(r"\bBAR2\b", re.I),
     "HOST_CPU": re.compile(r"\bHOST_CPU\b", re.I),
     "PTE": re.compile(r"\bPTE\b", re.I),
-    "SIGBUS": re.compile(r"\bSIGBUS\b|\bBus error\b", re.I),
     "GPU-reset": re.compile(
         r"\b(?:GPU[_ -]?reset|reset(?:ting)?\s+(?:the\s+)?GPU)\b", re.I
     ),
@@ -84,6 +83,10 @@ HARD_STOP_PATTERNS = {
     "sanitizer": re.compile(r"\b(?:KASAN|KCSAN|KFENCE|UBSAN):", re.I),
     "lockdep": re.compile(r"\blockdep\b", re.I),
     "PROP-RT-overrun": re.compile(r"RT_(?:WIDTH|HEIGHT)_OVERRUN", re.I),
+    "SIGBUS": re.compile(r"\bSIGBUS\b|\bBus error\b", re.I),
+}
+WORKLOAD_FATAL_PATTERNS = {
+    "SIGBUS": re.compile(r"\bSIGBUS\b|\bBus error\b", re.I),
 }
 
 
@@ -154,8 +157,8 @@ def load_runtime_profile() -> dict[str, Any]:
     return profile
 
 
-def journal_messages(data: bytes) -> list[str]:
-    messages: list[str] = []
+def journal_records(data: bytes) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
     for index, raw_line in enumerate(data.splitlines(), 1):
         if not raw_line:
             continue
@@ -165,25 +168,60 @@ def journal_messages(data: bytes) -> list[str]:
             raise ValueError(f"invalid journal JSON at line {index}") from exc
         if not isinstance(record, dict):
             raise ValueError(f"journal line {index} is not a JSON object")
-        message = record.get("MESSAGE")
-        if isinstance(message, str):
-            messages.append(message)
-    return messages
+        records.append(record)
+    return records
 
 
-def hard_stop_kinds(message: str) -> tuple[str, ...]:
+def journal_messages(data: bytes) -> list[str]:
+    return [
+        record["MESSAGE"]
+        for record in journal_records(data)
+        if isinstance(record.get("MESSAGE"), str)
+    ]
+
+
+def journal_record_hard_stop_source(record: dict[str, Any]) -> str | None:
+    """Identify kernel versus pinned-workload records from journal metadata."""
+    if record.get("_TRANSPORT") == "kernel":
+        return "kernel"
+    if record.get("SYSLOG_IDENTIFIER") == "nouveau-nvif-lifetime":
+        return "workload"
+    return None
+
+
+def journal_record_hard_stop_kinds(record: dict[str, Any]) -> tuple[str, ...]:
+    """Classify a stop only when journal metadata identifies its source."""
+    message = record.get("MESSAGE")
+    if not isinstance(message, str):
+        return ()
+
+    source = journal_record_hard_stop_source(record)
+    if source == "kernel":
+        patterns = KERNEL_HARD_STOP_PATTERNS
+    elif source == "workload":
+        patterns = WORKLOAD_FATAL_PATTERNS
+    else:
+        return ()
+
     return tuple(
-        name for name, pattern in HARD_STOP_PATTERNS.items()
+        name for name, pattern in patterns.items()
         if pattern.search(message)
     )
 
 
 def hard_stop_records(data: bytes) -> list[dict[str, Any]]:
     records: list[dict[str, Any]] = []
-    for message in journal_messages(data):
-        kinds = hard_stop_kinds(message)
+    for journal_record in journal_records(data):
+        message = journal_record.get("MESSAGE")
+        if not isinstance(message, str):
+            continue
+        kinds = journal_record_hard_stop_kinds(journal_record)
         if kinds:
-            records.append({"kinds": list(kinds), "message": message})
+            records.append({
+                "source": journal_record_hard_stop_source(journal_record),
+                "kinds": list(kinds),
+                "message": message,
+            })
     return records
 
 
@@ -524,7 +562,9 @@ def read_manifest(path: Path, expected_variant: str) -> dict[str, Any]:
     required = {
         "schema", "variant", "boot_id", "input_sha256", "command_argv",
         "launcher_argv", "normalized_environment", "kernel",
-        "nouveau_srcversion", "nouveau_parameters", "dso_sha256",
+        "nouveau_srcversion", "nouveau_parameters", "nouveau_module_path",
+        "nouveau_module_file_sha256", "nouveau_module_srcversion",
+        "nouveau_module_vermagic", "dso_sha256",
         "dso_resolved_path", "dso_alias_path", "mpv_sha256",
         "mpv_resolved_path", "systemd_cat_sha256",
         "systemd_cat_resolved_path", "journal_start_cursor",
@@ -545,7 +585,10 @@ def read_manifest(path: Path, expected_variant: str) -> dict[str, Any]:
         )
     if manifest["schema"] != 2 or manifest["variant"] != expected_variant:
         raise ValueError(f"{expected_variant} manifest schema/variant mismatch")
-    for field in ("boot_id", "kernel", "nouveau_srcversion", "dso_sha256"):
+    for field in (
+        "boot_id", "kernel", "nouveau_srcversion", "nouveau_module_path",
+        "nouveau_module_srcversion", "nouveau_module_vermagic", "dso_sha256",
+    ):
         if not isinstance(manifest[field], str) or not manifest[field]:
             raise ValueError(f"{expected_variant} manifest has invalid {field}")
     if manifest["kernel"] != EXPECTED_KERNEL:
@@ -554,6 +597,37 @@ def read_manifest(path: Path, expected_variant: str) -> dict[str, Any]:
         raise ValueError(
             f"{expected_variant} manifest Nouveau srcversion is not the pinned build"
         )
+    if manifest["nouveau_module_srcversion"] != manifest["nouveau_srcversion"]:
+        raise ValueError(
+            f"{expected_variant} selected Nouveau module srcversion does not "
+            "match the loaded module"
+        )
+    module_vermagic = manifest["nouveau_module_vermagic"].split()
+    if not module_vermagic or module_vermagic[0] != EXPECTED_KERNEL:
+        raise ValueError(f"{expected_variant} selected Nouveau module vermagic is not pinned")
+    module_path = Path(manifest["nouveau_module_path"])
+    if not module_path.is_absolute():
+        raise ValueError(f"{expected_variant} selected Nouveau module path must be absolute")
+    if not isinstance(manifest["nouveau_module_file_sha256"], str) or not re.fullmatch(
+        r"[0-9a-f]{64}", manifest["nouveau_module_file_sha256"]
+    ):
+        raise ValueError(f"{expected_variant} selected Nouveau module hash is invalid")
+    try:
+        resolved_module_path = module_path.resolve(strict=True)
+        if resolved_module_path != module_path:
+            raise ValueError(
+                f"{expected_variant} selected Nouveau module path is not canonical"
+            )
+        if not module_path.is_file() or _sha256_file(module_path) != manifest[
+            "nouveau_module_file_sha256"
+        ]:
+            raise ValueError(
+                f"{expected_variant} selected Nouveau module file hash changed"
+            )
+    except OSError as exc:
+        raise ValueError(
+            f"{expected_variant} selected Nouveau module file is unavailable: {exc}"
+        ) from exc
     profile = load_runtime_profile()
     if manifest["input_sha256"] != profile["input_sha256"]:
         raise ValueError(
@@ -714,6 +788,10 @@ def compare_runs(
         "normalized_environment",
         "kernel",
         "nouveau_srcversion",
+        "nouveau_module_path",
+        "nouveau_module_file_sha256",
+        "nouveau_module_srcversion",
+        "nouveau_module_vermagic",
         "nouveau_parameters",
         "launcher_argv",
         "working_directory",
@@ -757,8 +835,13 @@ def compare_runs(
 
     result_a = analyze(events_a, "A")
     result_b = analyze(events_b, "B")
-    if all_hard_stops_a or all_hard_stops_b:
+    if any(
+        record.get("source") == "kernel"
+        for record in (*all_hard_stops_a, *all_hard_stops_b)
+    ):
         outcome = "KERNEL_FAILURE"
+    elif all_hard_stops_a or all_hard_stops_b:
+        outcome = "WORKLOAD_FAILURE"
     elif not all((
         manifest_a["journal_boundary_proven"],
         manifest_b["journal_boundary_proven"],
@@ -790,12 +873,13 @@ def compare_runs(
         "variant_b": result_b,
         "manifest_comparison": {
             "same_input_command_environment_kernel_and_srcversion": True,
+            "same_installed_nouveau_module_file_and_metadata": True,
             "same_nouveau_parameters": True,
             "separate_boots": True,
             "pinned_dso_hashes": True,
             "journal_deltas_hash_verified": True,
         },
-        "kernel_hard_stops": {"A": all_hard_stops_a, "B": all_hard_stops_b},
+        "hard_stop_records": {"A": all_hard_stops_a, "B": all_hard_stops_b},
         "claim_boundary": (
             "Matched NVIF lifecycle evidence only; this is not visible playback "
             "acceptance or release approval. Confirm manifests from observed "

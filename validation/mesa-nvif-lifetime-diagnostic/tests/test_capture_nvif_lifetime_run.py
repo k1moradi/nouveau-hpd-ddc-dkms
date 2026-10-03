@@ -1,9 +1,14 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import io
+import os
+import signal
+import subprocess
 import sys
 import tempfile
+import time
 import unittest
 from pathlib import Path
 from unittest import mock
@@ -28,17 +33,26 @@ class NvifLifetimeCaptureTests(unittest.TestCase):
     def test_hard_stop_signatures_cover_bar2_and_ctxsw(self) -> None:
         self.assertEqual(
             capture.hard_stop_kinds(
-                "fifo fault engine 05 [BAR2] client 07 [HOST_CPU] reason 02 [PTE]"
+                {
+                    "MESSAGE": "fifo fault engine 05 [BAR2] client 07 [HOST_CPU] reason 02 [PTE]",
+                    "_TRANSPORT": "kernel",
+                }
             ),
             ("BAR2", "HOST_CPU", "PTE"),
         )
         self.assertIn(
             "CTXSW_TIMEOUT",
-            capture.hard_stop_kinds("fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]"),
+            capture.hard_stop_kinds({
+                "MESSAGE": "fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]",
+                "_TRANSPORT": "kernel",
+            }),
         )
         self.assertIn(
             "failed-to-idle",
-            capture.hard_stop_kinds("Xorg failed to idle channel 9"),
+            capture.hard_stop_kinds({
+                "MESSAGE": "Xorg failed to idle channel 9",
+                "_TRANSPORT": "kernel",
+            }),
         )
 
     def test_hard_stop_signatures_cover_privilege_bus_and_gpu_reset(self) -> None:
@@ -49,7 +63,30 @@ class NvifLifetimeCaptureTests(unittest.TestCase):
         )
         for message, expected in cases:
             with self.subTest(message=message):
-                self.assertIn(expected, capture.hard_stop_kinds(message))
+                if expected == "SIGBUS":
+                    record = {
+                        "MESSAGE": message,
+                        "SYSLOG_IDENTIFIER": "nouveau-nvif-lifetime",
+                        "_TRANSPORT": "stdout",
+                    }
+                else:
+                    record = {"MESSAGE": message, "_TRANSPORT": "kernel"}
+                self.assertIn(expected, capture.hard_stop_kinds(record))
+
+    def test_untrusted_user_text_does_not_look_like_a_kernel_hard_stop(self) -> None:
+        for message in (
+            "WARNING: diagnostic explanation mentions PTE",
+            "user supplied text: BAR2 HOST_CPU PTE",
+        ):
+            with self.subTest(message=message):
+                self.assertEqual(
+                    capture.hard_stop_kinds({
+                        "MESSAGE": message,
+                        "_TRANSPORT": "journal",
+                        "SYSLOG_IDENTIFIER": "unrelated-process",
+                    }),
+                    (),
+                )
 
     def test_cursor_requires_one_nonempty_journal_cursor(self) -> None:
         self.assertEqual(capture.parse_cursor("-- cursor: cursor-123\n"), "cursor-123")
@@ -79,7 +116,7 @@ class NvifLifetimeCaptureTests(unittest.TestCase):
         cursor = b"-- cursor: cursor-123\n"
         full_boot = (
             b'{"MESSAGE":"nouveau fifo fault [BAR2] [HOST_CPU] [PTE]",'
-            b'"_BOOT_ID":"boot-a"}\n'
+            b'"_BOOT_ID":"boot-a","_TRANSPORT":"kernel"}\n'
         )
         with mock.patch.object(
             capture,
@@ -113,6 +150,25 @@ class NvifLifetimeCaptureTests(unittest.TestCase):
         ):
             with self.assertRaisesRegex(RuntimeError, "has no visible kernel records"):
                 capture.clean_boot_journal_boundary("boot-a")
+
+    def test_unrelated_user_warning_or_pte_does_not_contaminate_clean_preflight(self) -> None:
+        cursor = b"-- cursor: cursor-123\n"
+        full_boot = (
+            b'{"MESSAGE":"nouveau: initialized","_BOOT_ID":"boot-a",'
+            b'"_TRANSPORT":"kernel"}\n'
+            b'{"MESSAGE":"user note: WARNING BAR2 HOST_CPU PTE",'
+            b'"_BOOT_ID":"boot-a","_TRANSPORT":"journal",'
+            b'"SYSLOG_IDENTIFIER":"unrelated-process"}\n'
+        )
+        with mock.patch.object(
+            capture,
+            "run_checked",
+            side_effect=[cursor, full_boot],
+        ):
+            observed_cursor, snapshot = capture.clean_boot_journal_boundary("boot-a")
+
+        self.assertEqual(observed_cursor, "cursor-123")
+        self.assertEqual(snapshot, full_boot)
 
     def test_normalized_environment_has_exact_a_b_schema(self) -> None:
         observed = capture.normalized_environment(
@@ -175,6 +231,76 @@ class NvifLifetimeCaptureTests(unittest.TestCase):
         with self.assertRaisesRegex(RuntimeError, "must be disabled"):
             capture.require_parameter_disabled("diag_ctxsw", "Y")
 
+    def test_installed_module_identity_fingerprints_selected_compressed_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            module = Path(temporary) / "nouveau.ko.zst"
+            module.write_bytes(b"signed compressed module bytes")
+            expected_hash = hashlib.sha256(module.read_bytes()).hexdigest()
+
+            def fake_modinfo(command: list[str], *, timeout: int) -> bytes:
+                self.assertEqual(command[0], "/usr/sbin/modinfo")
+                self.assertEqual(timeout, 5)
+                if command[2] == "filename":
+                    return (str(module) + "\n").encode()
+                if command[2] == "srcversion":
+                    return (capture.EXPECTED_SRCVERSION + "\n").encode()
+                if command[2] == "vermagic":
+                    return (capture.EXPECTED_KERNEL + " SMP preempt modversions\n").encode()
+                self.fail(f"unexpected modinfo field: {command[2]}")
+
+            with (
+                mock.patch.object(capture.shutil, "which", return_value="/usr/sbin/modinfo"),
+                mock.patch.object(capture, "run_checked", side_effect=fake_modinfo),
+            ):
+                identity = capture.installed_module_identity()
+
+        self.assertEqual(identity["path"], str(module.resolve()))
+        self.assertEqual(identity["file_sha256"], expected_hash)
+        self.assertEqual(identity["srcversion"], capture.EXPECTED_SRCVERSION)
+
+    def test_installed_module_identity_rejects_wrong_srcversion_or_vermagic(self) -> None:
+        for field, value, expected_error in (
+            ("srcversion", "wrong-srcversion", "srcversion mismatch"),
+            ("vermagic", "6.9.0 wrong-kernel", "vermagic mismatch"),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as temporary:
+                module = Path(temporary) / "nouveau.ko.zst"
+                module.write_bytes(b"module")
+
+                def fake_modinfo(command: list[str], *, timeout: int) -> bytes:
+                    if command[2] == "filename":
+                        return (str(module) + "\n").encode()
+                    if command[2] == field:
+                        return (value + "\n").encode()
+                    if command[2] == "srcversion":
+                        return (capture.EXPECTED_SRCVERSION + "\n").encode()
+                    if command[2] == "vermagic":
+                        return (capture.EXPECTED_KERNEL + " SMP\n").encode()
+                    raise AssertionError(f"unexpected modinfo field: {command[2]}")
+
+                with (
+                    mock.patch.object(capture.shutil, "which", return_value="/usr/sbin/modinfo"),
+                    mock.patch.object(capture, "run_checked", side_effect=fake_modinfo),
+                ):
+                    with self.assertRaisesRegex(RuntimeError, expected_error):
+                        capture.installed_module_identity()
+
+    def test_installed_module_identity_rejects_missing_selected_file(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            missing = Path(temporary) / "missing-nouveau.ko.zst"
+
+            def fake_modinfo(command: list[str], *, timeout: int) -> bytes:
+                if command[2] == "filename":
+                    return (str(missing) + "\n").encode()
+                self.fail("modinfo metadata should not be queried for a missing module")
+
+            with (
+                mock.patch.object(capture.shutil, "which", return_value="/usr/sbin/modinfo"),
+                mock.patch.object(capture, "run_checked", side_effect=fake_modinfo),
+            ):
+                with self.assertRaisesRegex(RuntimeError, "selected Nouveau module file is unavailable"):
+                    capture.installed_module_identity()
+
     def test_bsp_eexist_marker_is_early_stop_trigger(self) -> None:
         line = (
             "NOUVEAU_DIAG_NVIF_NEW key=0x500 obj=0x500 object_token=0x500 "
@@ -231,7 +357,13 @@ class NvifLifetimeCaptureTests(unittest.TestCase):
                 "outcome": "KERNEL_FAILURE",
                 "journal_boundary_proven": True,
                 "workload_timed_out": False,
-                "postrun_hard_stops": [{"kinds": ["PTE"]}],
+                "postrun_hard_stops": [{"source": "kernel", "kinds": ["PTE"]}],
+            }, 4),
+            ("tagged workload fatal is nonzero", "B", {
+                "outcome": "WORKLOAD_FAILURE",
+                "journal_boundary_proven": True,
+                "workload_timed_out": False,
+                "postrun_hard_stops": [{"source": "workload", "kinds": ["SIGBUS"]}],
             }, 4),
             ("timeout is inconclusive", "A", {
                 "outcome": "WORKLOAD_TIMEOUT",
@@ -293,6 +425,55 @@ class NvifLifetimeCaptureTests(unittest.TestCase):
                     output_dir=output,
                     runtime={"variant": "A"},
                 )
+
+    def test_process_group_cleanup_reaps_child_after_leader_exits(self) -> None:
+        child_code = (
+            "import signal,time; "
+            "signal.signal(signal.SIGINT, signal.SIG_IGN); "
+            "time.sleep(30)"
+        )
+        parent_code = (
+            "import subprocess,sys; "
+            f"subprocess.Popen([{sys.executable!r}, '-c', {child_code!r}], "
+            "stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, "
+            "stderr=subprocess.DEVNULL)"
+        )
+        leader = subprocess.Popen(
+            [sys.executable, "-c", parent_code],
+            stdin=subprocess.DEVNULL,
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            start_new_session=True,
+            text=True,
+        )
+        pgid = leader.pid
+        try:
+            leader.wait(timeout=3)
+            deadline = time.monotonic() + 3
+            members = capture.process_group_members(pgid)
+            while not members and time.monotonic() < deadline:
+                time.sleep(0.02)
+                members = capture.process_group_members(pgid)
+            self.assertTrue(members, "synthetic child did not remain in leader's process group")
+
+            capture._terminate_process_group(
+                leader,
+                sigint_grace=0.2,
+                sigterm_grace=0.5,
+                sigkill_grace=0.5,
+            )
+            self.assertEqual(capture.process_group_members(pgid), [])
+        finally:
+            if capture.process_group_members(pgid):
+                try:
+                    os.killpg(pgid, signal.SIGKILL)
+                except ProcessLookupError:
+                    pass
+            try:
+                leader.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                leader.kill()
+                leader.wait(timeout=3)
 
 
 if __name__ == "__main__":
