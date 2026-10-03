@@ -115,6 +115,53 @@ result, **not** a hardware-versus-software comparison. Exact PTS-matched
 hardware bytes and repeated VAAPI extraction results are still needed to
 distinguish decode corruption from presentation or a nondeterministic race.
 
+## Upstream Mesa source check
+
+The public Mesa GitLab `main` ref was checked directly on 2026-10-03 and
+resolved to `888a19e27844002061f4e0b7e98b293ccc352160` (commit date
+2026-10-03). The 26.0.8 release tag resolves to
+`60e95b787857afbc9a00b693b91c0d9c8923a430` (2026-05-27). I fetched only the
+three affected source files from those immutable refs; no repository checkout
+or system source was changed.
+
+| Source path | Mesa 26.0.8 tag SHA-256 | Mesa main SHA-256 | Finding |
+|---|---|---|---|
+| `src/gallium/winsys/nouveau/drm/nouveau.c` | `2140bca6de1666e4517ebabf97a63b417db43bfbc575198d7835d40ad92dc57f` | `fefb35c2e3923a42381bef37fb4cd240688786e97263d5dca10feb62a36bb311` | New uses `drm->fd` and `(uintptr_t)obj`; DEL still passes `obj->parent->handle` to `drmCommandWrite()` and ignores its result. `nouveau_object_channel_new()` stores the returned channel ID in `obj->handle`, and the libdrm declaration's first parameter is `int fd`. |
+| `src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c` | `3c44d8153d08764aacf012cd46186819a120979c34f87adb0a3bee592d898c9f` | `3c44d8153d08764aacf012cd46186819a120979c34f87adb0a3bee592d898c9f` | Byte-identical. The `valid_ref` slot assignment and H.264 identity assertion remain unchanged. |
+| `src/gallium/frontends/va/surface.c` | `5b961abc23314c119ea0d1633ffca0b9ff77ac4b392d0de8a32fe128e9c1753b` | `6efb729716e91593a78af8e2c07e42091a41343a8fd9431afd3ba63c54dd2023` | The interlaced-surface `INVALID_SURFACE` guard remains. Upstream's later export-FD deduplication change is after that guard and does not make VP3's field-array surface exportable. |
+
+The GitLab file history since the 26.0.8 tag reports no changes to
+`nouveau_vp3_video_vp.c`. `nouveau.c` has two intervening changes (a null
+pointer arithmetic fix and a dangling fence pointer fix); neither changes
+subchannel DEL. Thus current upstream has not corrected either the DEL fd
+argument or the VP3 reference-slot assertion.
+
+One newer upstream change is relevant to the MPV context/surface lifetime, but
+is **not a demonstrated fix**. Commits [`dcf4b942`](https://gitlab.freedesktop.org/mesa/mesa/-/commit/dcf4b9426814c4aa698c3a54ff73579f252d8ad9)
+and [`96c11b68`](https://gitlab.freedesktop.org/mesa/mesa/-/commit/96c11b68e7f479ecbdc715ab0f28fa0113e09e28)
+(2026-09-02, after Mesa 26.0.8) add `pipe_video_codec` reference counting and
+retain a codec reference on VA surfaces/buffers for fence wait/destruction.
+`vlVaEndPicture()` references the decoder from the surface when it has a
+destroyable fence, and context destruction drops only the context's own
+reference. A surface that still owns the prior codec can therefore keep that
+decoder and its Nouveau object wrappers alive while the replacement decoder
+is constructed. This intersects MPV's observed context destroy/recreate with
+retained surfaces and is worth a separate, controlled comparison. It can
+change pointer-reuse timing, but it does not change the wrong-fd NVIF DEL call:
+when the old codec is eventually released, DEL can still fail and leave its
+ABI16 key behind. A single successful replacement under this lifetime model
+would therefore not prove the stale-key defect is fixed; paired NEW/DEL key
+and return records over repeated decoder lifecycles are still needed. The
+separate commit
+[`46bf88fb`](https://gitlab.freedesktop.org/mesa/mesa/-/commit/46bf88fb65e47fca213cdf17f9c7cf0f827c3e64)
+changes PRIME plane-FD deduplication but leaves the earlier interlaced guard
+intact.
+
+Pinned current-source links: [Nouveau winsys](https://gitlab.freedesktop.org/mesa/mesa/-/blob/888a19e27844002061f4e0b7e98b293ccc352160/src/gallium/winsys/nouveau/drm/nouveau.c),
+[VP3 H.264 reference handling](https://gitlab.freedesktop.org/mesa/mesa/-/blob/888a19e27844002061f4e0b7e98b293ccc352160/src/gallium/drivers/nouveau/nouveau_vp3_video_vp.c),
+[VA surface export](https://gitlab.freedesktop.org/mesa/mesa/-/blob/888a19e27844002061f4e0b7e98b293ccc352160/src/gallium/frontends/va/surface.c),
+and the [`drmCommandWrite()` declaration](https://gitlab.freedesktop.org/mesa/libdrm/-/blob/b97cbde15c5c3abfe44d78e8f57139e50f612fec/xf86drm.h#L609).
+
 ## Status
 
 ```text
