@@ -14,6 +14,7 @@ TEST_DIR = Path(__file__).resolve().parent
 ROOT = TEST_DIR if (TEST_DIR / "bar2_baseline.py").is_file() else TEST_DIR.parent
 MATCHER_PATH = ROOT / "bar2_baseline.py"
 SAVED_LINES_PATH = ROOT / "preflight-correction.txt"
+POST_REBOOT_EVIDENCE_PATH = ROOT / "evidence/POST-REBOOT-CPU-CHECK-20261003.md"
 EXPECTED_FAULT_ADDRESSES = {
     "00000000003f3000",
     "00000000005d6000",
@@ -42,6 +43,15 @@ class Bar2BaselineTests(unittest.TestCase):
         addresses = {line.split(" at ", 1)[1].split(" ", 1)[0] for line in saved}
         self.assertEqual(addresses, EXPECTED_FAULT_ADDRESSES)
         self.assertEqual(len(bar2.matching_lines(saved)), 3)
+
+    def test_saved_post_reboot_471000_fault_matches(self) -> None:
+        saved = [
+            line
+            for line in POST_REBOOT_EVIDENCE_PATH.read_text(encoding="utf-8").splitlines()
+            if "0000000000471000" in line and "reason 02 [PTE]" in line
+        ]
+        self.assertEqual(len(saved), 1, "fixture must retain the recorded 0x471000 event")
+        self.assertEqual(len(bar2.matching_lines(saved)), 1)
 
     def test_literal_brackets_are_matched(self) -> None:
         sample = (
@@ -73,7 +83,19 @@ class Bar2BaselineTests(unittest.TestCase):
         for line in saved_fault_lines():
             self.assertIn(line, result.stdout)
 
-    def test_empty_clean_input_passes_zero_gate(self) -> None:
+    def test_empty_stdin_is_inconclusive(self) -> None:
+        result = subprocess.run(
+            [sys.executable, str(MATCHER_PATH), "--require-zero"],
+            input="",
+            check=False,
+            capture_output=True,
+            text=True,
+        )
+        self.assertEqual(result.returncode, 3)
+        self.assertIn("BAR2_HOST_CPU_PTE_COUNT=0", result.stdout)
+        self.assertIn("BAR2_BASELINE=UNKNOWN_EMPTY_INPUT", result.stdout)
+
+    def test_nonmatching_nonempty_input_passes_zero_gate(self) -> None:
         result = subprocess.run(
             [sys.executable, str(MATCHER_PATH), "--require-zero"],
             input="unrelated boot log\n",

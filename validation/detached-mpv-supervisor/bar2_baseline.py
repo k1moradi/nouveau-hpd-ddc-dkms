@@ -1,13 +1,16 @@
 #!/usr/bin/env python3
 """Count Nouveau BAR2/HOST_CPU PTE faults in journal text or stdin.
 
-Exit status is 2 when --require-zero is set and any matching event exists.
-The pattern deliberately uses one Python-regex escape per literal bracket.
+Exit status 2 means a required-zero scan found a fault; 3 means no input was
+available, so cleanliness could not be established. This tool parses supplied
+text; it does not query the journal itself. The pattern deliberately uses one
+Python-regex escape per literal bracket.
 """
 
 from __future__ import annotations
 
 import argparse
+from itertools import chain
 import re
 import sys
 from pathlib import Path
@@ -43,7 +46,13 @@ def main(argv: list[str] | None = None) -> int:
             return 3
 
     try:
-        matches = matching_lines(lines)
+        nonblank_lines = (line for line in lines if line.strip())
+        first_line = next(nonblank_lines, None)
+        if first_line is None:
+            print("BAR2_HOST_CPU_PTE_COUNT=0")
+            print("BAR2_BASELINE=UNKNOWN_EMPTY_INPUT")
+            return 3
+        matches = matching_lines(chain((first_line,), nonblank_lines))
     finally:
         if args.log is not None:
             lines.close()

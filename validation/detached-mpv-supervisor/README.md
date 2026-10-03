@@ -103,6 +103,16 @@ PYTHONDONTWRITEBYTECODE=1 python3 detached_mpv_supervisor.py self-test
 ```
 
 `test_bar2_baseline.py` includes the three exact saved fault lines from
-`preflight-correction.txt`, literal bracket matching, near misses, and a
-nonzero contaminated-baseline result. The supervisor tests use only CPU-side
-synthetic processes, temporary artifacts, and mocked deployment metadata.
+`preflight-correction.txt`, the saved post-reboot `0x471000` event, literal
+bracket matching, near misses, empty-input rejection, and a nonzero
+contaminated-baseline result. `bar2_baseline.py` parses input supplied by file
+or stdin; it does not query the journal. For a live read-only scan, supply the
+current-boot kernel journal explicitly:
+
+```sh
+journalctl -k -b --no-pager -o cat | python3 bar2_baseline.py --require-zero
+```
+
+Empty or whitespace-only input is `UNKNOWN_EMPTY_INPUT` with exit status 3, not
+a clean baseline. The supervisor tests use only CPU-side synthetic processes,
+temporary artifacts, and mocked deployment metadata.
