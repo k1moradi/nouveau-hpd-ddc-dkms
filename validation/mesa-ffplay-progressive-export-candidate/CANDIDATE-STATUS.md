@@ -58,8 +58,12 @@ under:
 - Non-protected interlaced NV12 uses `VL_COMPOSITOR_WEAVE` into a progressive
   NV12 video buffer; export then operates on that staging buffer.
 - Export is gated on compositor support and shader initialization.
-- A pipe flush fence is waited up to five seconds before exporting the staging
-  resource.
+- The candidate requests a five-second `fence_finish()` timeout before
+  exporting the staging resource. A CPU-only audit of the pinned Nouveau
+  implementation found that nonzero timeout values are ignored and dispatched
+  to a blocking fence wait, so this call does **not** establish a five-second
+  upper bound. See
+  [`evidence/SOURCE-SYNC-LIFETIME-AUDIT-20261003.md`](evidence/SOURCE-SYNC-LIFETIME-AUDIT-20261003.md).
 - Staging resources are destroyed on both success and failure paths after the
   export code has obtained its handles.
 
@@ -68,6 +72,18 @@ decoder-to-compositor synchronization, repeated surface reuse, or dma-buf FD
 lifetime. The compositor parameters currently specify limited range and BT.709;
 their suitability for the pinned input and other stream metadata needs pixel
 comparison. A successful export alone would not close these issues.
+
+## CPU-only synchronization and lifetime source audit (2026-10-03)
+
+The additional source audit found that the requested five-second compositor
+fence timeout is not honored by the pinned Nouveau `fence_finish()` path. It
+also found no explicit decoder-fence dependency in the candidate's direct
+compositor call. Driver-level resource ordering may still provide the needed
+dependency; the source path reviewed here does not prove it. The caller holds
+`drv->mutex` during the wait, preserving surface/compositor state but
+serializing VA frontend operations for the duration. No lock change or
+synchronization fix is included. Exact source hashes and limits are recorded in
+[`evidence/SOURCE-SYNC-LIFETIME-AUDIT-20261003.md`](evidence/SOURCE-SYNC-LIFETIME-AUDIT-20261003.md).
 
 ## Additional CPU-only source and input audit (2026-10-03)
 
