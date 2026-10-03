@@ -69,6 +69,39 @@ lifetime. The compositor parameters currently specify limited range and BT.709;
 their suitability for the pinned input and other stream metadata needs pixel
 comparison. A successful export alone would not close these issues.
 
+## Additional CPU-only source and input audit (2026-10-03)
+
+The input `/home/keivan/test_1080p.mkv` hash was rechecked as
+`d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2`.
+The following command reports H.264 High, 1920x1080, progressive,
+limited-range (`tv`) BT.709 primaries/transfer/matrix:
+
+```sh
+ffprobe -v error -select_streams v:0 \
+  -show_entries stream=codec_name,profile,width,height,pix_fmt,field_order,color_range,color_space,color_transfer,color_primaries \
+  -of json /home/keivan/test_1080p.mkv
+```
+
+That matches the candidate's selected limited-range BT.709 color parameters
+for this input; it says nothing about untagged or differently tagged media.
+
+The Mesa 26.0.8 source path was followed for the candidate's NV12-to-NV12
+conversion. `vlVaPostProcCompositor()` selects `vl_compositor_yuv_deint_full()`
+when both buffers are YUV. That path renders the Y and UV planes with the YUV
+weave shaders. Those shaders sample array layer 0 for one field and layer 1
+for the other, then select field samples by output-row position. This confirms
+the candidate uses Mesa's YUV weave path rather than its RGB-output weave
+path. It does not prove that the VP3 array-layer ordering and row/chroma
+sampling match this decoded surface; parity and pixel comparison remain open.
+
+Source blobs from the candidate's Mesa 26.0.8 tree:
+
+| File | SHA-256 |
+|---|---|
+| `src/gallium/frontends/va/postproc.c` | `6ca76b96dbaabb457d91b4ed1f5faabc0d260adf1bde202373c6f6d8374e4787` |
+| `src/gallium/auxiliary/vl/vl_compositor.c` | `22169b77a760e86e05f32f40975a4ecc505bf29f055489a051700e4dd4c1ff9e` |
+| `src/gallium/auxiliary/vl/vl_compositor_cs.c` | `98b176f97e15385bd602f7aa90cd3aaa0829b597db22f866482e5703f2b8c394` |
+
 ## Runtime boundary
 
 The plugin was not installed or loaded, and the candidate was not run against
