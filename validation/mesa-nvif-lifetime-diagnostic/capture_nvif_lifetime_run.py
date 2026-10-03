@@ -611,6 +611,37 @@ def execute_capture(
     return manifest
 
 
+def capture_exit_status(result: dict[str, Any], *, variant: str) -> int:
+    """Return a nonzero status when a capture is unsafe or inconclusive.
+
+    A zero status means the run was captured without a kernel hard stop and
+    without an unexplained workload failure. It does not mean the A/B
+    hypothesis was proven; the pair correlator owns that decision.
+    """
+    if variant not in {"A", "B"}:
+        raise ValueError("variant must be A or B")
+    outcome = result.get("outcome")
+    if result.get("postrun_hard_stops") or outcome == "KERNEL_FAILURE":
+        return 4
+    if (
+        result.get("workload_timed_out")
+        or not result.get("journal_boundary_proven")
+        or result.get("journal_monitor_error")
+        or outcome == "JOURNAL_BOUNDARY_UNPROVEN"
+        or outcome == "WORKLOAD_TIMEOUT"
+    ):
+        return 3
+    if outcome == "WORKLOAD_NONZERO_EXIT":
+        return 4
+    if outcome == "STOPPED_AT_BSP_EEXIST":
+        return 0
+    if outcome == "CAPTURED_NO_KERNEL_HARD_STOP":
+        # A is useful only if it reproduces the expected failure. A clean A
+        # run makes the later B comparison inconclusive.
+        return 3 if variant == "A" else 0
+    return 4
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=("A", "B"), required=True)
@@ -637,11 +668,7 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(result, indent=2, sort_keys=True))
-    if result.get("postrun_hard_stops"):
-        return 4
-    if result.get("workload_timed_out") or not result.get("journal_boundary_proven"):
-        return 3
-    return 0
+    return capture_exit_status(result, variant=args.variant)
 
 
 if __name__ == "__main__":

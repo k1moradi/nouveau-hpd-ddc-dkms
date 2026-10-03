@@ -68,9 +68,14 @@ REQUIRED_ENVIRONMENT_KEYS = {
 }
 HARD_STOP_PATTERNS = {
     "CTXSW_TIMEOUT": re.compile(r"CTXSW_TIMEOUT|SCHED_ERROR\s+0a\b", re.I),
+    "PRIV_VIOLATION": re.compile(r"\bPRIV[_ ]VIOLATION\b", re.I),
     "BAR2": re.compile(r"\bBAR2\b", re.I),
     "HOST_CPU": re.compile(r"\bHOST_CPU\b", re.I),
     "PTE": re.compile(r"\bPTE\b", re.I),
+    "SIGBUS": re.compile(r"\bSIGBUS\b|\bBus error\b", re.I),
+    "GPU-reset": re.compile(
+        r"\b(?:GPU[_ -]?reset|reset(?:ting)?\s+(?:the\s+)?GPU)\b", re.I
+    ),
     "failed-to-idle": re.compile(r"failed\s+to\s+idle", re.I),
     "channel-killed": re.compile(r"\bchannel\b.*\bkilled\b", re.I),
     "kernel-BUG": re.compile(r"\bBUG:", re.I),

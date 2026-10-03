@@ -30,6 +30,11 @@ and working directory and hashes the current Xauthority file.
 - The process group stops on the first BSP NEW `-EEXIST`, kernel hard stop,
   monitor error, or 18-second deadline, followed by passive 30-second journal
   observation. A hard stop overrides an NVIF lifecycle result.
+- The hard-stop classifier includes `PRIV_VIOLATION`, `SIGBUS`/`Bus error`, GPU
+  reset messages, CTXSW, BAR2/PTE, channel kill, failed-idle, sanitizer, lockdep,
+  and PROP RT-overrun records. Capture CLI exit codes now distinguish
+  inconclusive A, timeout/boundary failure, and kernel or unexplained workload
+  failure; zero only means the capture artifact is usable for pair comparison.
 - A's deliberate nonzero termination is accepted only when the termination
   reason records the expected BSP `-EEXIST`. A must reproduce the complete
   wrong-fd/stale-key/duplicate chain before B can count as a candidate result.
@@ -41,12 +46,13 @@ and working directory and hashes the current Xauthority file.
 
 ## Validation performed
 
-The complete Mesa lifetime diagnostic package suite passed **60/60** tests
+The complete Mesa lifetime diagnostic package suite passed **64/64** tests
 with no skips, using the pristine pinned Mesa source at
 `/home/keivan/.cache/nouveau-mesa-26.0.8-1ubuntu0.3/source/mesa-26.0.8/src/gallium/winsys/nouveau/drm/nouveau.c`.
-The separate NVIF delete-fd source suite passed **3/3** tests against the same
-source. Python syntax compilation passed for the parser, capture runner, and
-both test files. `git diff --check` passed.
+The separate NVIF delete-fd source suite passed **9/9** tests, and the kernel
+NVIF duplicate diagnostic source suite passed **2/2** tests, both without
+skips. Python syntax compilation passed for the parser, capture runner, and
+their test files. `git diff --check` passed.
 
 These are CPU-only source/tool tests. They establish no runtime A/B result,
 BAR2/PTE fix, visible playback, or release acceptance. `main` remains HOLD.

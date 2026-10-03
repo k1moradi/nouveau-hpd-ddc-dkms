@@ -339,6 +339,16 @@ class NvifLifetimeParserTests(unittest.TestCase):
             parser.hard_stop_kinds("fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]"),
         )
 
+    def test_hard_stop_classifier_catches_privilege_bus_and_gpu_reset(self) -> None:
+        cases = (
+            ("fifo: PRIV_VIOLATION on channel 4", "PRIV_VIOLATION"),
+            ("mpv terminated by SIGBUS", "SIGBUS"),
+            ("nouveau: GPU reset after engine failure", "GPU-reset"),
+        )
+        for message, expected in cases:
+            with self.subTest(message=message):
+                self.assertIn(expected, parser.hard_stop_kinds(message))
+
     def test_pair_comparison_rejects_same_boot(self) -> None:
         with self.assertRaisesRegex(ValueError, "separate boots"):
             parser.compare_runs(

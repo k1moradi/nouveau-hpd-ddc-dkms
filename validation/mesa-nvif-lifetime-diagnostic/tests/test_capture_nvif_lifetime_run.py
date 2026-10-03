@@ -41,6 +41,16 @@ class NvifLifetimeCaptureTests(unittest.TestCase):
             capture.hard_stop_kinds("Xorg failed to idle channel 9"),
         )
 
+    def test_hard_stop_signatures_cover_privilege_bus_and_gpu_reset(self) -> None:
+        cases = (
+            ("fifo: PRIV_VIOLATION on channel 4", "PRIV_VIOLATION"),
+            ("mpv terminated by SIGBUS", "SIGBUS"),
+            ("nouveau: resetting GPU after engine failure", "GPU-reset"),
+        )
+        for message, expected in cases:
+            with self.subTest(message=message):
+                self.assertIn(expected, capture.hard_stop_kinds(message))
+
     def test_cursor_requires_one_nonempty_journal_cursor(self) -> None:
         self.assertEqual(capture.parse_cursor("-- cursor: cursor-123\n"), "cursor-123")
         for output in ("", "-- cursor: \n", "-- cursor: a\n-- cursor: b\n"):
@@ -190,6 +200,66 @@ class NvifLifetimeCaptureTests(unittest.TestCase):
         self.assertEqual(status, 2)
         self.assertIn("--execute is required", output.getvalue())
         observe.assert_not_called()
+
+    def test_capture_cli_exit_status_fails_closed_for_unexpected_outcomes(self) -> None:
+        cases = (
+            ("A clean run without the expected failure is inconclusive", "A", {
+                "outcome": "CAPTURED_NO_KERNEL_HARD_STOP",
+                "journal_boundary_proven": True,
+                "workload_timed_out": False,
+                "postrun_hard_stops": [],
+            }, 3),
+            ("A expected EEXIST stop is captured", "A", {
+                "outcome": "STOPPED_AT_BSP_EEXIST",
+                "journal_boundary_proven": True,
+                "workload_timed_out": False,
+                "postrun_hard_stops": [],
+            }, 0),
+            ("B clean run is available for pair correlation", "B", {
+                "outcome": "CAPTURED_NO_KERNEL_HARD_STOP",
+                "journal_boundary_proven": True,
+                "workload_timed_out": False,
+                "postrun_hard_stops": [],
+            }, 0),
+            ("unexplained workload failure is nonzero", "B", {
+                "outcome": "WORKLOAD_NONZERO_EXIT",
+                "journal_boundary_proven": True,
+                "workload_timed_out": False,
+                "postrun_hard_stops": [],
+            }, 4),
+            ("kernel failure takes precedence", "B", {
+                "outcome": "KERNEL_FAILURE",
+                "journal_boundary_proven": True,
+                "workload_timed_out": False,
+                "postrun_hard_stops": [{"kinds": ["PTE"]}],
+            }, 4),
+            ("timeout is inconclusive", "A", {
+                "outcome": "WORKLOAD_TIMEOUT",
+                "journal_boundary_proven": True,
+                "workload_timed_out": True,
+                "postrun_hard_stops": [],
+            }, 3),
+        )
+        for name, variant, result, expected in cases:
+            with self.subTest(name=name):
+                self.assertEqual(
+                    capture.capture_exit_status(result, variant=variant),
+                    expected,
+                )
+
+    def test_capture_cli_exit_status_rejects_unknown_outcome(self) -> None:
+        self.assertEqual(
+            capture.capture_exit_status(
+                {
+                    "outcome": "UNRECOGNIZED",
+                    "journal_boundary_proven": True,
+                    "workload_timed_out": False,
+                    "postrun_hard_stops": [],
+                },
+                variant="A",
+            ),
+            4,
+        )
 
     def test_wrong_kernel_is_rejected_before_sysfs_or_journal_probe(self) -> None:
         dso = Path(

@@ -150,7 +150,10 @@ runner stops the MPV process group on the first pinned BSP NEW `-EEXIST`, a
 kernel hard stop, a monitor error, or the 18-second bound. It then passively
 collects journal records for 30 seconds. No additional decoder is launched.
 The generated manifest records hashes and resolved paths for the MPV and
-`systemd-cat` executables; the pair comparator requires them to match.
+`systemd-cat` executables; the pair comparator requires them to match. The
+hard-stop classifier includes `PRIV_VIOLATION`, `SIGBUS`/`Bus error`, GPU
+reset messages, CTXSW, BAR2/PTE, channel kill, failed-idle, sanitizer, lockdep,
+and PROP RT-overrun records.
 
 The current kernel exposes `diag_ctxsw` as a root-readable-only sysfs
 parameter. The runner reads it directly when allowed and otherwise uses only
@@ -160,7 +163,6 @@ as root: MPV runs as the logged-in desktop user with a constructed minimal
 environment.
 
 Execution is deliberately gated by the explicit `--execute` option. Example
-commands for a later, separately approved clean diagnostic boot are:
 commands for a later, separately approved clean diagnostic boot are:
 
 ```bash
@@ -200,7 +202,11 @@ NEW, wrong-fd DEL failure, successful old-channel free, replacement NEW
 returning `-EEXIST`, and a matching ABI16 duplicate marker. An NVKM duplicate
 without process/client identity is explicitly inconclusive. A's intentional
 process-group stop on `-EEXIST` is permitted; other nonzero exits, timeouts, or
-unproven journal boundaries make the pair incomplete.
+unproven journal boundaries make the pair incomplete. The capture CLI returns
+nonzero for an unexplained workload failure, a dirty kernel result, an
+incomplete journal boundary, a timeout, or an A run that does not reproduce
+the expected `-EEXIST`. A zero capture status only means the artifact is usable
+for pair comparison; it is not a causal pass.
 
 The B candidate requires a successful correct-fd DEL, successful channel
 free, and successful replacement NEW without a matching duplicate marker.
