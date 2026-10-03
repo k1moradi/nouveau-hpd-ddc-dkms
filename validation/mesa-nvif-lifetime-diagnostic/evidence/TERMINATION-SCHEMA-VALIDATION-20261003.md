@@ -57,6 +57,93 @@ An initial ffplay source-contract invocation pointed to a different saved
 tests ran. The invocation was repeated against the pinned baseline above and
 passed 3/3.
 
+## Exact validation commands and hashes
+
+The following five commands were rerun on review HEAD
+`7728cf26462e9edf1b8c54dac49d658f143dab47`. Each was run from the named test
+directory with `PYTHONDONTWRITEBYTECODE=1`; all exited zero, and none reported
+skips.
+
+From
+`/home/keivan/nouveau-hpd-ddc-dkms/validation/mesa-nvif-lifetime-diagnostic/tests`:
+
+```sh
+MESA_NOUVEAU_C_SOURCE=/home/keivan/.cache/nouveau-mesa-26.0.8-1ubuntu0.3/source/mesa-26.0.8/src/gallium/winsys/nouveau/drm/nouveau.c PYTHONDONTWRITEBYTECODE=1 python3 -m unittest discover -v
+```
+
+Result: **87/87**.
+
+From
+`/home/keivan/nouveau-hpd-ddc-dkms/validation/mesa-nvif-delete-fd-candidate/tests`:
+
+```sh
+MESA_NOUVEAU_C_SOURCE=/home/keivan/.cache/nouveau-mesa-26.0.8-1ubuntu0.3/source/mesa-26.0.8/src/gallium/winsys/nouveau/drm/nouveau.c PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_nvif_delete_fd_patch.py
+NOUVEAU_KERNEL_SOURCE_ROOT=/home/keivan/nouveau-vaapi-app-validation/master-handoff-build-20261002/source-gitapply-stack-v8-20261002 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_linux_abi16_duplicate_key.py
+```
+
+Results: **3/3** and **6/6**, respectively.
+
+From
+`/home/keivan/nouveau-hpd-ddc-dkms/validation/nouveau-nvif-duplicate-diagnostic/tests`:
+
+```sh
+NOUVEAU_KERNEL_SOURCE_ROOT=/home/keivan/nouveau-vaapi-app-validation/master-handoff-build-20261002/source-gitapply-stack-v8-20261002 PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_nvif_duplicate_diagnostic.py
+```
+
+Result: **2/2**.
+
+From
+`/home/keivan/nouveau-hpd-ddc-dkms/validation/mesa-ffplay-progressive-export-candidate/tests`:
+
+```sh
+MESA_SURFACE_C_SOURCE=/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-functional-no-mesa-diag-20260930/source/mesa-26.0.8/src/gallium/frontends/va/surface.c PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v test_progressive_export_patch.py
+```
+
+Result: **3/3**. The pinned input `surface.c` SHA-256 is
+`f66d404ad556926a37caffa5d120a04a74b4a36af63e322ce578b6840e8ffcc0`.
+
+Pinned source and patch hashes:
+
+```text
+Mesa nouveau.c:                    2140bca6de1666e4517ebabf97a63b417db43bfbc575198d7835d40ad92dc57f
+Linux nouveau_abi16.c:              3d4c81dd87c8e426b7e948eb448a49075d1df54ab22c68b8e181a0b88bd28fec
+Linux nvkm/core/ioctl.c:            2a18013840cee2298edadd19171b083cfed2bb7227a13303ac9afad34a107e18
+Linux nvkm/core/object.c:           7dc1fca97b143da107a1234d467774608b0808ca84f88f368313941126890c6d
+Mesa lifetime diagnostic patch:    f89c752fc445d4534f46ce45813a877b4229efdeae7d6d306429fb7462f913b7
+Mesa delete-fd patch:               6ff3fdf5b3a38f07246830c78acf46cf222dd3ec2114a87a03526d5f8721df2c
+Kernel duplicate-layer patch:       442b14bfb53201dc7c9e7ac8bcfd6a1f74bb94280a8d766ffc119bcf20d327fc
+ffplay progressive-export patch:    e8e7611f591c237bf4c2d5c993b93625af1d5610a3277b6698c1c501d5858560
+```
+
+The following in-memory Python compilation checked the three lifetime tools,
+their four tests, and the four source-contract tests (11 files total):
+
+```sh
+python3 - <<'PY'
+from pathlib import Path
+paths = [
+    Path('validation/mesa-nvif-lifetime-diagnostic/build_nvif_lifetime_ab.py'),
+    Path('validation/mesa-nvif-lifetime-diagnostic/capture_nvif_lifetime_run.py'),
+    Path('validation/mesa-nvif-lifetime-diagnostic/parse_nvif_lifetime_ab.py'),
+    Path('validation/mesa-nvif-lifetime-diagnostic/tests/test_build_nvif_lifetime_ab.py'),
+    Path('validation/mesa-nvif-lifetime-diagnostic/tests/test_capture_nvif_lifetime_run.py'),
+    Path('validation/mesa-nvif-lifetime-diagnostic/tests/test_nvif_lifetime_diagnostic.py'),
+    Path('validation/mesa-nvif-lifetime-diagnostic/tests/test_parse_nvif_lifetime_ab.py'),
+    Path('validation/mesa-nvif-delete-fd-candidate/tests/test_linux_abi16_duplicate_key.py'),
+    Path('validation/mesa-nvif-delete-fd-candidate/tests/test_nvif_delete_fd_patch.py'),
+    Path('validation/nouveau-nvif-duplicate-diagnostic/tests/test_nvif_duplicate_diagnostic.py'),
+    Path('validation/mesa-ffplay-progressive-export-candidate/tests/test_progressive_export_patch.py'),
+]
+for path in paths:
+    compile(path.read_bytes(), str(path), 'exec')
+print(f'PASS: in-memory compile of {len(paths)} Python files')
+PY
+```
+
+Result: **PASS, 11 files**. A repository scan found no generated
+`__pycache__` or `.pyc` files. `git diff --check` passed for this evidence
+update.
+
 ## Runtime boundary
 
 The current service has no `DISPLAY`. The observed boot is
