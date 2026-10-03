@@ -60,9 +60,12 @@ backing_target=2 map=000000006922316d maps=0
 
 This record is 4h36m04.154562s before the PTE. No later
 `NOUVEAU_DIAG_BAR2_MAP` record appears in the captured current-boot kernel
-journal. Across all 544 records, neither a recorded backing range
-`[backing_addr, backing_addr + backing_size)` nor VMA range
-`[vma_start, vma_start + vma_size)` contains `0x5ea000`.
+journal. Across all 544 records, no recorded VMA range
+`[vma_start, vma_start + vma_size)` contains `0x5ea000`. No recorded backing
+range `[backing_addr, backing_addr + backing_size)` numerically contains it
+either. The journal record alone does not establish that `backing_addr` and
+the BAR2 fault address use the same address domain, so that backing-range
+comparison is only a numeric non-match, not equivalent address-space evidence.
 
 The numeric `map=000000006922316d` value appears in two distinct map/destroy
 pairs before the PTE: one for object `000000002b06330a` and a later one for
