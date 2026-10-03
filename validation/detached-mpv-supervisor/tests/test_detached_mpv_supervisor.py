@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 import json
+import io
 import os
 import signal
 import copy
@@ -38,6 +39,7 @@ from detached_mpv_supervisor import (
     mpv_run_exit_code,
     mapped_driver_status,
     passive_post_stop_snapshot,
+    prove_kernel_journal_visibility,
     first_stop_signature,
     _read_module_parameter,
     process_group_members,
@@ -72,6 +74,177 @@ class FinalJournalClassificationTests(unittest.TestCase):
         self.assertEqual(trigger, line)
         self.assertEqual(signature, ("CTXSW_TIMEOUT", line))
         self.assertTrue(failed)
+
+
+class KernelJournalVisibilityTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.temporary = tempfile.TemporaryDirectory(prefix="nvmpv-boot-id-")
+        self.boot_id_path = Path(self.temporary.name) / "boot_id"
+        self.boot_id = "03f7b214-ea03-4be8-af92-f6a073942e9d"
+        self.boot_id_path.write_text(self.boot_id + "\n", encoding="ascii")
+
+    def tearDown(self) -> None:
+        self.temporary.cleanup()
+
+    def query(self, stdout: str, returncode: int = 0, stderr: str = ""):
+        return subprocess.CompletedProcess(
+            args=[], returncode=returncode, stdout=stdout, stderr=stderr
+        )
+
+    def test_current_boot_kernel_record_proves_visibility(self) -> None:
+        record = {
+            "_TRANSPORT": "kernel",
+            "_BOOT_ID": self.boot_id.replace("-", ""),
+            "MESSAGE": "Linux version ...",
+        }
+        with (
+            patch.object(supervisor, "BOOT_ID_PATH", self.boot_id_path),
+            patch.object(
+                supervisor,
+                "journal",
+                return_value=self.query(json.dumps(record) + "\n"),
+            ) as query,
+        ):
+            self.assertEqual(
+                prove_kernel_journal_visibility(),
+                (True, "current-boot kernel journal visibility proven"),
+            )
+        query.assert_called_once_with(
+            ["-k", "-b", "-n", "1", "--no-pager", "-o", "json"],
+            timeout=5,
+        )
+
+    def test_empty_journal_is_not_a_clean_baseline(self) -> None:
+        with (
+            patch.object(supervisor, "BOOT_ID_PATH", self.boot_id_path),
+            patch.object(supervisor, "journal", return_value=self.query("")),
+        ):
+            visible, detail = prove_kernel_journal_visibility()
+        self.assertFalse(visible)
+        self.assertIn("got 0", detail)
+
+    def test_inaccessible_journal_is_not_a_clean_baseline(self) -> None:
+        with (
+            patch.object(supervisor, "BOOT_ID_PATH", self.boot_id_path),
+            patch.object(
+                supervisor,
+                "journal",
+                return_value=self.query("", returncode=1, stderr="permission denied"),
+            ),
+        ):
+            visible, detail = prove_kernel_journal_visibility()
+        self.assertFalse(visible)
+        self.assertEqual(detail, "permission denied")
+
+    def test_wrong_boot_and_non_kernel_transport_are_rejected(self) -> None:
+        cases = (
+            ({"_TRANSPORT": "kernel", "_BOOT_ID": "a" * 32}, "boot mismatch"),
+            (
+                {
+                    "_TRANSPORT": "syslog",
+                    "_BOOT_ID": self.boot_id.replace("-", ""),
+                },
+                "not kernel transport",
+            ),
+        )
+        for record, expected in cases:
+            with self.subTest(expected=expected):
+                with (
+                    patch.object(supervisor, "BOOT_ID_PATH", self.boot_id_path),
+                    patch.object(
+                        supervisor,
+                        "journal",
+                        return_value=self.query(json.dumps(record) + "\n"),
+                    ),
+                ):
+                    visible, detail = prove_kernel_journal_visibility()
+                self.assertFalse(visible)
+                self.assertIn(expected, detail)
+
+    def test_invalid_json_and_boot_id_read_fail_closed(self) -> None:
+        with (
+            patch.object(supervisor, "BOOT_ID_PATH", self.boot_id_path),
+            patch.object(supervisor, "journal", return_value=self.query("not-json\n")),
+        ):
+            visible, detail = prove_kernel_journal_visibility()
+        self.assertFalse(visible)
+        self.assertIn("invalid JSON", detail)
+
+        with patch.object(supervisor, "BOOT_ID_PATH", Path("/missing/boot-id")):
+            visible, detail = prove_kernel_journal_visibility()
+        self.assertFalse(visible)
+        self.assertIn("cannot read current boot ID", detail)
+
+    def test_preflight_rejects_unproven_kernel_journal_visibility(self) -> None:
+        completed = self.query("")
+        original_read_text = Path.read_text
+
+        def fake_read_text(path: Path, *args, **kwargs) -> str:
+            if str(path) == "/sys/module/nouveau/srcversion":
+                return "test-srcversion\n"
+            return original_read_text(path, *args, **kwargs)
+
+        with (
+            patch.object(supervisor, "prove_kernel_journal_visibility", return_value=(False, "empty")),
+            patch.object(supervisor, "current_players", return_value=[]),
+            patch.object(supervisor, "journal", return_value=completed),
+            patch.object(supervisor, "sha256", return_value=supervisor.EXPECTED_INPUT_SHA256),
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", new=fake_read_text),
+        ):
+            errors, _srcversion, _snapshot, _observed = supervisor.preflight(
+                require_desktop=False
+            )
+        self.assertTrue(
+            any("cannot prove current-boot kernel journal visibility: empty" in item
+                for item in errors)
+        )
+
+
+class CheckOnlyEligibilityOutputTests(unittest.TestCase):
+    def run_main(self, argv: list[str], deployment=None):
+        observed = {"deployment": "verified"} if deployment is not None else {}
+        with (
+            patch.object(
+                supervisor,
+                "preflight",
+                return_value=([], "src", "", observed),
+            ),
+            patch.object(
+                supervisor,
+                "load_deployment_manifest",
+                return_value=deployment,
+            ),
+            patch("sys.stdout", new_callable=io.StringIO) as output,
+        ):
+            status = supervisor.main(argv)
+            return status, output.getvalue()
+
+    def test_unpinned_check_only_is_baseline_only(self) -> None:
+        status, output = self.run_main(["check-only", "--no-desktop"])
+        self.assertEqual(status, 0)
+        self.assertIn("BASELINE_CHECK_PASS", output)
+        self.assertIn("DEPLOYMENT_VERIFIED=false", output)
+        self.assertIn("RUN_ELIGIBLE=false", output)
+        self.assertNotIn("PREFLIGHT_PASS", output)
+
+    def test_manifest_and_desktop_check_are_required_for_eligibility(self) -> None:
+        status, output = self.run_main(
+            ["check-only", "--deployment-manifest", "/tmp/reviewed.json"],
+            deployment={"schema": 1},
+        )
+        self.assertEqual(status, 0)
+        self.assertIn("PREFLIGHT_PASS", output)
+        self.assertIn("DEPLOYMENT_VERIFIED=true", output)
+        self.assertIn("RUN_ELIGIBLE=true", output)
+
+        status, output = self.run_main(
+            ["check-only", "--no-desktop", "--deployment-manifest", "/tmp/reviewed.json"],
+            deployment={"schema": 1},
+        )
+        self.assertEqual(status, 0)
+        self.assertIn("DEPLOYMENT_CHECK_PASS", output)
+        self.assertIn("RUN_ELIGIBLE=false", output)
 
     def test_journal_sync_failure_is_not_ignored(self) -> None:
         failure = subprocess.CompletedProcess(

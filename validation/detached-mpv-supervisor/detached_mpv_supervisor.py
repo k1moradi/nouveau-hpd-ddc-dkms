@@ -48,6 +48,7 @@ RUN_ROOT = HERE / "detached-mpv-runs"
 EXPECTED_INPUT_SHA256 = "d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2"
 MPV = Path("/usr/bin/mpv")
 JOURNALCTL = Path("/usr/bin/journalctl")
+BOOT_ID_PATH = Path("/proc/sys/kernel/random/boot_id")
 SYSTEMD_RUN = Path("/usr/bin/systemd-run")
 SYSTEMCTL = Path("/usr/bin/systemctl")
 XDPYINFO = Path("/usr/bin/xdpyinfo")
@@ -126,6 +127,45 @@ def sync_journal() -> None:
     result = journal(["--sync"], timeout=5)
     if result.returncode:
         raise RuntimeError(f"journal sync failed: {result.stderr.strip()}")
+
+
+def prove_kernel_journal_visibility() -> tuple[bool, str]:
+    """Require one current-boot kernel record before claiming a clean baseline."""
+    try:
+        current_boot = BOOT_ID_PATH.read_text(encoding="ascii").strip().replace("-", "")
+    except OSError as exc:
+        return False, f"cannot read current boot ID: {exc}"
+    if not current_boot:
+        return False, "current boot ID is empty"
+
+    try:
+        result = journal(
+            ["-k", "-b", "-n", "1", "--no-pager", "-o", "json"],
+            timeout=5,
+        )
+    except (OSError, subprocess.TimeoutExpired) as exc:
+        return False, f"kernel journal visibility query failed: {exc}"
+    if result.returncode:
+        return False, result.stderr.strip() or "kernel journal visibility query failed"
+
+    lines = [line for line in result.stdout.splitlines() if line.strip()]
+    if len(lines) != 1:
+        return False, f"expected one current-boot kernel journal record, got {len(lines)}"
+    try:
+        record = json.loads(lines[0])
+    except json.JSONDecodeError as exc:
+        return False, f"kernel journal visibility record is invalid JSON: {exc}"
+    if not isinstance(record, dict):
+        return False, "kernel journal visibility record is not an object"
+    if record.get("_TRANSPORT") != "kernel":
+        return False, "visible journal record is not kernel transport"
+    observed_boot = str(record.get("_BOOT_ID", "")).replace("-", "")
+    if observed_boot != current_boot:
+        return False, (
+            f"kernel journal boot mismatch: expected {current_boot!r}, "
+            f"got {observed_boot!r}"
+        )
+    return True, "current-boot kernel journal visibility proven"
 
 
 def hard_stop_matches(lines: Iterable[str]) -> list[tuple[str, str]]:
@@ -556,6 +596,13 @@ def preflight(
                     errors.append(f"X11 is unreachable: {result.stderr.strip()}")
             except (OSError, subprocess.TimeoutExpired) as exc:
                 errors.append(f"X11 check failed: {exc}")
+
+    journal_visible, journal_visibility_detail = prove_kernel_journal_visibility()
+    if not journal_visible:
+        errors.append(
+            "cannot prove current-boot kernel journal visibility: "
+            + journal_visibility_detail
+        )
 
     players = current_players()
     if players:
@@ -1529,10 +1576,22 @@ def main(argv: list[str] | None = None) -> int:
             print("DEPLOYMENT_OBSERVED=" + json.dumps(observed, sort_keys=True))
         if errors:
             print("PREFLIGHT_FAIL")
+            print("RUN_ELIGIBLE=false")
             for error in errors:
                 print(f"error={error}")
             return 2
-        print("PREFLIGHT_PASS")
+        if deployment is None:
+            print("BASELINE_CHECK_PASS")
+            print("DEPLOYMENT_VERIFIED=false")
+            print("RUN_ELIGIBLE=false")
+        elif args.no_desktop:
+            print("DEPLOYMENT_CHECK_PASS")
+            print("DEPLOYMENT_VERIFIED=true")
+            print("RUN_ELIGIBLE=false")
+        else:
+            print("PREFLIGHT_PASS")
+            print("DEPLOYMENT_VERIFIED=true")
+            print("RUN_ELIGIBLE=true")
         return 0
     if args.action == "start":
         if not args.arm:

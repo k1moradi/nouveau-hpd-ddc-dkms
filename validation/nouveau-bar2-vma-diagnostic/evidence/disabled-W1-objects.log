@@ -1,0 +1,13 @@
+make: Entering directory '/usr/src/linux-headers-7.0.0-34-generic'
+make[1]: Entering directory '/tmp/nouveau-v3-bar2-build-20261003/source/drivers/gpu/drm/nouveau'
+warning: the compiler differs from the one used to build the kernel
+  The kernel was built by: x86_64-linux-gnu-gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+  You are using:           gcc (Ubuntu 15.2.0-16ubuntu1) 15.2.0
+warning: pahole version differs from the one used to build the kernel
+  The kernel was built with: 131
+  You are using:             0
+  CC [M]  nouveau_debugfs.o
+  CC [M]  nvkm/engine/fifo/gf100.o
+  CC [M]  nvkm/subdev/instmem/nv50.o
+make[1]: Leaving directory '/tmp/nouveau-v3-bar2-build-20261003/source/drivers/gpu/drm/nouveau'
+make: Leaving directory '/usr/src/linux-headers-7.0.0-34-generic'

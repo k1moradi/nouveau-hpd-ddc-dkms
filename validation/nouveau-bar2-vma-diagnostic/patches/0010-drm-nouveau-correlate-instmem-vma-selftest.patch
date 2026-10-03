@@ -1,0 +1,265 @@
+diff --git a/drivers/gpu/drm/nouveau/include/nvkm/core/memory.h b/drivers/gpu/drm/nouveau/include/nvkm/core/memory.h
+index fc0f389..153c191 100644
+--- a/drivers/gpu/drm/nouveau/include/nvkm/core/memory.h
++++ b/drivers/gpu/drm/nouveau/include/nvkm/core/memory.h
+@@ -31,6 +31,9 @@ struct nvkm_memory_func {
+ 	enum nvkm_memory_target (*target)(struct nvkm_memory *);
+ 	u8 (*page)(struct nvkm_memory *);
+ 	u64 (*bar2)(struct nvkm_memory *);
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	int (*bar2_vma_snapshot)(struct nvkm_memory *, u64 *addr, u64 *size);
++#endif
+ 	u64 (*addr)(struct nvkm_memory *);
+ 	u64 (*size)(struct nvkm_memory *);
+ 	void (*boot)(struct nvkm_memory *, struct nvkm_vmm *);
+@@ -60,6 +63,16 @@ void nvkm_memory_tags_put(struct nvkm_memory *, struct nvkm_device *,
+ #define nvkm_memory_target(p) (p)->func->target(p)
+ #define nvkm_memory_page(p) (p)->func->page(p)
+ #define nvkm_memory_bar2(p) (p)->func->bar2(p)
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++static inline int
++nvkm_memory_bar2_vma_snapshot(struct nvkm_memory *memory,
++			      u64 *addr, u64 *size)
++{
++	if (!memory->func->bar2_vma_snapshot)
++		return -EOPNOTSUPP;
++	return memory->func->bar2_vma_snapshot(memory, addr, size);
++}
++#endif
+ #define nvkm_memory_addr(p) (p)->func->addr(p)
+ #define nvkm_memory_size(p) (p)->func->size(p)
+ #define nvkm_memory_boot(p,v) (p)->func->boot((p),(v))
+diff --git a/drivers/gpu/drm/nouveau/nouveau_debugfs.c b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+index 285c076..27453dc 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_debugfs.c
++++ b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+@@ -28,7 +28,9 @@
+  *  Ben Skeggs <bskeggs@redhat.com>
+  */
+ 
++#include <linux/atomic.h>
+ #include <linux/debugfs.h>
++#include <linux/device.h>
+ #include <linux/delay.h>
+ #include <linux/jiffies.h>
+ #include <core/device.h>
+@@ -252,6 +254,44 @@ nouveau_debugfs_gpuva(struct seq_file *m, void *data)
+ 
+ #if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
+ static DEFINE_MUTEX(nouveau_selftest_lock);
++static atomic64_t nouveau_selftest_instmem_test_id = ATOMIC64_INIT(0);
++
++struct nouveau_selftest_vma_snapshot {
++	bool valid;
++	u64 start;
++	u64 size;
++};
++
++static void
++nouveau_debugfs_selftest_instmem_log_vma(struct device *device, u64 test_id,
++					 const char *stage, const void *object,
++					 struct nvkm_memory *memory, bool refresh,
++					 struct nouveau_selftest_vma_snapshot *snapshot)
++{
++	u64 start, size;
++	int lookup = -EOPNOTSUPP;
++	bool current_vma = false;
++	const char *range_source;
++
++	if (refresh && memory) {
++		lookup = nvkm_memory_bar2_vma_snapshot(memory, &start, &size);
++		if (!lookup) {
++			snapshot->start = start;
++			snapshot->size = size;
++			snapshot->valid = true;
++			current_vma = true;
++		}
++	}
++	range_source = current_vma ? "current" :
++		       snapshot->valid ? "last_observed" : "unavailable";
++
++	dev_info(device,
++		 "NOUVEAU_DIAG_V3_VMA vmm=BAR2 id=%llu stage=%s obj=%p src=%s va=%#llx len=%#llx rc=%d\n",
++		 (unsigned long long)test_id, stage, object, range_source,
++		 (unsigned long long)(snapshot->valid ? snapshot->start : 0),
++		 (unsigned long long)(snapshot->valid ? snapshot->size : 0),
++		 refresh ? lookup : 0);
++}
+ 
+ static int
+ nouveau_debugfs_selftest_safe_show(struct seq_file *m, void *data)
+@@ -431,6 +471,8 @@ nouveau_debugfs_selftest_instmem_show(struct seq_file *m, u32 size)
+ 	struct nouveau_drm *drm = nouveau_drm(dev);
+ 	const struct nv_device_info_v0 *info = &drm->client.device.info;
+ 	struct nvkm_memory *memory = NULL;
++	const void *memory_identity = NULL;
++	struct nouveau_selftest_vma_snapshot vma = {};
+ 	void __iomem *first_map = NULL;
+ 	void __iomem *nested_map = NULL;
+ 	void __iomem *reacquired_map = NULL;
+@@ -439,6 +481,7 @@ nouveau_debugfs_selftest_instmem_show(struct seq_file *m, u32 size)
+ 	u32 actual = 0;
+ 	int acquired = 0;
+ 	int ret = 0;
++	u64 test_id;
+ 	unsigned int i;
+ 
+ 	if (info->family != NV_DEVICE_INFO_V0_KEPLER || info->chipset != 0x00e4) {
+@@ -464,6 +507,10 @@ nouveau_debugfs_selftest_instmem_show(struct seq_file *m, u32 size)
+ 		seq_puts(m, "NOUVEAU_SELFTEST suite=instmem result=FAIL reason=selftest_busy\n");
+ 		return 0;
+ 	}
++	test_id = atomic64_inc_return(&nouveau_selftest_instmem_test_id);
++	seq_printf(m,
++		   "NOUVEAU_SELFTEST suite=instmem test=scratch_roundtrip id=%llu stage=start size=%u\n",
++		   (unsigned long long)test_id, size);
+ 
+ 	ret = pm_runtime_get_sync(drm->dev->dev);
+ 	if (ret < 0 && ret != -EACCES) {
+@@ -484,6 +531,10 @@ nouveau_debugfs_selftest_instmem_show(struct seq_file *m, u32 size)
+ 			   size, ret);
+ 		goto out_runtime_pm;
+ 	}
++	memory_identity = memory;
++	nouveau_debugfs_selftest_instmem_log_vma(drm->dev->dev, test_id,
++						 "allocated", memory_identity, memory,
++						 false, &vma);
+ 
+ 	if (nvkm_memory_size(memory) < size) {
+ 		ret = -EIO;
+@@ -505,6 +556,9 @@ nouveau_debugfs_selftest_instmem_show(struct seq_file *m, u32 size)
+ 
+ 	first_map = nvkm_kmap(memory);
+ 	acquired++;
++	nouveau_debugfs_selftest_instmem_log_vma(drm->dev->dev, test_id,
++						 "kmap_acquired", memory_identity,
++						 memory, true, &vma);
+ 	if (!first_map) {
+ 		ret = -ENXIO;
+ 		seq_printf(m,
+@@ -517,6 +571,9 @@ nouveau_debugfs_selftest_instmem_show(struct seq_file *m, u32 size)
+ 
+ 	nested_map = nvkm_kmap(memory);
+ 	acquired++;
++	nouveau_debugfs_selftest_instmem_log_vma(drm->dev->dev, test_id,
++						 "nested_acquired", memory_identity,
++						 memory, true, &vma);
+ 	if (!nested_map || nested_map != first_map) {
+ 		ret = -EIO;
+ 		seq_printf(m,
+@@ -546,6 +603,9 @@ nouveau_debugfs_selftest_instmem_show(struct seq_file *m, u32 size)
+ 
+ 	nvkm_done(memory);
+ 	acquired--;
++	nouveau_debugfs_selftest_instmem_log_vma(drm->dev->dev, test_id,
++						 "nested_ref_remaining", memory_identity,
++						 memory, true, &vma);
+ 	actual = nvkm_ro32(memory, offsets[ARRAY_SIZE(seeds) - 1]);
+ 	if (actual != expected[ARRAY_SIZE(seeds) - 1]) {
+ 		ret = -EIO;
+@@ -559,9 +619,15 @@ nouveau_debugfs_selftest_instmem_show(struct seq_file *m, u32 size)
+ 
+ 	nvkm_done(memory);
+ 	acquired--;
++	nouveau_debugfs_selftest_instmem_log_vma(drm->dev->dev, test_id,
++						 "released", memory_identity, memory,
++						 false, &vma);
+ 
+ 	reacquired_map = nvkm_kmap(memory);
+ 	acquired++;
++	nouveau_debugfs_selftest_instmem_log_vma(drm->dev->dev, test_id,
++						 "reacquired", memory_identity,
++						 memory, true, &vma);
+ 	if (!reacquired_map) {
+ 		ret = -ENXIO;
+ 		seq_printf(m,
+@@ -604,6 +670,9 @@ nouveau_debugfs_selftest_instmem_show(struct seq_file *m, u32 size)
+ 			goto out_memory;
+ 		}
+ 	}
++	nouveau_debugfs_selftest_instmem_log_vma(drm->dev->dev, test_id,
++						 "verified", memory_identity, memory,
++						 true, &vma);
+ 
+ 	seq_printf(m,
+ 		   "NOUVEAU_SELFTEST suite=instmem test=scratch_roundtrip "
+@@ -616,7 +685,15 @@ out_memory:
+ 		nvkm_done(memory);
+ 		acquired--;
+ 	}
+-	nvkm_memory_unref(&memory);
++	if (memory) {
++		nouveau_debugfs_selftest_instmem_log_vma(drm->dev->dev, test_id,
++							 "destroying", memory_identity,
++							 memory, false, &vma);
++		nvkm_memory_unref(&memory);
++		nouveau_debugfs_selftest_instmem_log_vma(drm->dev->dev, test_id,
++							 "destroyed", memory_identity,
++							 NULL, false, &vma);
++	}
+ out_runtime_pm:
+ 	pm_runtime_mark_last_busy(drm->dev->dev);
+ 	pm_runtime_put_autosuspend(drm->dev->dev);
+diff --git a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c
+index f48eae6..96e046a 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c
++++ b/drivers/gpu/drm/nouveau/nvkm/engine/fifo/gf100.c
+@@ -761,6 +761,13 @@ gf100_fifo_intr_mmu_fault_unit(struct nvkm_fifo *fifo, int unit)
+ 	u32 type = nvkm_rd32(device, 0x00280c + (unit * 0x10));
+ 	struct nvkm_fault_data info;
+ 
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	if (unit == 0x05)
++		nvkm_info(&fifo->engine.subdev,
++			  "NOUVEAU_DIAG_BAR2_FAULT unit=%02x inst=%08x valo=%08x vahi=%08x type=%08x\n",
++			  (u32)unit, inst, valo, vahi, type);
++#endif
++
+ 	info.inst   =  (u64)inst << 12;
+ 	info.addr   = ((u64)vahi << 32) | valo;
+ 	info.time   = 0;
+diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
+index 6fbaa1e..b9993cf 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
+@@ -307,6 +307,30 @@ nv50_instobj_bar2(struct nvkm_memory *memory)
+ 	return addr;
+ }
+ 
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++static int
++nv50_instobj_bar2_vma_snapshot(struct nvkm_memory *memory,
++			       u64 *addr, u64 *size)
++{
++	struct nv50_instobj *iobj = nv50_instobj(memory);
++	struct nvkm_instmem *imem = &iobj->imem->base;
++	int ret = -ENXIO;
++
++	if (!addr || !size)
++		return -EINVAL;
++
++	/* The caller holds a kmap reference, so this VMA cannot be evicted. */
++	mutex_lock(&imem->mutex);
++	if (refcount_read(&iobj->maps) > 0 && iobj->bar && iobj->map) {
++		*addr = iobj->bar->addr;
++		*size = iobj->bar->size;
++		ret = 0;
++	}
++	mutex_unlock(&imem->mutex);
++	return ret;
++}
++#endif
++
+ static enum nvkm_memory_target
+ nv50_instobj_target(struct nvkm_memory *memory)
+ {
+@@ -345,6 +369,9 @@ nv50_instobj_func = {
+ 	.dtor = nv50_instobj_dtor,
+ 	.target = nv50_instobj_target,
+ 	.bar2 = nv50_instobj_bar2,
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	.bar2_vma_snapshot = nv50_instobj_bar2_vma_snapshot,
++#endif
+ 	.addr = nv50_instobj_addr,
+ 	.size = nv50_instobj_size,
+ 	.boot = nv50_instobj_boot,
