@@ -122,11 +122,64 @@ key; subchannel DEL instead passes `obj->parent->handle` as the fd and ignores
 the return (`src/gallium/winsys/nouveau/drm/nouveau.c`, around lines 150-174
 and 230-246). This supports a stale-key hypothesis but does not prove it.
 The saved runtime records lack the old/new object key and DEL return. Linux
-7.0 source has two possible `-EEXIST` sites: the earlier per-file ABI16 key
-check (`drivers/gpu/drm/nouveau/nouveau_abi16.c`, around lines 118-135 and
-761-800) and the later NVKM client-object insertion check
-(`nvkm/core/ioctl.c`, around lines 132-148). The v5 probe did not identify
-which site returned the error.
+7.0 source has two possible `-EEXIST` sites, and the call order is now verified
+against the pinned Ubuntu source. `nouveau_drm_ioctl()` routes
+`DRM_NOUVEAU_NVIF` to `nouveau_abi16_ioctl()` (`nouveau_drm.c`, lines
+1300-1303). For a routed NEW, `nouveau_abi16_ioctl_new()` resolves the channel
+token, then calls `nouveau_abi16_obj_new(abi16, ENGOBJ, args->object)` before
+calling `nvif_object_ctor()` (`nouveau_abi16.c`, lines 787-800). The helper
+searches the per-file `abi16->objects` list and returns `-EEXIST` immediately
+when that key is already present (`nouveau_abi16.c`, lines 118-135). That
+ABI16 rejection returns before the nested NVKM construction/insertion path.
+Only a new ABI16 key proceeds to `nvif_object_ctor()` and can reach the later
+NVKM object-tree duplicate check (`nvkm/core/ioctl.c`, lines 132-148). If that
+nested constructor fails, the provisional ABI16 entry is removed at
+`nouveau_abi16.c`, lines 795-799.
+
+For the Mesa subchannel path under review, NEW places `(uintptr_t)obj` in
+`new.object`, and DEL places the same pointer in `ioctl.object`
+(`nouveau.c`, lines 149-173 and 230-246). The kernel ABI16 NEW stores
+`args->object`; DEL searches by `ioctl->object`. Thus the intended registry
+key is the same wrapper-object pointer on creation and deletion.
+
+The cleanup paths also distinguish the two layers. Channel free calls
+`nouveau_abi16_chan_fini()`; that destroys the channel and its NVKM children,
+but does not remove entries from the separate `abi16->objects` list
+(`nouveau_abi16.c`, lines 172-209 and 509-523). An explicit NVIF DEL looks up
+the key in that per-file list, destroys the NVIF object if present, and removes
+the entry (`nouveau_abi16.c`, lines 742-758). DRM-file/client finalization
+clears any remaining entries (`nouveau_abi16.c`, lines 212-230).
+
+The inspected source files from the local Ubuntu 7.0.0-34 build tree have
+these SHA-256 identities:
+
+| Source | SHA-256 |
+|---|---|
+| `drivers/gpu/drm/nouveau/nouveau_drm.c` | `a69bfbb7cc441171a80837d4806d8f677eede00abd6edcdf64ff8766911b4a07` |
+| `drivers/gpu/drm/nouveau/nouveau_abi16.c` | `3d4c81dd87c8e426b7e948eb448a49075d1df54ab22c68b8e181a0b88bd28fec` |
+| `drivers/gpu/drm/nouveau/nvif/object.c` | `8862cdc0527a211a6041deae6f5a8ab421a32955dca17beed32b32a9faf32147` |
+| `drivers/gpu/drm/nouveau/nvkm/core/ioctl.c` | `2a18013840cee2298edadd19171b083cfed2bb7227a13303ac9afad34a107e18` |
+| `drivers/gpu/drm/nouveau/nvkm/core/object.c` | `7dc1fca97b143da107a1234d467774608b0808ca84f88f368313941126890c6d` |
+
+One return-value detail changes how the A/B evidence must be interpreted:
+`nouveau_abi16_ioctl_del()` returns `0` even when the addressed file has no
+matching key. Thus, a DEL sent through a different valid DRM fd can return
+success while leaving the intended file's key untouched. A nonzero wrong-fd
+DEL return is useful evidence, but it is not required for the stale-key
+sequence. A later same-key `layer=abi16` duplicate, correlated to the same
+channel route, proves the key remained. The userspace diagnostic records both
+the fd and ioctl return so the two cases remain distinguishable.
+
+Patch `0009` places `layer=abi16` logging only at the `-EEXIST` result from
+`nouveau_abi16_obj_new()` and `layer=nvkm` logging only at the failed
+`nvkm_object_insert()` branch. These markers distinguish the actual source
+returns; they do not change the error result.
+
+This makes a stale ABI16 key after a misdirected DEL a concrete,
+source-supported candidate for the v5 BSP `-EEXIST`. The v5 capture still did
+not record the object key, DEL fd/return, or duplicate-layer marker, so it
+does not establish that this was the runtime failure site or prove the
+wrong-fd candidate causal.
 
 ### Upstream Mesa source/history check
 

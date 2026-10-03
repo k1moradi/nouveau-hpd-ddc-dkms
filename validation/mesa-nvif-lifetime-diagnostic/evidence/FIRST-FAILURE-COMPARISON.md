@@ -66,11 +66,20 @@ lifecycle difference, not proof that retaining surfaces is defective.
 Mesa source reveals a candidate invariant failure: subchannel NEW uses the
 root DRM fd and a pointer-derived object key, while subchannel DEL passes the
 parent channel handle as the `drmCommandWrite()` fd and ignores its return.
-This can leave an ABI16 per-client key behind if the DEL is misdirected. The
-saved v5 capture lacks the old/new keys, DEL return, and exact duplicate layer,
-so that explanation remains **source-supported but not runtime-proven**. The
-matched A/B logger and fail-closed correlator are in this directory; they have
-not been run on hardware.
+Pinned Ubuntu kernel source confirms that routed NVIF NEW first checks and
+registers the pointer-derived key in the per-file ABI16 list, then invokes the
+nested NVKM constructor. A duplicate ABI16 key therefore returns `-EEXIST`
+before NVKM. Channel teardown destroys channel children but does not remove
+that separate ABI16 key; explicit NVIF DEL or DRM-client teardown does. The
+DEL handler also returns zero when the addressed file has no matching key, so
+a wrong-fd DEL can appear successful while leaving the intended file's key
+present. A later same-key ABI16 duplicate is the evidence that would establish
+the key persisted.
+
+This makes the stale-ABI16-key explanation more specific and
+**source-supported**, but still not runtime-proven: the saved v5 capture lacks
+the old/new keys, DEL fd/return, and exact duplicate layer. The matched A/B
+logger and fail-closed correlator are not run on hardware.
 
 ## ffplay first failure
 

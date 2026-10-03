@@ -38,7 +38,10 @@ and working directory and hashes the current Xauthority file.
 - A's deliberate nonzero termination is accepted only when the termination
   reason records the expected BSP `-EEXIST`. A must reproduce the complete
   wrong-fd/stale-key/duplicate chain before B can count as a candidate result.
-  An NVKM duplicate without client identity remains inconclusive.
+  ABI16 DEL returns zero when the addressed file lacks the key, so A's DEL
+  ioctl return may be zero or nonzero; the later matching same-key ABI16
+  duplicate is required to prove the key remained. An NVKM duplicate without
+  client identity remains inconclusive.
 - On this kernel `diag_ctxsw` is mode `0600`; the runner uses a noninteractive
   read-only `sudo -n /usr/bin/cat` fallback for that parameter only. MPV itself
   is never run as root. If that read is unavailable, the runner refuses before
@@ -56,3 +59,21 @@ their test files. `git diff --check` passed.
 
 These are CPU-only source/tool tests. They establish no runtime A/B result,
 BAR2/PTE fix, visible playback, or release acceptance. `main` remains HOLD.
+
+## Follow-up: ABI16 zero-return DEL semantics
+
+A re-read of the pinned Linux 7.0.0-34 source established that
+`nouveau_abi16_ioctl_del()` returns zero when the addressed DRM file lacks the
+requested object key. The A correlator now accepts a zero-return wrong-fd DEL
+only when the subsequent replacement NEW has the same key, fails with
+`-EEXIST`, and has a same-route `layer=abi16` marker. It records the DEL return
+in the matched lifecycle. A zero return without that exact stale-key evidence,
+or with only an NVKM duplicate marker, remains inconclusive. The source-order
+and cleanup details are recorded in
+[`FIRST-FAILURE-RAW-REVALIDATION-20261003.md`](FIRST-FAILURE-RAW-REVALIDATION-20261003.md).
+
+After this change, the lifetime diagnostic suite passed **68/68** tests with
+no skips; the separate Mesa delete-fd suite passed **3/3**, the ABI16/NVKM
+source-contract suite **6/6**, and the kernel duplicate-marker suite **2/2**.
+Python syntax compilation and `git diff --check` passed. This was CPU-only;
+neither DSO was run and no module or boot state was changed.

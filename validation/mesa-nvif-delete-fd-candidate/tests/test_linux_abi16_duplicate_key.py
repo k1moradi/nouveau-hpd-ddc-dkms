@@ -130,7 +130,12 @@ class Abi16DuplicateKeyTests(unittest.TestCase):
         )
         find_key = ioctl_del.index("nouveau_abi16_obj_find(abi16, ioctl->object)")
         remove_key = ioctl_del.index("nouveau_abi16_obj_del(obj)")
+        object_branch = ioctl_del.index("if (obj) {")
+        branch_end = ioctl_del.index("\n\t}\n\n\treturn 0;", object_branch)
+        no_match_return = ioctl_del.index("return 0;", branch_end)
         self.assertLess(find_key, remove_key)
+        self.assertLess(remove_key, branch_end)
+        self.assertGreater(no_match_return, branch_end)
 
     def test_nvkm_has_a_separate_duplicate_object_return(self) -> None:
         nvkm_new = function_body(self.nvkm_ioctl_source, "nvkm_ioctl_new")

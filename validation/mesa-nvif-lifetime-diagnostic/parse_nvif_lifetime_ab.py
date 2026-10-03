@@ -105,6 +105,7 @@ class SequenceMatch:
     pid: int
     first_new_usec: int
     delete_usec: int
+    delete_ret: int
     channel_free_usec: int
     second_new_usec: int
     route_token: int
@@ -448,7 +449,7 @@ def _matching_chains(
                     if variant == "A":
                         accepted = (
                             int(deletion.fields["fd"]) != int(deletion.fields["drm_fd"])
-                            and int(deletion.fields["ret"]) != 0
+                            and int(deletion.fields["ret"]) <= 0
                             and int(second.fields["ret"]) == ERRNO_EEXIST
                             and duplicate is not None
                         )
@@ -465,6 +466,7 @@ def _matching_chains(
                             pid=pid,
                             first_new_usec=first.monotonic_usec,
                             delete_usec=deletion.monotonic_usec,
+                            delete_ret=int(deletion.fields["ret"]),
                             channel_free_usec=free.monotonic_usec,
                             second_new_usec=second.monotonic_usec,
                             route_token=int(second.fields["route_token"]),
@@ -486,10 +488,14 @@ def analyze(events: list[Event], variant: str) -> dict[str, Any]:
             duplicate_layers={"nvkm"},
         )
     if matches:
-        result = (
-            "BASELINE_REPRODUCED_EEXIST_CHAIN" if variant == "A"
-            else "CANDIDATE_LIFECYCLE_SUCCEEDED"
-        )
+        if variant == "A":
+            result = (
+                "BASELINE_REPRODUCED_EEXIST_AFTER_ZERO_RETURN_DEL"
+                if all(match.delete_ret == 0 for match in matches)
+                else "BASELINE_REPRODUCED_EEXIST_CHAIN"
+            )
+        else:
+            result = "CANDIDATE_LIFECYCLE_SUCCEEDED"
     elif weak_nvkm_matches:
         result = "INCONCLUSIVE_NVKM_DUPLICATE_IDENTITY_WEAK"
     else:
@@ -769,7 +775,10 @@ def compare_runs(
         outcome = "INCOMPLETE_WORKLOAD"
     elif result_a["result"] == "INCONCLUSIVE_NVKM_DUPLICATE_IDENTITY_WEAK":
         outcome = "INCONCLUSIVE_NVKM_DUPLICATE_IDENTITY_WEAK"
-    elif result_a["result"] != "BASELINE_REPRODUCED_EEXIST_CHAIN":
+    elif result_a["result"] not in {
+        "BASELINE_REPRODUCED_EEXIST_CHAIN",
+        "BASELINE_REPRODUCED_EEXIST_AFTER_ZERO_RETURN_DEL",
+    }:
         outcome = "INCONCLUSIVE_BASELINE_NOT_REPRODUCED"
     elif result_b["result"] != "CANDIDATE_LIFECYCLE_SUCCEEDED":
         outcome = "INCONCLUSIVE_CANDIDATE_LIFECYCLE_NOT_CLEAN"

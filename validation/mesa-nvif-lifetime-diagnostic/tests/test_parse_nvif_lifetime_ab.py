@@ -55,9 +55,10 @@ def channel_free_line(ret: int = 0) -> str:
     return f"NOUVEAU_DIAG_NVIF_CHANNEL_FREE channel=0x2 fd=9 ret={ret}"
 
 
-def duplicate_line(*, layer: str = "abi16", channel: int = 0x3) -> str:
+def duplicate_line(*, layer: str = "abi16", channel: int = 0x3,
+                   key: int = 0x500) -> str:
     message = (
-        f"NOUVEAU_DIAG_NVIF_DUP layer={layer} key=0x500 "
+        f"NOUVEAU_DIAG_NVIF_DUP layer={layer} key=0x{key:x} "
         "class=0x000095b1"
     )
     if layer == "abi16":
@@ -67,17 +68,23 @@ def duplicate_line(*, layer: str = "abi16", channel: int = 0x3) -> str:
 
 def baseline_records(*, duplicate_channel: int = 0x3,
                      duplicate_layer: str = "abi16",
+                     duplicate_key: int = 0x500,
+                     delete_ret: int = -9,
                      include_free: bool = True) -> str:
     records = [
         journal_line(new_line(ret=0, route=0x2), 100),
-        journal_line(del_line(fd=2, ret=-9), 200),
+        journal_line(del_line(fd=2, ret=delete_ret), 200),
     ]
     if include_free:
         records.append(journal_line(channel_free_line(), 300))
     records.extend([
         journal_line(
             "nouveau 0000:01:00.0: drm: "
-            + duplicate_line(layer=duplicate_layer, channel=duplicate_channel),
+            + duplicate_line(
+                layer=duplicate_layer,
+                channel=duplicate_channel,
+                key=duplicate_key,
+            ),
             390,
             pid=None,
         ),
@@ -165,6 +172,39 @@ class NvifLifetimeParserTests(unittest.TestCase):
         result = parser.analyze(self.parse(text), "A")
         self.assertEqual(result["result"], "BASELINE_REPRODUCED_EEXIST_CHAIN")
         self.assertEqual(result["matching_lifecycles"][0]["duplicate_layer"], "abi16")
+        self.assertEqual(result["matching_lifecycles"][0]["delete_ret"], -9)
+
+    def test_baseline_accepts_zero_return_wrong_fd_del_only_with_stale_key_proof(
+        self,
+    ) -> None:
+        result = parser.analyze(
+            self.parse(baseline_records(delete_ret=0)),
+            "A",
+        )
+        self.assertEqual(
+            result["result"],
+            "BASELINE_REPRODUCED_EEXIST_AFTER_ZERO_RETURN_DEL",
+        )
+        self.assertEqual(result["matching_lifecycles"][0]["delete_ret"], 0)
+
+    def test_zero_return_wrong_fd_del_without_abi16_duplicate_is_inconclusive(
+        self,
+    ) -> None:
+        result = parser.analyze(
+            self.parse(baseline_records(delete_ret=0, duplicate_layer="nvkm")),
+            "A",
+        )
+        self.assertEqual(
+            result["result"],
+            "INCONCLUSIVE_NVKM_DUPLICATE_IDENTITY_WEAK",
+        )
+
+    def test_zero_return_wrong_fd_del_requires_same_duplicate_key(self) -> None:
+        result = parser.analyze(
+            self.parse(baseline_records(delete_ret=0, duplicate_key=0x501)),
+            "A",
+        )
+        self.assertEqual(result["result"], "INCONCLUSIVE_BASELINE_NOT_REPRODUCED")
 
     def test_nvkm_duplicate_without_process_identity_is_inconclusive(self) -> None:
         result = parser.analyze(
@@ -259,6 +299,22 @@ class NvifLifetimeParserTests(unittest.TestCase):
             manifest("B"),
         )
         self.assertEqual(result["outcome"], "A_REPRODUCED_B_LIFECYCLE_SUCCEEDED")
+
+    def test_pair_comparison_accepts_zero_return_del_with_abi16_stale_key(self) -> None:
+        baseline = manifest("A")
+        baseline["workload_returncode"] = -2
+        baseline["termination_reason"] = "bsp-eexist"
+        result = parser.compare_runs(
+            self.parse(baseline_records(delete_ret=0)),
+            self.parse(candidate_records()),
+            baseline,
+            manifest("B"),
+        )
+        self.assertEqual(result["outcome"], "A_REPRODUCED_B_LIFECYCLE_SUCCEEDED")
+        self.assertEqual(
+            result["variant_a"]["result"],
+            "BASELINE_REPRODUCED_EEXIST_AFTER_ZERO_RETURN_DEL",
+        )
 
     def test_nonzero_baseline_exit_is_allowed_only_for_eexist_early_stop(self) -> None:
         baseline = manifest("A")

@@ -45,13 +45,21 @@ causal sequence sought is:
 
 ```text
 A: NEW key K succeeds
-A: DEL key K uses the parent channel handle as fd and fails
+A: DEL key K uses the parent channel handle instead of the DRM fd
 A: channel free for that parent channel succeeds
-B: NEW key K returns -EEXIST, with the kernel duplicate layer identified
+replacement NEW key K returns -EEXIST, with the kernel duplicate layer identified
 
-Candidate: same lifecycle; DEL key K uses the real DRM fd and succeeds;
-           replacement BSP NEW succeeds.
+Variant B: same lifecycle; DEL key K uses the real DRM fd and succeeds;
+          replacement BSP NEW succeeds.
 ```
+
+The baseline DEL return is recorded but may be either zero or nonzero. In the
+pinned Linux 7.0 ABI16 handler, DEL returns zero when the addressed DRM file
+does not contain the requested key. Therefore a zero-return DEL on the
+mismatched fd does not prove the intended per-file key was removed. The
+correlator requires the later same-key ABI16 duplicate and matching channel
+route; it reports the DEL return in each matched lifecycle. A nonzero return
+without that duplicate is not a reproduced stale-key chain.
 
 A successful replacement alone is not enough. If the old codec stays alive
 longer because surface-held `pipe_video_codec` references change teardown
@@ -198,15 +206,16 @@ The parser requires separate boots, matching workload/environment/kernel and
 module identity, pinned per-variant DSO hashes, verified journal hashes and
 clean preflight artifacts. A hard-stop event from either run overrides the
 NVIF lifecycle result. It accepts the A baseline only for a successful first
-NEW, wrong-fd DEL failure, successful old-channel free, replacement NEW
-returning `-EEXIST`, and a matching ABI16 duplicate marker. An NVKM duplicate
-without process/client identity is explicitly inconclusive. A's intentional
-process-group stop on `-EEXIST` is permitted; other nonzero exits, timeouts, or
-unproven journal boundaries make the pair incomplete. The capture CLI returns
-nonzero for an unexplained workload failure, a dirty kernel result, an
-incomplete journal boundary, a timeout, or an A run that does not reproduce
-the expected `-EEXIST`. A zero capture status only means the artifact is usable
-for pair comparison; it is not a causal pass.
+NEW, wrong-fd DEL attempt, successful old-channel free, replacement NEW
+returning `-EEXIST`, and a same-key/channel ABI16 duplicate marker. The DEL
+return is retained and can be zero or nonzero, as described above. An NVKM
+duplicate without process/client identity is explicitly inconclusive. A's
+intentional process-group stop on `-EEXIST` is permitted; other nonzero exits,
+timeouts, or unproven journal boundaries make the pair incomplete. The
+capture CLI returns nonzero for an unexplained workload failure, a dirty
+kernel result, an incomplete journal boundary, a timeout, or an A run that
+does not reproduce the expected `-EEXIST`. A zero capture status only means
+the artifact is usable for pair comparison; it is not a causal pass.
 
 The B candidate requires a successful correct-fd DEL, successful channel
 free, and successful replacement NEW without a matching duplicate marker.
