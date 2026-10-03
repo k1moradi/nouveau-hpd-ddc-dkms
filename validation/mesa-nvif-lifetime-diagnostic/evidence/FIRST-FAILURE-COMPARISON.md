@@ -4,6 +4,9 @@ This is a CPU-only evidence summary of the saved VA traces, ffplay debugger
 capture, and Mesa 26.0.8 source audit. It does not claim a functional fix or
 visible-playback pass. The full working analysis is retained at
 `/home/keivan/nouveau-vaapi-app-validation/analysis/first-failure-source-comparison.md`.
+The raw-artifact revalidation, call/thread details, and source-chain caveats
+are recorded in
+[`FIRST-FAILURE-RAW-REVALIDATION-20261003.md`](FIRST-FAILURE-RAW-REVALIDATION-20261003.md).
 
 ## Evidence identity
 
