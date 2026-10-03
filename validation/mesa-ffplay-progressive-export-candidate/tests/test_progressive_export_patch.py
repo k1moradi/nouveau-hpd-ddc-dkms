@@ -11,14 +11,21 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 PATCH = ROOT / "patches/0001-va-export-interlaced-surface-through-progressive-staging.patch"
+BOUNDED_WAIT_PATCH = ROOT / "patches/0002-use-bounded-nouveau-fence-poll.patch"
 EXPECTED_PATCH_SHA256 = (
     "e8e7611f591c237bf4c2d5c993b93625af1d5610a3277b6698c1c501d5858560"
+)
+EXPECTED_BOUNDED_WAIT_PATCH_SHA256 = (
+    "6865f60a222043ddd2e31f5c8cfad84d4bd3c7dff588988a39eda03281d5d0e1"
 )
 EXPECTED_BASE_SHA256 = (
     "f66d404ad556926a37caffa5d120a04a74b4a36af63e322ce578b6840e8ffcc0"
 )
 EXPECTED_CANDIDATE_SHA256 = (
     "ca7e3b5fbd1f0c915d0efb6143ee620a883a17507d2a90442ef2b512b516c3da"
+)
+EXPECTED_BOUNDED_CANDIDATE_SHA256 = (
+    "dc84e79326ee5e546f296279e65eb9dc468080833de875b82391fba09c26706c"
 )
 SOURCE = os.environ.get("MESA_SURFACE_C_SOURCE")
 
@@ -42,6 +49,8 @@ class ProgressiveExportPatchTests(unittest.TestCase):
             raise RuntimeError("baseline surface.c SHA-256 mismatch")
         if sha256(PATCH) != EXPECTED_PATCH_SHA256:
             raise RuntimeError("progressive-export patch SHA-256 mismatch")
+        if sha256(BOUNDED_WAIT_PATCH) != EXPECTED_BOUNDED_WAIT_PATCH_SHA256:
+            raise RuntimeError("bounded-fence-wait patch SHA-256 mismatch")
         if shutil.which("patch") is None:
             raise RuntimeError("GNU patch is required for strict patch validation")
 
@@ -50,18 +59,22 @@ class ProgressiveExportPatchTests(unittest.TestCase):
         destination = root / relative
         destination.parent.mkdir(parents=True)
         shutil.copyfile(self.baseline, destination)
-        result = subprocess.run(
-            [
-                "patch", "--fuzz=0", "--batch", "--forward", "-p1",
-                "-i", str(PATCH),
-            ],
-            cwd=root,
-            text=True,
-            capture_output=True,
-            check=False,
-        )
-        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        self.assertEqual(sha256(destination), EXPECTED_CANDIDATE_SHA256)
+        for patch_file, expected_hash in (
+            (PATCH, EXPECTED_CANDIDATE_SHA256),
+            (BOUNDED_WAIT_PATCH, EXPECTED_BOUNDED_CANDIDATE_SHA256),
+        ):
+            result = subprocess.run(
+                [
+                    "patch", "--fuzz=0", "--batch", "--forward", "-p1",
+                    "-i", str(patch_file),
+                ],
+                cwd=root,
+                text=True,
+                capture_output=True,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(sha256(destination), expected_hash)
         return destination
 
     def test_patch_applies_zero_fuzz_and_reproduces_pinned_candidate(self) -> None:
@@ -83,12 +96,27 @@ class ProgressiveExportPatchTests(unittest.TestCase):
             "VL_COMPOSITOR_WEAVE",
             "drv->compositor.shaders_initialized",
             "drv->pipe->flush(drv->pipe, &fence, 0)",
-            "screen->fence_finish(screen, NULL, fence, timeout_ns)",
+            "vlVaFenceFinishBounded(screen, fence, timeout_ns)",
             "*out_buffer = buffer",
             "buffer->destroy(buffer)",
         ):
             with self.subTest(required=required):
                 self.assertIn(required, helper)
+
+        wait_start = source.index("vlVaFenceFinishBounded(")
+        wait_end = source.index("\n}\n", wait_start)
+        bounded_wait = source[wait_start:wait_end]
+        self.assertIn(
+            "screen->fence_finish(screen, NULL, fence, 0)",
+            bounded_wait,
+        )
+        self.assertIn("os_time_get_nano()", bounded_wait)
+        self.assertIn("os_time_nanosleep_until(wake_ns)", bounded_wait)
+        self.assertIn("if (now_ns >= deadline_ns)", bounded_wait)
+        self.assertNotIn(
+            "screen->fence_finish(screen, NULL, fence, timeout_ns)",
+            source,
+        )
 
         export_start = source.index("vlVaExportSurfaceHandle(")
         export = source[export_start:]

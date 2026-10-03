@@ -1,9 +1,12 @@
 # ffplay progressive-export candidate
 
-**Status: compile/link candidate only; not runtime-validated.** The saved
+**Status: source candidate; not runtime-validated.** Patch 0001 was compiled
+and linked in the retained Mesa build. Patch 0002 changes the output-fence
+wait and has passed source-contract tests, but has **not** been compiled or
+linked. Neither patch has been installed or exercised on hardware. The saved
 ffplay capture proves that VAAPI decode reaches `vaExportSurfaceHandle()` and
 Mesa rejects the interlaced VP3 NV12 field-array surface before ordinary DRM
-PRIME export. This candidate stages that surface into a progressive NV12
+PRIME export. The candidate stages that surface into a progressive NV12
 buffer using Gallium's existing `VL_COMPOSITOR_WEAVE` path, then exports the
 staging buffer.
 
@@ -12,15 +15,16 @@ staging buffer.
 | Artifact | SHA-256 |
 |---|---|
 | Baseline `surface.c` after the two retained functional Mesa fixes | `f66d404ad556926a37caffa5d120a04a74b4a36af63e322ce578b6840e8ffcc0` |
-| Candidate patch | `e8e7611f591c237bf4c2d5c993b93625af1d5610a3277b6698c1c501d5858560` |
-| Patched candidate `surface.c` | `ca7e3b5fbd1f0c915d0efb6143ee620a883a17507d2a90442ef2b512b516c3da` |
-| Candidate generated `surface.c.o` | `8e14dd7aa5fdf016d5fd76e7746ae56f731534a81a0783fbd2faf4deb23b5a62` |
-| Relinked `libgallium_drv_video.so` | `b9b749c67085045dd5fac3506774bb5789fbf94d4d88c45941539d0f3d256138` |
+| Patch 0001: progressive staging | `e8e7611f591c237bf4c2d5c993b93625af1d5610a3277b6698c1c501d5858560` |
+| Patch 0002: bounded fence polling | `6865f60a222043ddd2e31f5c8cfad84d4bd3c7dff588988a39eda03281d5d0e1` |
+| `surface.c` after patch 0001 | `ca7e3b5fbd1f0c915d0efb6143ee620a883a17507d2a90442ef2b512b516c3da` |
+| `surface.c` after patches 0001 + 0002 | `dc84e79326ee5e546f296279e65eb9dc468080833de875b82391fba09c26706c` |
+| `surface.c.o` built from patch 0001 only | `8e14dd7aa5fdf016d5fd76e7746ae56f731534a81a0783fbd2faf4deb23b5a62` |
+| VA plugin relinked from patch 0001 only | `b9b749c67085045dd5fac3506774bb5789fbf94d4d88c45941539d0f3d256138` |
 
 The baseline source contains the native VA render-target clear and serialized
-distinct-channel VP3 teardown fixes. The candidate patch changes only
-`src/gallium/frontends/va/surface.c`. The exact patch is
-[`patches/0001-va-export-interlaced-surface-through-progressive-staging.patch`](patches/0001-va-export-interlaced-surface-through-progressive-staging.patch).
+distinct-channel VP3 teardown fixes. Both candidate patches change only
+`src/gallium/frontends/va/surface.c`. The patch sequence is listed above.
 
 Run the source-contract checks against the pinned baseline `surface.c`:
 
@@ -30,19 +34,24 @@ PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v \
   validation/mesa-ffplay-progressive-export-candidate/tests/test_progressive_export_patch.py
 ```
 
-The suite rejects an absent or mismatched source/patch hash, applies the patch
-with zero fuzz in a temporary tree, and verifies the resulting candidate hash
-and key staging/cleanup ordering. These are source-contract tests, not a
-functional compositor or pixel test.
+The suite rejects absent or mismatched source/patch hashes, applies both
+patches in order with zero fuzz in a temporary tree, and verifies each
+intermediate/final source hash, the zero-timeout polling loop, and key
+staging/cleanup ordering. These are source-contract tests, not a compiled
+functionality or compositor/pixel test. The latest exact command, result and
+the superseded failed test invocation are recorded in
+[`evidence/BOUNDED-WAIT-PATCH-VALIDATION-20261003.md`](evidence/BOUNDED-WAIT-PATCH-VALIDATION-20261003.md).
 
 ## Build evidence
 
-The patch strictly applies with GNU `patch --fuzz=0` and reproduces the pinned
-candidate source hash. The candidate translation unit compiled with the
-existing configured Mesa build's command and warning options. The VA driver
-plugin linked with that object replacing the baseline object and the remaining
-objects from the configured build. A clean Meson setup did not complete because
-the host Python lacks the required Mako module; no package was installed.
+Patch 0001 strictly applies with GNU `patch --fuzz=0` and reproduces the
+`ca7e3b5f...` candidate source hash. That source was compiled with the existing
+configured Mesa build's command and warning options. The VA driver plugin
+linked with that object replacing the baseline object and the remaining
+objects from the configured build. Those compile/link artifacts apply to
+patch 0001 only. Patch 0002 has not been compiled or linked. A clean Meson setup
+did not complete because the host Python lacks the required Mako module; no
+package was installed.
 
 This was a target translation-unit compile plus plugin relink, not a clean
 full-Mesa rebuild. The original scratch build and compile/link environment are
@@ -58,31 +67,35 @@ under:
 - Non-protected interlaced NV12 uses `VL_COMPOSITOR_WEAVE` into a progressive
   NV12 video buffer; export then operates on that staging buffer.
 - Export is gated on compositor support and shader initialization.
-- The candidate requests a five-second `fence_finish()` timeout before
-  exporting the staging resource. A CPU-only audit of the pinned Nouveau
-  implementation found that nonzero timeout values are ignored and dispatched
-  to a blocking fence wait, so this call does **not** establish a five-second
-  upper bound. See
+- Patch 0001's direct nonzero `fence_finish()` call has no deadline on Nouveau.
+  Patch 0002 changes it to repeated zero-timeout polls against a monotonic
+  deadline, sleeping for at most 1 ms between polls. The pinned Nouveau path
+  treats timeout zero as a poll. This is a practical deadline loop, not a
+  real-time guarantee. Patch 0002 is source-tested but not built. See
   [`evidence/SOURCE-SYNC-LIFETIME-AUDIT-20261003.md`](evidence/SOURCE-SYNC-LIFETIME-AUDIT-20261003.md).
 - Staging resources are destroyed on both success and failure paths after the
   export code has obtained its handles.
 
-The path has not established correct luma/chroma row parity, color preservation,
-decoder-to-compositor synchronization, repeated surface reuse, or dma-buf FD
-lifetime. The compositor parameters currently specify limited range and BT.709;
-their suitability for the pinned input and other stream metadata needs pixel
-comparison. A successful export alone would not close these issues.
+The pinned native Nouveau source supports decoder-write to compositor-read
+ordering through implicit GEM reservation fences when both accesses reference
+the same plane BOs with the audited read/write domains. This is source evidence,
+not hardware evidence, and it does not prove the VP3 internal pipeline, output
+fence behavior, correct luma/chroma row parity, color preservation, repeated
+surface reuse, or dma-buf FD lifetime. The compositor parameters currently
+specify limited range and BT.709; their suitability for the pinned input and
+other stream metadata still needs pixel comparison. A successful export alone
+would not close these issues.
 
 ## CPU-only synchronization and lifetime source audit (2026-10-03)
 
-The additional source audit found that the requested five-second compositor
-fence timeout is not honored by the pinned Nouveau `fence_finish()` path. It
-also found no explicit decoder-fence dependency in the candidate's direct
-compositor call. Driver-level resource ordering may still provide the needed
-dependency; the source path reviewed here does not prove it. The caller holds
-`drv->mutex` during the wait, preserving surface/compositor state but
-serializing VA frontend operations for the duration. No lock change or
-synchronization fix is included. Exact source hashes and limits are recorded in
+The audit found a source-supported implicit GEM-fence dependency between native
+VP3 writes and compositor reads of the same plane BOs. It also found that
+Nouveau ignores the requested nonzero output-fence timeout. Patch 0002 adds a
+deadline-based loop using zero-timeout polls, but it has not been compiled or
+linked. The caller still holds `drv->mutex` during the loop, so a delayed fence
+can serialize VA operations for approximately five seconds. This remains a
+production latency/concurrency blocker. Exact source hashes and claim limits
+are recorded in
 [`evidence/SOURCE-SYNC-LIFETIME-AUDIT-20261003.md`](evidence/SOURCE-SYNC-LIFETIME-AUDIT-20261003.md).
 
 ## Additional CPU-only source and input audit (2026-10-03)
@@ -123,9 +136,9 @@ Source blobs from the candidate's Mesa 26.0.8 tree:
 The plugin was not installed or loaded, and the candidate was not run against
 ffplay. No GPU workload, module operation, package install, or reboot was
 performed for this checkpoint. Do not call this a functional fix or merge it
-into the release branch. Required next evidence is exact-frame NV12 comparison
-against software output, parity/color checks, explicit synchronization and
-descriptor-lifetime validation, then visible ffplay playback with VAAPI decode
-confirmed.
+into the release branch. First compile/link patch 0002 and review its mutex-held
+wait behavior; then obtain exact-frame NV12 comparison against software,
+parity/color checks, repeated surface/descriptor lifetime validation, and
+visible ffplay playback with VAAPI decode confirmed.
 
 `main` remains HOLD.

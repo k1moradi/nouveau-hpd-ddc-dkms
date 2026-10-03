@@ -1,0 +1,42 @@
+--- a/src/gallium/frontends/va/surface.c
++++ b/src/gallium/frontends/va/surface.c
+@@ -1393,5 +1393,30 @@
+ #if VA_CHECK_VERSION(1, 1, 0)
+ #ifndef _WIN32
++static bool
++vlVaFenceFinishBounded(struct pipe_screen *screen,
++                       struct pipe_fence_handle *fence,
++                       int64_t timeout_ns)
++{
++   const int64_t deadline_ns = os_time_get_nano() + timeout_ns;
++
++   for (;;) {
++      int64_t now_ns;
++      int64_t wake_ns;
++
++      if (screen->fence_finish(screen, NULL, fence, 0))
++         return true;
++
++      now_ns = os_time_get_nano();
++      if (now_ns >= deadline_ns)
++         return false;
++
++      wake_ns = now_ns + 1000000;
++      if (wake_ns > deadline_ns)
++         wake_ns = deadline_ns;
++      os_time_nanosleep_until(wake_ns);
++   }
++}
++
+ /* Export a progressive copy; never expose VP3's field-array layout as NV12. */
+ static VAStatus
+ vlVaCreateProgressiveExportBuffer(vlVaDriver *drv,
+@@ -1470,7 +1495,7 @@
+       ret = VA_STATUS_ERROR_OPERATION_FAILED;
+       goto done;
+    }
+-   if (!screen->fence_finish(screen, NULL, fence, timeout_ns)) {
++   if (!vlVaFenceFinishBounded(screen, fence, timeout_ns)) {
+       ret = VA_STATUS_ERROR_TIMEDOUT;
+       goto done;
+    }

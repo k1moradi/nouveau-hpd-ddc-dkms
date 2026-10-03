@@ -9,7 +9,7 @@ started. No functional fix is claimed.
 
 ## Timeout correction
 
-The candidate calls:
+The pre-patch-0002 candidate from patch 0001 called:
 
 ```c
 screen->fence_finish(screen, NULL, fence, 5ULL * ONE_SECOND_IN_NS)
@@ -35,7 +35,7 @@ Source references from the pinned tree:
 
 | File | SHA-256 | Relevant code |
 |---|---|---|
-| `src/gallium/frontends/va/surface.c` (candidate) | `ca7e3b5fbd1f0c915d0efb6143ee620a883a17507d2a90442ef2b512b516c3da` | helper requests 5s at lines 1468–1475; export holds mutex from 1525 to 1711 |
+| `src/gallium/frontends/va/surface.c` (after patch 0001, before patch 0002) | `ca7e3b5fbd1f0c915d0efb6143ee620a883a17507d2a90442ef2b512b516c3da` | helper requests 5s at lines 1468–1475; export holds mutex from 1525 to 1711 |
 | `src/gallium/drivers/nouveau/nouveau_screen.c` | `a8ddee6c408ac58253a217e7cfa46a71796e514e9f89505d24872efa55ee8922` | lines 90–99; nonzero timeout goes to `nouveau_fence_wait()` |
 | `src/gallium/drivers/nouveau/nouveau_fence.c` | `0e9c792177caba5e04f7d778948587d91d482467690335da7144c8ec8203c406` | `nouveau_fence_wait()` invokes `_nouveau_fence_wait()` |
 | `src/gallium/winsys/nouveau/drm/nouveau.c` | `2140bca6de1666e4517ebabf97a63b417db43bfbc575198d7835d40ad92dc57f` | lines 908–937; CPU_PREP uses no wait deadline and only adds NOWAIT when requested |
@@ -48,18 +48,43 @@ The candidate initializes `struct pipe_vpp_desc param = {0}` and does not set
 `vlVaPostProcCompositor()`, not the enclosing `vlVaSurface` that contains the VA
 surface fence. The YUV compositor path in `vlVaPostProcCompositor()` submits
 `vl_compositor_yuv_deint_full()` and does not consume `param->base.in_fence`.
-The later `pipe_context::flush()` fence can establish completion of the
-compositor submission; it does not, by itself, prove that the decoder's writes
-were complete before that submission read the source.
+The later `pipe_context::flush()` fence alone does not establish that the
+decoder's writes completed before the compositor read. A separate native
+Nouveau implicit-fence path does establish that dependency for the pinned
+implementation.
 
 The normal VA video-processing path assigns `vpp.base.in_fence` from the source
-surface, but a Gallium compositor fallback still calls `vlVaPostProcCompositor()`;
-the inspected compositor implementation does not wait on that field either.
-The Nouveau VP3 decoder setup reviewed here does not install a video-codec
-`fence_wait` callback in its common initializer. These facts make explicit
-decode-to-compositor ordering unproven in the candidate path. Nouveau/Gallium
-resource hazard tracking may provide implicit ordering; that mechanism was not
-traced far enough here to assert either a race or a correct dependency.
+surface, but a Gallium compositor fallback still calls
+`vlVaPostProcCompositor()`; the compositor implementation does not wait on that
+field. The Nouveau VP3 decoder also does not install a codec `fence_wait`
+callback in its common initializer. However, the decoder and compositor access
+the same plane GEM objects through Nouveau pushbuffers:
+
+1. `nvc0_create_decoder()` sets `dec->client = nvc0->base.client`. The VP3
+   buffer stores two plane resources. `nvc0_decoder_setup_ppp()` adds both
+   plane BOs to the PPP pushbuffer with `NOUVEAU_BO_WR | NOUVEAU_BO_VRAM`, and
+   `nvc0_decoder_ppp()` kicks that pushbuffer.
+2. The kernel's Nouveau GEM pushbuffer path creates a fence for that submission
+   and `validate_fini()` adds it to each referenced BO's `dma_resv` as a WRITE
+   fence when `write_domains` is set.
+3. The weave compositor obtains sampler views from those same plane resources.
+   NVC0 texture validation registers each underlying BO in the 3D pushbuffer as
+   `NOUVEAU_BO_RD`.
+4. Linux Nouveau `validate_list()` calls `nouveau_fence_sync()` before
+   submitting that read. For a read, `dma_resv_usage_rw(false)` selects
+   `DMA_RESV_USAGE_WRITE`, which includes the pending decoder WRITE fence.
+   Nouveau inserts a channel dependency for a fence on the same DRM file when
+   available; if it cannot use that path, it waits on the fence. This orders
+   the compositor source read after the earlier PPP write to that BO.
+5. NVC0 also marks the output planes `GPU_WRITING`. Texture validation emits a
+   texture-cache flush before sampling and changes the resource status to
+   `GPU_READING`.
+
+This source chain supports decode-output-to-compositor-read ordering for the
+native path where both accesses name the same GEM BO and retain the recorded
+read/write domains. It does not depend on `param.base.in_fence`. It does not
+test hardware execution or prove the internal VP3 BSP-to-VP-to-PPP pipeline,
+field parity, or pixel correctness.
 
 Relevant pinned hashes:
 
@@ -70,6 +95,32 @@ Relevant pinned hashes:
 | `src/gallium/drivers/nouveau/nouveau_vp3_video.h` | `86d97313e8ae883186f1c389a67ebcb69ebe4e5089d55d094fac5ec21acb80bc` | codec base and decoder state |
 | `src/gallium/drivers/nouveau/nvc0/nvc0_video.c` | `2c1662f23fb1afe0fd76c758e4779eee0e0ede8562938f7479e45dd3bec118a6` | NVC0 copies the codec template and installs common callbacks |
 | `src/gallium/include/pipe/p_video_state.h` | `3076164814084c2a1b39f47a1160ba731df89876b3922eeb73a39508deb0fddb` | picture descriptor defines `in_fence` as a fence for decoder begin-frame to wait on |
+
+The exact Ubuntu kernel source package is `7.0.0-34.34`, archive SHA-256
+`a874e1fb08d2ee695b08e0c8ce6fd2c76a4bf7ffa98882fbabd233380ef8a85a`.
+`nouveau_gem.c` is SHA-256
+`c8e2d5e10c31eb869bc9e0496488df7904273c15232763ce5498a9d758ca616e` and
+`nouveau_fence.c` is SHA-256
+`37f989f57e26083d45d1ef688d42d23c104306bc242d7d1afbd461423947e72b` in both
+the retained clean and diagnostic-enabled source trees. Installed matching
+kernel headers package `7.0.0-34.34` provides `dma-resv.h` SHA-256
+`f629666c24ad18fedc5c85c7c65169805b80fc83886b462fb58846ffbb2d27ee`.
+
+## Bounded staging-output wait candidate
+
+Patch `0002-use-bounded-nouveau-fence-poll.patch` now replaces the candidate's
+nonzero Nouveau `fence_finish()` wait with repeated zero-timeout polls against a
+monotonic deadline and a maximum 1 ms sleep interval. This avoids entering the
+blocking Nouveau `nouveau_fence_wait()` path whose API has no timeout argument.
+Source-contract tests require the zero-timeout call, deadline check, and
+monotonic sleep helper, and reject the old `timeout_ns` call site. The helper
+has not yet been compiled or linked in the Mesa plugin. Scheduler delays or
+contention on Nouveau's userspace fence lock can still delay when the helper
+returns; it is a practical deadline loop, not a real-time guarantee.
+
+The export call still holds `drv->mutex` during this loop and may serialize VA
+operations for approximately the configured five-second interval. Do not treat
+this as production-quality latency or concurrency behavior.
 
 ## Descriptor FD and staging-resource lifetime
 
@@ -92,12 +143,13 @@ and [libva DRM PRIME descriptor documentation](https://github.com/intel/libva/bl
 
 The source audit corrects the prior “waits up to five seconds” claim to
 “requests five seconds, but the pinned Nouveau implementation does not enforce
-that timeout.” It also narrows decoder-to-compositor synchronization to an
-unproven source path rather than asserting a race. Do not promote the candidate
-based on successful export alone.
+that timeout.” A source patch and regression checks now use deadline-based
+zero-timeout polling, but that patch has not been compiled or executed. The
+native Nouveau implicit GEM-fence chain source-supports the input dependency;
+no explicit VA `in_fence` is required for the same-BO path audited here. Do not
+promote the candidate based on source analysis or successful export alone.
 
-Before any functional claim, the candidate needs a genuinely bounded wait
-strategy and a source-supported producer/consumer ordering argument, followed
-by exact-frame NV12 comparisons, parity/chroma checks, repeated resource/FD
-reuse, and visible playback on an approved clean desktop boot. This audit does
-not authorize such a run.
+Before any functional claim, compile and review patch 0002, then obtain
+exact-frame NV12 comparisons, parity/chroma checks, repeated resource/FD reuse,
+and visible playback on an approved clean desktop boot. This audit does not
+authorize such a run.
