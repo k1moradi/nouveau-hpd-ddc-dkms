@@ -114,9 +114,11 @@ monotonic deadline and a maximum 1 ms sleep interval. This avoids entering the
 blocking Nouveau `nouveau_fence_wait()` path whose API has no timeout argument.
 Source-contract tests require the zero-timeout call, deadline check, and
 monotonic sleep helper, and reject the old `timeout_ns` call site. The helper
-has not yet been compiled or linked in the Mesa plugin. Scheduler delays or
-contention on Nouveau's userspace fence lock can still delay when the helper
-returns; it is a practical deadline loop, not a real-time guarantee.
+was subsequently compiled and linked in the Mesa plugin; it has not been
+executed. Scheduler delays or contention on Nouveau's userspace fence lock can
+still delay when the helper returns; it is a practical deadline loop, not a
+real-time guarantee. Build commands and hashes are recorded in
+[`BOUNDED-WAIT-PATCH-BUILD-20261003.md`](BOUNDED-WAIT-PATCH-BUILD-20261003.md).
 
 The export call still holds `drv->mutex` during this loop and may serialize VA
 operations for approximately the configured five-second interval. Do not treat
@@ -143,13 +145,14 @@ and [libva DRM PRIME descriptor documentation](https://github.com/intel/libva/bl
 
 The source audit corrects the prior “waits up to five seconds” claim to
 “requests five seconds, but the pinned Nouveau implementation does not enforce
-that timeout.” A source patch and regression checks now use deadline-based
-zero-timeout polling, but that patch has not been compiled or executed. The
-native Nouveau implicit GEM-fence chain source-supports the input dependency;
-no explicit VA `in_fence` is required for the same-BO path audited here. Do not
-promote the candidate based on source analysis or successful export alone.
+that timeout." A source patch and regression checks now use deadline-based
+zero-timeout polling. A later checkpoint compiled and linked it, but it has
+not been executed. The native Nouveau implicit GEM-fence chain source-supports
+the input dependency; no explicit VA `in_fence` is required for the same-BO
+path audited here. Do not promote the candidate based on source analysis,
+successful compilation, or successful export alone.
 
-Before any functional claim, compile and review patch 0002, then obtain
+Before any functional claim, review the compiled patch 0002, then obtain
 exact-frame NV12 comparisons, parity/chroma checks, repeated resource/FD reuse,
 and visible playback on an approved clean desktop boot. This audit does not
 authorize such a run.

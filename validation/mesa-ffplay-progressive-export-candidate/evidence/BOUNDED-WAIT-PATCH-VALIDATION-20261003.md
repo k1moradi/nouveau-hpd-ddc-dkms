@@ -1,10 +1,12 @@
-# Bounded Nouveau fence-poll patch validation
+# Bounded Nouveau fence-poll patch source validation
 
 ## Scope
 
-This checkpoint validates patch 0002's strict application and source contract.
-It is CPU-only evidence. It does not show that the candidate compiles, links,
-runs on Nouveau, or produces correct frames.
+This checkpoint records patch 0002's strict application and source-contract
+validation as performed before the target compile/link checkpoint. It is
+CPU-only evidence and does not show that the candidate runs on Nouveau or
+produces correct frames. The later target compile and plugin link are recorded
+in [`BOUNDED-WAIT-PATCH-BUILD-20261003.md`](BOUNDED-WAIT-PATCH-BUILD-20261003.md).
 
 ## Pinned inputs and output
 
@@ -50,8 +52,7 @@ Result: **3/3 passed, zero skips, exit status 0**. Covered tests:
 - staging, zero-timeout polling/deadline and progressive-export ordering;
 - Windows interlaced rejection and success/failure cleanup checks.
 
-`git diff --check` also passed. The host lacks a usable configured Mesa Ninja
-build for this candidate; patch 0002 was not compiled or linked. No DSO was
+`git diff --check` also passed at this source-validation checkpoint. No DSO was
 installed or loaded. No VA/GPU workload, module operation, package install, or
 reboot was performed.
 

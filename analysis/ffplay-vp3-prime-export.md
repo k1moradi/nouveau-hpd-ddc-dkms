@@ -2,6 +2,15 @@
 
 Status as of 2026-10-01: **export failure mechanism confirmed; functional export fix not started**. This note is separate from the mpv decoder-recreation investigation.
 
+**Status update, 2026-10-03:** a progressive-staging candidate is now recorded
+under `validation/mesa-ffplay-progressive-export-candidate/`. Its bounded
+zero-timeout fence-poll patch has compiled and linked into a private VA plugin
+using the existing configured Mesa build commands. It has not been installed,
+loaded, or executed. The caller still holds `drv->mutex` while polling, and
+field parity, output-fence behavior on hardware, pixels, and exported-resource
+lifetime remain unverified. See
+[`../validation/mesa-ffplay-progressive-export-candidate/evidence/BOUNDED-WAIT-PATCH-BUILD-20261003.md`](../validation/mesa-ffplay-progressive-export-candidate/evidence/BOUNDED-WAIT-PATCH-BUILD-20261003.md).
+
 ## OBSERVED
 
 The K4200's VP3 decoder creates and decodes H.264 VA surfaces. In the targeted ffplay GDB capture, FFmpeg called `vaExportSurfaceHandle()` for a decoded surface with DRM PRIME 2 and separate layers. Mesa reached the actual VP3 surface and returned `VA_STATUS_ERROR_INVALID_SURFACE` at the explicit `surf->buffer->interlaced` guard, before calling `resource_get_handle()`. The backtrace continued through FFmpeg's `av_hwframe_map()` path. No frame reached ffplay's Vulkan renderer, matching the blank video window.
@@ -84,7 +93,11 @@ The native decode surface can return to the VA pool only after the source read/c
 2. **Direct descriptor encoding:** only viable if the VA DRM PRIME descriptor can represent the actual field storage as the consumer's requested two-plane NV12. The current two array layers per plane do not fit the documented separate-layer NV12 representation; no valid direct mapping has been identified.
 3. **Keep rejecting unsupported exports:** remains correct until a representation with proven layout, ownership, synchronization, and reuse semantics exists.
 
-No functional export patch has been written. In particular, the interlaced guard has not been removed.
+No production export fix has been accepted. A separate candidate is now kept
+under `validation/mesa-ffplay-progressive-export-candidate/`; it changes the
+guarded export path to stage non-protected interlaced NV12 through the
+compositor. The production source retains the original rejection. That
+candidate is compiled/linked only and remains unexecuted.
 
 ## UPSTREAM CHECK (2026-10-02)
 
