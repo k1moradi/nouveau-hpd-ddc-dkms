@@ -1,0 +1,84 @@
+{
+  "schema": 1,
+  "historical_capture": {
+    "directory": "/home/keivan/nouveau-vaapi-app-validation/mpv-second-nvc0-create-stage-v5-stage4-20261001T130605Z",
+    "gdb_log_sha256": "186fe498929b88b2dfb61e66b127ae7482c5bb9263c643c3445594239016eab2",
+    "meta_sha256": "6e53451e0fba3d665dee5691fd95c8d1107acf3e613a1735bb803c51e96b228b",
+    "result_sha256": "36a35f1c1aa7afae31045b08588f27df8181b584df206d5ad7a54350f58d991c",
+    "runner_start_utc": "2026-10-01T13:06:05.641212+00:00",
+    "runner_invocation": [
+      "run-v5-failfast.py",
+      "--dso-timeout",
+      "8",
+      "--total-timeout",
+      "18"
+    ],
+    "command_argv": [
+      "/usr/bin/gdb",
+      "-q",
+      "-batch",
+      "-x",
+      "/home/keivan/.cache/vaapi-app-source-review/probes/mpv-second-nvc0-create-stage-v5.gdb",
+      "--args",
+      "/usr/bin/mpv",
+      "--no-config",
+      "--vo=gpu",
+      "--gpu-api=opengl",
+      "--hwdec=vaapi",
+      "--hwdec-codecs=h264",
+      "--hwdec-threads=1",
+      "--hwdec-software-fallback=no",
+      "--no-audio",
+      "--frames=1",
+      "/home/keivan/test_1080p.mkv"
+    ],
+    "probe_script_sha256": "432da9d6bb3e20b015ca0a8b6aef178458d87ee33e98f832530d3e774abdc2d3",
+    "probe_stages_sha256": "305d166115589f2a5de571f6a6763fd2363c03414ddfaf3606cf3d1d090c6ecf",
+    "phase_deadlines_seconds": {
+      "dso_load": 8,
+      "first_constructor": 4,
+      "second_constructor": 6,
+      "constructor_return": 3,
+      "absolute_total": 18
+    },
+    "termination": "RUNNER_END exit=0 outcome=valid-classified-failure-stage-4; GDB stopped the inferior after constructor #2 returned",
+    "first_failure": "constructor #2 stage 4 BSP class 0x95b1 returned -17 (EEXIST)",
+    "failure_timestamp": "not recorded in the saved GDB log",
+    "postrun_hard_stop": "one BAR2/HOST_CPU/PTE fault at 0x5a9000",
+    "termination_marker": "GDB returned from constructor #2, recorded failure_stage=4, then killed the inferior and exited the probe",
+    "historical_input_sha256": "d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2",
+    "historical_mesa_dso_sha256": "aceac163eabeefe5e4c1f2eb38469239044e30671aebcec743e4277f5897b536",
+    "historical_private_driver_directory": "/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-functional-no-mesa-diag-20260930/prefix-x11-va-sysroot/lib/x86_64-linux-gnu/dri",
+    "observed_environment": {
+      "DISPLAY": ":0",
+      "LIBVA_DRIVER_NAME": "nouveau",
+      "LIBVA_DRIVERS_PATH": "/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-functional-no-mesa-diag-20260930/prefix-x11-va-sysroot/lib/x86_64-linux-gnu/dri",
+      "XAUTHORITY": "inherited by the GDB runner; value not saved",
+      "working_directory": "not saved by the historical runner"
+    }
+  },
+  "controlled_execution": {
+    "home": "/home/keivan",
+    "working_directory": "/home/keivan",
+    "environment_policy": "minimal explicit X11/libva environment; all values recorded in the generated per-run manifest",
+    "selection_policy": "private run directory contains nouveau_drv_video.so symlink to the explicitly hashed A or B DSO",
+    "early_stop_policy": "stop the process group on the first pinned BSP NEW record with ret=-17; then passively collect the journal for 30 seconds",
+    "failure_reproduction_rule": "Variant A must reproduce the logged wrong-fd/stale-key/-EEXIST chain or the A/B result is inconclusive"
+  },
+  "argv": [
+    "/usr/bin/mpv",
+    "--no-config",
+    "--vo=gpu",
+    "--gpu-api=opengl",
+    "--hwdec=vaapi",
+    "--hwdec-codecs=h264",
+    "--hwdec-threads=1",
+    "--hwdec-software-fallback=no",
+    "--no-audio",
+    "--frames=1",
+    "/home/keivan/test_1080p.mkv"
+  ],
+  "input_sha256": "d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2",
+  "max_runtime_seconds": 18,
+  "post_stop_observation_seconds": 30
+}

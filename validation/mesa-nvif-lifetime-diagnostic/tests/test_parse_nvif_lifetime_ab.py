@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import io
 import json
+import hashlib
 import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 import parse_nvif_lifetime_ab as parser
@@ -99,20 +101,58 @@ def candidate_records(*, delete_fd: int = 9, delete_ret: int = 0,
 
 
 def manifest(variant: str, *, boot_id: str | None = None) -> dict[str, object]:
+    profile = parser.load_runtime_profile()
+    environment = {
+        "DISPLAY": ":0",
+        "XAUTHORITY": "<session-xauthority>",
+        "LIBVA_DRIVER_NAME": "nouveau",
+        "LIBVA_DRIVERS_PATH": "<variant-private-directory>",
+        "HOME": "/home/keivan",
+        "PATH": "/usr/bin:/bin",
+        "LC_ALL": "C",
+        "LD_LIBRARY_PATH": "<unset>",
+        "LD_PRELOAD": "<unset>",
+        "LIBVA_TRACE": "<unset>",
+        "LIBVA_MESSAGING_LEVEL": "<unset>",
+        "MESA_LOADER_DRIVER_OVERRIDE": "<unset>",
+        "MESA_DEBUG": "<unset>",
+        "NOUVEAU_DEBUG": "<unset>",
+        "WAYLAND_DISPLAY": "<unset>",
+    }
     return {
-        "schema": 1,
+        "schema": 2,
         "variant": variant,
         "boot_id": boot_id or f"boot-{variant.lower()}",
         "input_sha256": parser.EXPECTED_INPUT_SHA256,
-        "command_argv": ["mpv", "--hwdec=vaapi-copy", "/home/keivan/test_1080p.mkv"],
-        "normalized_environment": {
-            "LIBVA_DRIVER_NAME": "nouveau",
-            "LIBVA_DRIVERS_PATH": "<variant-private-directory>",
-            "DISPLAY": ":0",
-        },
+        "command_argv": profile["argv"],
+        "launcher_argv": [
+            "/usr/bin/systemd-cat", "--identifier=nouveau-nvif-lifetime", "--",
+            *profile["argv"],
+        ],
+        "normalized_environment": environment,
         "kernel": "7.0.0-34-generic",
         "nouveau_srcversion": parser.EXPECTED_NOUVEAU_SRCVERSION,
+        "nouveau_parameters": {"diag_ctxsw": "N"},
         "dso_sha256": parser.EXPECTED_DSO_SHA256[variant],
+        "dso_resolved_path": f"/tmp/{variant}/libgallium_drv_video.so",
+        "dso_alias_path": f"/tmp/{variant}/driver/nouveau_drv_video.so",
+        "mpv_sha256": "d" * 64,
+        "mpv_resolved_path": "/usr/bin/mpv",
+        "systemd_cat_sha256": "e" * 64,
+        "systemd_cat_resolved_path": "/usr/bin/systemd-cat",
+        "preflight_journal_path": "journal-preflight.jsonl",
+        "working_directory": "/home/keivan",
+        "xauthority_sha256": "c" * 64,
+        "termination_reason": "process-exit",
+        "journal_start_cursor": f"cursor-{variant}",
+        "journal_boundary_proven": True,
+        "preflight_journal_sha256": "a" * 64,
+        "preflight_hard_stops": [],
+        "journal_delta_sha256": "b" * 64,
+        "postrun_hard_stops": [],
+        "workload_returncode": 0,
+        "workload_timed_out": False,
+        "journal_monitor_error": None,
     }
 
 
@@ -121,11 +161,24 @@ class NvifLifetimeParserTests(unittest.TestCase):
         return parser.read_events(io.StringIO(text))
 
     def test_baseline_requires_complete_wrong_fd_duplicate_chain(self) -> None:
-        for layer in ("abi16", "nvkm"):
-            text = baseline_records(duplicate_layer=layer)
-            result = parser.analyze(self.parse(text), "A")
-            self.assertEqual(result["result"], "BASELINE_REPRODUCED_EEXIST_CHAIN")
-            self.assertEqual(result["matching_lifecycles"][0]["duplicate_layer"], layer)
+        text = baseline_records(duplicate_layer="abi16")
+        result = parser.analyze(self.parse(text), "A")
+        self.assertEqual(result["result"], "BASELINE_REPRODUCED_EEXIST_CHAIN")
+        self.assertEqual(result["matching_lifecycles"][0]["duplicate_layer"], "abi16")
+
+    def test_nvkm_duplicate_without_process_identity_is_inconclusive(self) -> None:
+        result = parser.analyze(
+            self.parse(baseline_records(duplicate_layer="nvkm")),
+            "A",
+        )
+        self.assertEqual(
+            result["result"],
+            "INCONCLUSIVE_NVKM_DUPLICATE_IDENTITY_WEAK",
+        )
+        self.assertEqual(
+            result["weak_nvkm_lifecycles"][0]["duplicate_layer"],
+            "nvkm",
+        )
 
     def test_baseline_without_reused_key_is_inconclusive(self) -> None:
         text = journal_line(new_line(ret=0, route=0x2), 100) + "\n"
@@ -196,13 +249,28 @@ class NvifLifetimeParserTests(unittest.TestCase):
         self.assertEqual(result["outcome"], "INCONCLUSIVE_BASELINE_NOT_REPRODUCED")
 
     def test_pair_comparison_accepts_only_matching_a_and_b_sequences(self) -> None:
+        baseline = manifest("A")
+        baseline["workload_returncode"] = -2
+        baseline["termination_reason"] = "bsp-eexist"
         result = parser.compare_runs(
             self.parse(baseline_records()),
             self.parse(candidate_records()),
-            manifest("A"),
+            baseline,
             manifest("B"),
         )
         self.assertEqual(result["outcome"], "A_REPRODUCED_B_LIFECYCLE_SUCCEEDED")
+
+    def test_nonzero_baseline_exit_is_allowed_only_for_eexist_early_stop(self) -> None:
+        baseline = manifest("A")
+        baseline["workload_returncode"] = -2
+        baseline["termination_reason"] = "process-exit"
+        result = parser.compare_runs(
+            self.parse(baseline_records()),
+            self.parse(candidate_records()),
+            baseline,
+            manifest("B"),
+        )
+        self.assertEqual(result["outcome"], "INCOMPLETE_WORKLOAD")
 
     def test_pair_comparison_rejects_workload_mismatch(self) -> None:
         candidate = manifest("B")
@@ -214,6 +282,62 @@ class NvifLifetimeParserTests(unittest.TestCase):
                 manifest("A"),
                 candidate,
             )
+
+    def test_pair_comparison_requires_same_launcher_binaries(self) -> None:
+        candidate = manifest("B")
+        candidate["mpv_sha256"] = "f" * 64
+        with self.assertRaisesRegex(ValueError, "mpv_sha256"):
+            parser.compare_runs(
+                self.parse(baseline_records()),
+                self.parse(candidate_records()),
+                manifest("A"),
+                candidate,
+            )
+
+    def test_kernel_hard_stop_overrides_lifecycle_success(self) -> None:
+        result = parser.compare_runs(
+            self.parse(baseline_records()),
+            self.parse(candidate_records()),
+            manifest("A"),
+            manifest("B"),
+            hard_stops_b=[{
+                "kinds": ["CTXSW_TIMEOUT"],
+                "message": "nouveau fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]",
+            }],
+        )
+        self.assertEqual(result["outcome"], "KERNEL_FAILURE")
+
+    def test_unproven_journal_boundary_overrides_lifecycle_success(self) -> None:
+        candidate = manifest("B")
+        candidate["journal_boundary_proven"] = False
+        result = parser.compare_runs(
+            self.parse(baseline_records()),
+            self.parse(candidate_records()),
+            manifest("A"),
+            candidate,
+        )
+        self.assertEqual(result["outcome"], "JOURNAL_BOUNDARY_UNPROVEN")
+
+    def test_nonzero_workload_overrides_lifecycle_success(self) -> None:
+        candidate = manifest("B")
+        candidate["workload_returncode"] = 1
+        result = parser.compare_runs(
+            self.parse(baseline_records()),
+            self.parse(candidate_records()),
+            manifest("A"),
+            candidate,
+        )
+        self.assertEqual(result["outcome"], "INCOMPLETE_WORKLOAD")
+
+    def test_hard_stop_classifier_catches_delayed_bar2_and_ctxsw(self) -> None:
+        self.assertEqual(
+            parser.hard_stop_kinds("fault engine 05 [BAR2] client 07 [HOST_CPU] reason [PTE]"),
+            ("BAR2", "HOST_CPU", "PTE"),
+        )
+        self.assertIn(
+            "CTXSW_TIMEOUT",
+            parser.hard_stop_kinds("fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]"),
+        )
 
     def test_pair_comparison_rejects_same_boot(self) -> None:
         with self.assertRaisesRegex(ValueError, "separate boots"):
@@ -233,6 +357,73 @@ class NvifLifetimeParserTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "DSO SHA-256"):
                 parser.read_manifest(path, "A")
 
+    def test_runtime_profile_is_pinned_and_has_stage4_command(self) -> None:
+        profile = parser.load_runtime_profile()
+        self.assertEqual(
+            profile["argv"],
+            [
+                "/usr/bin/mpv", "--no-config", "--vo=gpu", "--gpu-api=opengl",
+                "--hwdec=vaapi", "--hwdec-codecs=h264", "--hwdec-threads=1",
+                "--hwdec-software-fallback=no", "--no-audio", "--frames=1",
+                "/home/keivan/test_1080p.mkv",
+            ],
+        )
+        self.assertIn(
+            "not recorded",
+            profile["historical_capture"]["failure_timestamp"],
+        )
+        self.assertEqual(
+            profile["historical_capture"]["command_argv"][-2:],
+            ["--frames=1", "/home/keivan/test_1080p.mkv"],
+        )
+
+    def test_manifest_loader_requires_exact_environment_schema(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "manifest.json"
+            bad = manifest("A")
+            bad["normalized_environment"] = {"X": "Y"}
+            path.write_text(json.dumps(bad), encoding="utf-8")
+            with self.assertRaisesRegex(ValueError, "environment keys"):
+                parser.read_manifest(path, "A")
+
+    def test_manifest_loader_rechecks_full_boot_preflight_artifact(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary) / "A"
+            root.mkdir()
+            item = manifest("A", boot_id="boot-a")
+            dso = root / "libgallium_drv_video.so"
+            dso.write_bytes(b"synthetic DSO")
+            alias = root / "nouveau_drv_video.so"
+            alias.symlink_to(dso)
+            preflight = root / "journal-preflight.jsonl"
+            preflight.write_text(
+                json.dumps({
+                    "MESSAGE": "nouveau fault [BAR2] [HOST_CPU] [PTE]",
+                    "_BOOT_ID": "boot-a",
+                    "_TRANSPORT": "kernel",
+                }) + "\n",
+                encoding="utf-8",
+            )
+            item["dso_resolved_path"] = str(dso)
+            item["dso_alias_path"] = str(alias)
+            item["preflight_journal_sha256"] = hashlib.sha256(
+                preflight.read_bytes()
+            ).hexdigest()
+            path = root / "manifest.json"
+            path.write_text(json.dumps(item), encoding="utf-8")
+            media = Path(parser.load_runtime_profile()["argv"][-1])
+
+            def fake_hash(candidate: Path) -> str:
+                if candidate == media:
+                    return parser.EXPECTED_INPUT_SHA256
+                if candidate == dso:
+                    return parser.EXPECTED_DSO_SHA256["A"]
+                return hashlib.sha256(candidate.read_bytes()).hexdigest()
+
+            with mock.patch.object(parser, "_sha256_file", side_effect=fake_hash):
+                with self.assertRaisesRegex(ValueError, "preflight hard-stop records mismatch"):
+                    parser.read_manifest(path, "A")
+
     def test_manifest_loader_pins_kernel_module_identity(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             path = Path(temporary) / "manifest.json"
@@ -247,14 +438,51 @@ class NvifLifetimeParserTests(unittest.TestCase):
             root = Path(temporary)
             journal_a = root / "a.jsonl"
             journal_b = root / "b.jsonl"
-            manifest_a = root / "a.json"
-            manifest_b = root / "b.json"
-            journal_a.write_text(baseline_records(), encoding="utf-8")
-            journal_b.write_text(candidate_records(), encoding="utf-8")
-            manifest_a.write_text(json.dumps(manifest("A")), encoding="utf-8")
-            manifest_b.write_text(json.dumps(manifest("B")), encoding="utf-8")
+            manifest_a = root / "A" / "manifest.json"
+            manifest_b = root / "B" / "manifest.json"
+            data_a = baseline_records().encode("utf-8")
+            data_b = candidate_records().encode("utf-8")
+            journal_a.write_bytes(data_a)
+            journal_b.write_bytes(data_b)
+            item_a = manifest("A")
+            item_b = manifest("B")
+            item_a["journal_delta_sha256"] = hashlib.sha256(data_a).hexdigest()
+            item_b["journal_delta_sha256"] = hashlib.sha256(data_b).hexdigest()
+            for variant, item in (("A", item_a), ("B", item_b)):
+                dso = root / variant / "libgallium_drv_video.so"
+                alias = root / variant / "driver" / "nouveau_drv_video.so"
+                dso.parent.mkdir(parents=True)
+                alias.parent.mkdir(parents=True)
+                dso.write_bytes(b"synthetic dso content")
+                alias.symlink_to(dso)
+                item["dso_resolved_path"] = str(dso)
+                item["dso_alias_path"] = str(alias)
+                preflight = root / variant / "journal-preflight.jsonl"
+                preflight.write_text(
+                    json.dumps({
+                        "MESSAGE": "nouveau: initialized",
+                        "_BOOT_ID": item["boot_id"],
+                        "_TRANSPORT": "kernel",
+                    }) + "\n",
+                    encoding="utf-8",
+                )
+                item["preflight_journal_sha256"] = hashlib.sha256(
+                    preflight.read_bytes()
+                ).hexdigest()
+            item_a["journal_delta_sha256"] = hashlib.sha256(data_a).hexdigest()
+            item_b["journal_delta_sha256"] = hashlib.sha256(data_b).hexdigest()
+            manifest_a.write_text(json.dumps(item_a), encoding="utf-8")
+            manifest_b.write_text(json.dumps(item_b), encoding="utf-8")
             output = io.StringIO()
-            with redirect_stdout(output):
+            def fake_hash(path: Path) -> str:
+                if path.name == "libgallium_drv_video.so":
+                    return parser.EXPECTED_DSO_SHA256[path.parent.name]
+                return parser.EXPECTED_INPUT_SHA256
+
+            with (
+                mock.patch.object(parser, "_sha256_file", side_effect=fake_hash),
+                redirect_stdout(output),
+            ):
                 status = parser.main([
                     "--journal-a", str(journal_a),
                     "--manifest-a", str(manifest_a),
@@ -267,6 +495,62 @@ class NvifLifetimeParserTests(unittest.TestCase):
             json.loads(output.getvalue())["outcome"],
             "A_REPRODUCED_B_LIFECYCLE_SUCCEEDED",
         )
+
+    def test_cli_returns_nonzero_for_inconclusive_and_kernel_failure(self) -> None:
+        cases = (
+            (
+                "inconclusive",
+                baseline_records(include_free=False),
+                candidate_records(),
+                None,
+                3,
+            ),
+            (
+                "kernel-failure",
+                baseline_records(),
+                candidate_records() + journal_line(
+                    "nouveau fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]",
+                    500,
+                    pid=None,
+                    boot_id="boot-b",
+                ) + "\n",
+                [{
+                    "kinds": ["CTXSW_TIMEOUT"],
+                    "message": "nouveau fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]",
+                }],
+                4,
+            ),
+        )
+        for name, text_a, text_b, stops_b, expected_status in cases:
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                journal_a = root / "a.jsonl"
+                journal_b = root / "b.jsonl"
+                data_a = text_a.encode("utf-8")
+                data_b = text_b.encode("utf-8")
+                journal_a.write_bytes(data_a)
+                journal_b.write_bytes(data_b)
+                item_a = manifest("A")
+                item_b = manifest("B")
+                item_a["journal_delta_sha256"] = hashlib.sha256(data_a).hexdigest()
+                item_b["journal_delta_sha256"] = hashlib.sha256(data_b).hexdigest()
+                item_b["postrun_hard_stops"] = stops_b or []
+                output = io.StringIO()
+                with (
+                    mock.patch.object(
+                        parser,
+                        "read_manifest",
+                        side_effect=[item_a, item_b],
+                    ),
+                    redirect_stdout(output),
+                ):
+                    status = parser.main([
+                        "--journal-a", str(journal_a),
+                        "--manifest-a", str(root / "a-manifest.json"),
+                        "--journal-b", str(journal_b),
+                        "--manifest-b", str(root / "b-manifest.json"),
+                    ])
+                self.assertEqual(status, expected_status)
 
 
 if __name__ == "__main__":
