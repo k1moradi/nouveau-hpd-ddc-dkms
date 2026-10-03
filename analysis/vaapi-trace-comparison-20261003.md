@@ -16,6 +16,9 @@ this analysis.
 | Input video | SHA-256 `d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2` |
 | Mesa source | 26.0.8; archive SHA-256 `caf1c0061a68e88dfa74967a7e780c0e85d65b6c4e334cd69095a5dc54ad78bc` |
 | ffplay single-hit export probe | SHA-256 `a4ae1918c5e279b0afcd69e7109e134b45c78e1aa8e10772acad83855723acf6` |
+| User-reported pixelation screenshot | SHA-256 `6a08474969bb974c8868fa2a3adda6676799af964b4362dd248509c173e5e270` |
+| Software-only NV12 frames at PTS 530.021–530.188 | SHA-256 `7773decbceeb9f9d39a2538da54e797e9934e723f7ec734ed7d0a931ded0af09` |
+| Software self-comparison JSON | SHA-256 `4088f73a0e2397edcc4cb5f370d46b02411d246d60d322480dd8708d92bd5d75` |
 
 The trace paths and detailed source/control-flow analysis are recorded in
 [`mpv-second-decoder-create.md`](mpv-second-decoder-create.md),
