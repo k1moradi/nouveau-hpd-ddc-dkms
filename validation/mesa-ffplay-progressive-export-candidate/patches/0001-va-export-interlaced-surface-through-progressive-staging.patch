@@ -1,0 +1,173 @@
+--- a/src/gallium/frontends/va/surface.c
++++ b/src/gallium/frontends/va/surface.c
+@@ -36,6 +36,7 @@
+ #include "util/u_sampler.h"
+ #include "util/u_surface.h"
+ #include "util/u_video.h"
++#include "util/os_time.h"
+ #include "util/set.h"
+ 
+ #include "vl/vl_compositor.h"
+@@ -1390,6 +1391,103 @@
+ #endif
+ 
+ #if VA_CHECK_VERSION(1, 1, 0)
++#ifndef _WIN32
++/* Export a progressive copy; never expose VP3's field-array layout as NV12. */
++static VAStatus
++vlVaCreateProgressiveExportBuffer(vlVaDriver *drv,
++                                  struct pipe_video_buffer *src,
++                                  struct pipe_video_buffer **out_buffer)
++{
++   struct pipe_video_buffer tmpl = {0};
++   enum pipe_format resource_formats[VL_NUM_COMPONENTS];
++   struct pipe_video_buffer *buffer = NULL;
++   struct pipe_fence_handle *fence = NULL;
++   struct pipe_vpp_desc param = {0};
++   struct pipe_screen *screen;
++   struct u_rect full_rect;
++   const uint64_t timeout_ns = 5ULL * ONE_SECOND_IN_NS;
++   VAStatus ret = VA_STATUS_ERROR_OPERATION_FAILED;
++
++   if (!drv || !drv->pipe || !src || !out_buffer)
++      return VA_STATUS_ERROR_INVALID_PARAMETER;
++
++   *out_buffer = NULL;
++   screen = drv->pipe->screen;
++   if (!src->interlaced || src->buffer_format != PIPE_FORMAT_NV12)
++      return VA_STATUS_ERROR_INVALID_SURFACE;
++   if (!screen || !drv->pipe->flush || !screen->fence_finish ||
++       !screen->fence_reference)
++      return VA_STATUS_ERROR_OPERATION_FAILED;
++   if (!drv->compositor.pipe_cs_composit_supported &&
++       !drv->compositor.pipe_gfx_supported)
++      return VA_STATUS_ERROR_UNSUPPORTED_ENTRYPOINT;
++   if (src->bind & PIPE_BIND_PROTECTED)
++      return VA_STATUS_ERROR_OPERATION_FAILED;
++
++   tmpl.buffer_format = src->buffer_format;
++   tmpl.width = src->width;
++   tmpl.height = src->height;
++   tmpl.bind = PIPE_BIND_SHARED;
++   tmpl.flags = src->flags;
++
++   vl_get_video_buffer_formats(screen, tmpl.buffer_format, resource_formats);
++   buffer = vl_video_buffer_create_ex(drv->pipe, &tmpl, resource_formats,
++                                      1, 1, PIPE_USAGE_DEFAULT,
++                                      pipe_format_to_chroma_format(tmpl.buffer_format));
++   if (!buffer)
++      return VA_STATUS_ERROR_ALLOCATION_FAILED;
++
++   full_rect = (struct u_rect) {
++      .x0 = 0,
++      .y0 = 0,
++      .x1 = src->width,
++      .y1 = src->height,
++   };
++   param.src_region = full_rect;
++   param.dst_region = full_rect;
++   param.in_color_range = PIPE_VIDEO_VPP_CHROMA_COLOR_RANGE_REDUCED;
++   param.out_color_range = PIPE_VIDEO_VPP_CHROMA_COLOR_RANGE_REDUCED;
++   param.in_chroma_siting = PIPE_VIDEO_VPP_CHROMA_SITING_HORIZONTAL_LEFT |
++                            PIPE_VIDEO_VPP_CHROMA_SITING_VERTICAL_CENTER;
++   param.out_chroma_siting = param.in_chroma_siting;
++   param.in_color_primaries = PIPE_VIDEO_VPP_PRI_BT709;
++   param.out_color_primaries = PIPE_VIDEO_VPP_PRI_BT709;
++   param.in_transfer_characteristics = PIPE_VIDEO_VPP_TRC_BT709;
++   param.out_transfer_characteristics = PIPE_VIDEO_VPP_TRC_BT709;
++   param.in_matrix_coefficients = PIPE_VIDEO_VPP_MCF_BT709;
++   param.out_matrix_coefficients = PIPE_VIDEO_VPP_MCF_BT709;
++
++   ret = vlVaPostProcCompositor(drv, src, buffer, VL_COMPOSITOR_WEAVE, &param);
++   if (ret != VA_STATUS_SUCCESS)
++      goto done;
++   if (!drv->compositor.shaders_initialized) {
++      ret = VA_STATUS_ERROR_OPERATION_FAILED;
++      goto done;
++   }
++
++   drv->pipe->flush(drv->pipe, &fence, 0);
++   if (!fence) {
++      ret = VA_STATUS_ERROR_OPERATION_FAILED;
++      goto done;
++   }
++   if (!screen->fence_finish(screen, NULL, fence, timeout_ns)) {
++      ret = VA_STATUS_ERROR_TIMEDOUT;
++      goto done;
++   }
++
++   *out_buffer = buffer;
++   buffer = NULL;
++   ret = VA_STATUS_SUCCESS;
++
++done:
++   if (fence)
++      screen->fence_reference(screen, &fence, NULL);
++   if (buffer)
++      buffer->destroy(buffer);
++   return ret;
++}
++#endif
++
+ VAStatus
+ vlVaExportSurfaceHandle(VADriverContextP ctx,
+                         VASurfaceID surface_id,
+@@ -1403,6 +1501,10 @@
+    struct pipe_screen *screen;
+    VAStatus ret;
+    unsigned int usage;
++#ifndef _WIN32
++   struct pipe_video_buffer *staging_buffer = NULL;
++   vlVaSurface staging_surface = {0};
++#endif
+ 
+ #ifdef _WIN32
+    if ((mem_type != VA_SURFACE_ATTRIB_MEM_TYPE_NTHANDLE)
+@@ -1430,8 +1532,27 @@
+    }
+ 
+    if (surf->buffer->interlaced) {
++#ifndef _WIN32
++      if (surf->templat.bind & PIPE_BIND_PROTECTED) {
++         mtx_unlock(&drv->mutex);
++         return VA_STATUS_ERROR_INVALID_SURFACE;
++      }
++
++      ret = vlVaCreateProgressiveExportBuffer(drv, surf->buffer,
++                                               &staging_buffer);
++      if (ret != VA_STATUS_SUCCESS) {
++         mtx_unlock(&drv->mutex);
++         return ret;
++      }
++
++      staging_surface.templat = surf->templat;
++      staging_surface.templat.interlaced = false;
++      staging_surface.buffer = staging_buffer;
++      surf = &staging_surface;
++#else
+       mtx_unlock(&drv->mutex);
+       return VA_STATUS_ERROR_INVALID_SURFACE;
++#endif
+    }
+ 
+    surfaces = surf->buffer->get_surfaces(surf->buffer);
+@@ -1583,6 +1704,10 @@
+ #endif
+ 
+    drv->has_external_handles = true;
++#ifndef _WIN32
++   if (staging_buffer)
++      staging_buffer->destroy(staging_buffer);
++#endif
+    mtx_unlock(&drv->mutex);
+ 
+    return VA_STATUS_SUCCESS;
+@@ -1591,6 +1716,8 @@
+ #ifndef _WIN32
+    for (i = 0; i < desc->num_objects; i++)
+       close(desc->objects[i].fd);
++   if (staging_buffer)
++      staging_buffer->destroy(staging_buffer);
+ #else
+    if(whandle.handle)
+       CloseHandle(whandle.handle);

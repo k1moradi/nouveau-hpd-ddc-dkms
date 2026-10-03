@@ -81,8 +81,11 @@ interlaced. Removing the guard alone would expose the wrong representation as
 progressive NV12.
 
 A progressive staging-buffer patch exists and compiles/links in an isolated
-candidate build. It has no field-parity, pixel, synchronization, repeated-use,
-or dma-buf-lifetime validation; it is not an accepted fix.
+candidate build. Its source, strict-apply regression tests, and known validation
+gaps are recorded in
+[`mesa-ffplay-progressive-export-candidate`](../../mesa-ffplay-progressive-export-candidate/CANDIDATE-STATUS.md).
+It has no field-parity, pixel, synchronization, repeated-use, or dma-buf-lifetime
+validation; it is not an accepted fix.
 
 ## Comparison and status
 
