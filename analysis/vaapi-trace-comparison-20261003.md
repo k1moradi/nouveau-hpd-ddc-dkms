@@ -75,6 +75,32 @@ difference is MPV destroying and recreating the decode context before the
 replacement submission. The retained surface pool is part of that legal
 sequence; these traces do not prove that the pool is defective.
 
+### Decoder setup inputs visible in the traces
+
+The retained decoder-thread traces also show matching inputs at the VA setup
+boundary preceding frame 0:
+
+| Call/input | MPV preflight / replacement | FFmpeg frame 0 | Comparison limit |
+|---|---|---|---|
+| `vaCreateConfig` | profile 7 (`H264High`), entrypoint 1 (`VLD`), 0 attributes | Same | Config IDs differ (`3` vs `2`); IDs are process-local. |
+| `vaCreateSurfaces` call used by frame 0 | 1920×1088, format 1, one surface; attribute type 1 value `0x3231564e`, type 6 value `1` | Same | Surface IDs differ (`2` vs `1`); this is one per-call count, not total pool size. |
+| `vaCreateContext` | H264High/VLD, 1920×1088, flag `1`, zero explicit render targets | Same | Context IDs differ (`4` vs `3`); MPV reuses ID 4 when it recreates its context. |
+| frame-0 `vaBeginPicture` | context 4, target surface 2, frame count 0; success | context 3, target surface 1, frame count 0; success | IDs are run-local; the trace does not expose backing BO identity. |
+| first `vaRenderPicture` buffer batch | PP 672 bytes then IQ 240 bytes | Same | Printed PP/IQ fields match after normalizing only `CurrPic.picture_id`; raw VA payload equality is unavailable. |
+
+Thus the inspected trace fields do not show a profile, entrypoint, dimensions,
+surface-format attribute, context flag, render-target-count, or frame-0
+picture/IQ mismatch that explains the failure. The outcome diverges at the
+replacement MPV decoder construction: the replacement context's PP-first
+`vaRenderPicture()` fails while the corresponding FFmpeg frame-0 submission
+succeeds. The observable lifecycle difference immediately before that
+submission is that MPV ended its successful preflight context and created a
+replacement; FFmpeg's captured frame-0 path keeps its decoder context alive.
+This is the smallest demonstrated difference in the retained decoder traces,
+not proof that context recreation itself is faulty. The traces do not expose
+the complete surface pool, its BO/resource ownership, or the old/new NVIF
+object keys needed to prove the stale-key candidate.
+
 The wrong-file-descriptor subchannel DEL path in the pinned Mesa source is a
 strong candidate for the `-EEXIST` result. Runtime proof still needs the same
 NVIF key across decoder A NEW/DEL and decoder B NEW, the DEL fd and result, and
