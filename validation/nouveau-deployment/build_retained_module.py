@@ -7,6 +7,7 @@ import argparse
 import hashlib
 import json
 from pathlib import Path
+import re
 import shlex
 import shutil
 import subprocess
@@ -112,6 +113,29 @@ def run_logged(command: list[str], log_path: Path, *, cwd: Path | None = None) -
         raise RuntimeError(f"build command failed ({result.returncode}); see {log_path}")
 
 
+def configured_kernel_release(headers: Path) -> tuple[str, str]:
+    """Return the distro target release and upstream Kbuild base release."""
+    release_file = headers / "include/config/kernel.release"
+    uts_header = headers / "include/generated/utsrelease.h"
+    release = release_file.read_text(encoding="ascii").strip()
+    uts_text = uts_header.read_text(encoding="ascii")
+    match = re.search(r'^#define UTS_RELEASE "([^\"]+)"$', uts_text, re.MULTILINE)
+    if not match:
+        raise RuntimeError(f"cannot read UTS_RELEASE from {uts_header}")
+    uts_release = match.group(1)
+    if release != uts_release:
+        raise RuntimeError(
+            f"configured kernel release mismatch: {release!r} != {uts_release!r}"
+        )
+    upstream = subprocess.run(
+        ["make", "-s", "-C", str(headers), "kernelrelease"],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout.strip()
+    return release, upstream
+
+
 def read_modinfo(module: Path, field: str) -> str:
     result = subprocess.run(
         ["modinfo", "-F", field, str(module)],
@@ -171,12 +195,7 @@ def main() -> int:
         raise RuntimeError(f"missing external Nouveau Kbuild under {module_source}")
     if not (kernel_headers / "Makefile").is_file():
         raise RuntimeError(f"invalid kernel header tree {kernel_headers}")
-    kernel_release = subprocess.run(
-        ["make", "-s", "-C", str(kernel_headers), "kernelrelease"],
-        check=True,
-        capture_output=True,
-        text=True,
-    ).stdout.strip()
+    kernel_release, upstream_kernel_release = configured_kernel_release(kernel_headers)
     if kernel_release != EXPECTED_KERNEL:
         raise RuntimeError(f"unexpected kernel headers release {kernel_release}")
 
@@ -250,6 +269,7 @@ def main() -> int:
         "review_branch": review_branch,
         "main_commit": main_commit,
         "kernel_release": kernel_release,
+        "upstream_kbuild_kernelrelease": upstream_kernel_release,
         "kernel_source_archive_sha256": SOURCE_ARCHIVE_SHA256,
         "source_overlay": str(source_root),
         "source_overlay_tree": tree,

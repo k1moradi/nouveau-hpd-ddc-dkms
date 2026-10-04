@@ -2,6 +2,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -43,6 +44,39 @@ class PatchInputTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "unexpected hash for 0009"):
                 BUILDER.verify_patch_inputs(wrong, vma)
+
+
+class KernelHeaderReleaseTests(unittest.TestCase):
+    def test_uses_distro_uts_release_not_upstream_make_kernelrelease(self):
+        with tempfile.TemporaryDirectory(prefix="kernel-release-pin-") as temporary:
+            headers = Path(temporary)
+            config = headers / "include/config/kernel.release"
+            uts = headers / "include/generated/utsrelease.h"
+            config.parent.mkdir(parents=True)
+            uts.parent.mkdir(parents=True)
+            config.write_text("7.0.0-34-generic\n", encoding="ascii")
+            uts.write_text(
+                '#define UTS_RELEASE "7.0.0-34-generic"\n',
+                encoding="ascii",
+            )
+            completed = type("Completed", (), {"stdout": "7.0.14\n"})()
+            with patch.object(BUILDER.subprocess, "run", return_value=completed):
+                self.assertEqual(
+                    BUILDER.configured_kernel_release(headers),
+                    ("7.0.0-34-generic", "7.0.14"),
+                )
+
+    def test_rejects_disagreement_between_kernel_release_and_uts_header(self):
+        with tempfile.TemporaryDirectory(prefix="kernel-release-mismatch-") as temporary:
+            headers = Path(temporary)
+            config = headers / "include/config/kernel.release"
+            uts = headers / "include/generated/utsrelease.h"
+            config.parent.mkdir(parents=True)
+            uts.parent.mkdir(parents=True)
+            config.write_text("7.0.0-34-generic\n", encoding="ascii")
+            uts.write_text('#define UTS_RELEASE "7.0.14"\n', encoding="ascii")
+            with self.assertRaisesRegex(RuntimeError, "configured kernel release mismatch"):
+                BUILDER.configured_kernel_release(headers)
 
 
 if __name__ == "__main__":

@@ -38,6 +38,13 @@ This produces `nouveau.ko`, `build-manifest.json`, `SHA256SUMS`, the clean and
 reverse-patch-check logs, and the W=1 build log. It does not install, sign,
 compress, load, or reboot. The output directory must not already exist.
 
+The header package's `make kernelrelease` target prints the upstream base
+`7.0.14`, while its generated `include/config/kernel.release` and
+`include/generated/utsrelease.h` both pin the distro target to
+`7.0.0-34-generic`. The builder checks that those two generated target fields
+agree, records the upstream base separately, and the completed module must
+still pass exact `vermagic=7.0.0-34-generic ...` validation.
+
 ## 2. Inspect the install plan, then finalize only from the controlled desktop
 
 First run the default read-only mode. It must print `INSTALL_PLAN_ONLY=true`
