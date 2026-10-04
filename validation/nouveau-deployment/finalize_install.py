@@ -229,11 +229,11 @@ def decompress_module(path: Path, destination: Path) -> None:
 def compress_module(source: Path, destination: Path) -> None:
     subprocess.run(
         [
-            "zstd", "--quiet", "--compress", "--threads=1", "-19",
+            "zstd", "--quiet", "--compress", "--threads=1",
             "--force", "-o", str(destination), str(source),
         ],
         check=True,
-        timeout=120,
+        timeout=300,
     )
 
 
