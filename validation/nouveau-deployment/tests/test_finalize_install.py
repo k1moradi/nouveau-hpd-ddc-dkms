@@ -73,6 +73,37 @@ class ModuleCompressionTests(unittest.TestCase):
 
 
 class ExistingInitramfsTests(unittest.TestCase):
+    def test_embedded_module_extraction_creates_nested_temp_root(self):
+        with tempfile.TemporaryDirectory(prefix="initramfs-extract-test-") as temporary:
+            root = Path(temporary)
+            initramfs = root / "initrd.img"
+            initramfs.write_bytes(b"initramfs fixture")
+            temporary_root = root / "new-parent" / "check"
+            payload = b"embedded module bytes"
+
+            def fake_unmkinitramfs(argv, **_kwargs):
+                extract = Path(argv[2])
+                module = extract / "main" / "nouveau.ko"
+                module.parent.mkdir(parents=True)
+                module.write_bytes(payload)
+
+            with patch.object(
+                FINALIZER.subprocess,
+                "run",
+                side_effect=fake_unmkinitramfs,
+            ):
+                records = FINALIZER.embedded_module_hashes(
+                    initramfs, temporary_root
+                )
+
+            self.assertEqual(
+                records,
+                [{
+                    "path_in_initramfs": "main/nouveau.ko",
+                    "uncompressed_sha256": FINALIZER.hashlib.sha256(payload).hexdigest(),
+                }],
+            )
+
     def test_matching_embedded_module_is_reused(self):
         with tempfile.TemporaryDirectory(prefix="initramfs-match-test-") as temporary:
             root = Path(temporary)

@@ -239,7 +239,7 @@ def compress_module(source: Path, destination: Path) -> None:
 
 def embedded_module_hashes(initramfs: Path, temporary_root: Path) -> list[dict[str, str]]:
     extract = temporary_root / "initramfs"
-    extract.mkdir()
+    extract.mkdir(parents=True)
     subprocess.run(
         ["unmkinitramfs", str(initramfs), str(extract)],
         check=True,
