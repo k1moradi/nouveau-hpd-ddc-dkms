@@ -211,7 +211,7 @@ def secure_boot_enabled() -> bool:
 
 def decompress_module(path: Path, destination: Path) -> None:
     if path.suffix == ".zst":
-        command = ["zstd", "--quiet", "--decompress", "--force", "--output", str(destination), str(path)]
+        command = ["zstd", "--quiet", "--decompress", "--force", "-o", str(destination), str(path)]
     elif path.suffix == ".xz":
         command = ["xz", "--decompress", "--force", "--stdout", str(path)]
     elif path.suffix == ".gz":
@@ -224,6 +224,17 @@ def decompress_module(path: Path, destination: Path) -> None:
     else:
         with destination.open("wb") as output:
             subprocess.run(command, check=True, stdout=output, timeout=60)
+
+
+def compress_module(source: Path, destination: Path) -> None:
+    subprocess.run(
+        [
+            "zstd", "--quiet", "--compress", "--threads=1", "-19",
+            "--force", "-o", str(destination), str(source),
+        ],
+        check=True,
+        timeout=120,
+    )
 
 
 def embedded_module_hashes(initramfs: Path, temporary_root: Path) -> list[dict[str, str]]:
@@ -413,11 +424,7 @@ def apply_install(
             raise RuntimeError("prepared module vermagic changed")
         uncompressed_sha = sha256_file(prepared)
         compressed_temp = root / "nouveau.ko.zst"
-        subprocess.run(
-            ["zstd", "--quiet", "--compress", "--threads=1", "-19", "--force", "--output", str(compressed_temp), str(prepared)],
-            check=True,
-            timeout=120,
-        )
+        compress_module(prepared, compressed_temp)
         target_temp = target.with_name(f".{target.name}.prepared")
         shutil.copy2(compressed_temp, target_temp)
         os.chmod(target_temp, 0o644)

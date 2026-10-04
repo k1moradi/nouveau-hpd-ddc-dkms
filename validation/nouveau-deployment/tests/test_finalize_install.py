@@ -56,6 +56,22 @@ class ManifestWriteTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), {"schema": 2, "value": "exact"})
 
 
+class ModuleCompressionTests(unittest.TestCase):
+    def test_zstd_module_compress_decompress_round_trip(self):
+        with tempfile.TemporaryDirectory(prefix="module-compression-test-") as temporary:
+            root = Path(temporary)
+            source = root / "nouveau.ko"
+            compressed = root / "nouveau.ko.zst"
+            restored = root / "restored-nouveau.ko"
+            payload = (b"Nouveau diagnostic module fixture\0" * 4096)
+            source.write_bytes(payload)
+
+            FINALIZER.compress_module(source, compressed)
+            FINALIZER.decompress_module(compressed, restored)
+
+            self.assertEqual(restored.read_bytes(), payload)
+
+
 class FinalManifestTests(unittest.TestCase):
     def test_validate_inputs_pins_review_tools_mesa_input_and_software_reference(self):
         with tempfile.TemporaryDirectory(prefix="deployment-inputs-test-") as temporary:
