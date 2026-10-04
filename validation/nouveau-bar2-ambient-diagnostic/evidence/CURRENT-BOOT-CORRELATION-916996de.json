@@ -1,0 +1,1132 @@
+{
+  "allocation_id_count": 0,
+  "boot_id": "916996de28054cf19dd1abb2a60380f8",
+  "fault_count": 30,
+  "faults": [
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        867460045,
+        867461158
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 2605,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 867461158,
+        "fault_realtime_usec": 1791125726365075,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 2604,
+        "raw_monotonic_usec": 867460045,
+        "raw_realtime_usec": 1791125726363962,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        1320024161,
+        1320024790
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 2659,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 1320024790,
+        "fault_realtime_usec": 1791126178928707,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 2658,
+        "raw_monotonic_usec": 1320024161,
+        "raw_realtime_usec": 1791126178928078,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        1320505140,
+        1320505727
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 2661,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 1320505727,
+        "fault_realtime_usec": 1791126179409644,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 2660,
+        "raw_monotonic_usec": 1320505140,
+        "raw_realtime_usec": 1791126179409057,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7358461147,
+        7358461811
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 2956,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7358461811,
+        "fault_realtime_usec": 1791132217365728,
+        "fault_va": "0x41f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 2955,
+        "raw_monotonic_usec": 7358461147,
+        "raw_realtime_usec": 1791132217365064,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0041f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7367750114,
+        7367750707
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 2958,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7367750707,
+        "fault_realtime_usec": 1791132226654624,
+        "fault_va": "0x41f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 2957,
+        "raw_monotonic_usec": 7367750114,
+        "raw_realtime_usec": 1791132226654031,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0041f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7372317104,
+        7372317655
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 2960,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7372317655,
+        "fault_realtime_usec": 1791132231221572,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 2959,
+        "raw_monotonic_usec": 7372317104,
+        "raw_realtime_usec": 1791132231221021,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7376538234,
+        7376538749
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 2963,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7376538749,
+        "fault_realtime_usec": 1791132235442666,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 2962,
+        "raw_monotonic_usec": 7376538234,
+        "raw_realtime_usec": 1791132235442151,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7391042454,
+        7391042931
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 2965,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7391042931,
+        "fault_realtime_usec": 1791132249946848,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 2964,
+        "raw_monotonic_usec": 7391042454,
+        "raw_realtime_usec": 1791132249946372,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7395807110,
+        7395807668
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 2967,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7395807668,
+        "fault_realtime_usec": 1791132254711586,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 2966,
+        "raw_monotonic_usec": 7395807110,
+        "raw_realtime_usec": 1791132254711027,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7480498040,
+        7480498625
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 2979,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7480498625,
+        "fault_realtime_usec": 1791132339402542,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 2978,
+        "raw_monotonic_usec": 7480498040,
+        "raw_realtime_usec": 1791132339401957,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7484444078,
+        7484444656
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 2981,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7484444656,
+        "fault_realtime_usec": 1791132343348574,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 2980,
+        "raw_monotonic_usec": 7484444078,
+        "raw_realtime_usec": 1791132343347995,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7484966066,
+        7484966600
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 2983,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7484966600,
+        "fault_realtime_usec": 1791132343870517,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 2982,
+        "raw_monotonic_usec": 7484966066,
+        "raw_realtime_usec": 1791132343869983,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7499821081,
+        7499821595
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3054,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7499821595,
+        "fault_realtime_usec": 1791132358725512,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3053,
+        "raw_monotonic_usec": 7499821081,
+        "raw_realtime_usec": 1791132358724998,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7500469277,
+        7500469789
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3059,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7500469789,
+        "fault_realtime_usec": 1791132359373706,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3058,
+        "raw_monotonic_usec": 7500469277,
+        "raw_realtime_usec": 1791132359373194,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7504358108,
+        7504358654
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3076,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7504358654,
+        "fault_realtime_usec": 1791132363262572,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3075,
+        "raw_monotonic_usec": 7504358108,
+        "raw_realtime_usec": 1791132363262025,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7523681214,
+        7523681752
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3439,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7523681752,
+        "fault_realtime_usec": 1791132382585669,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3438,
+        "raw_monotonic_usec": 7523681214,
+        "raw_realtime_usec": 1791132382585131,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7530109103,
+        7530109664
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3539,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7530109664,
+        "fault_realtime_usec": 1791132389013581,
+        "fault_va": "0x41f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3538,
+        "raw_monotonic_usec": 7530109103,
+        "raw_realtime_usec": 1791132389013020,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0041f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7542438133,
+        7542438748
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3689,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7542438748,
+        "fault_realtime_usec": 1791132401342666,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3688,
+        "raw_monotonic_usec": 7542438133,
+        "raw_realtime_usec": 1791132401342050,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7546466098,
+        7546466640
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3773,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7546466640,
+        "fault_realtime_usec": 1791132405370558,
+        "fault_va": "0x41f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3772,
+        "raw_monotonic_usec": 7546466098,
+        "raw_realtime_usec": 1791132405370015,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0041f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7547253175,
+        7547253698
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3781,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7547253698,
+        "fault_realtime_usec": 1791132406157615,
+        "fault_va": "0x41f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3780,
+        "raw_monotonic_usec": 7547253175,
+        "raw_realtime_usec": 1791132406157092,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0041f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7558360053,
+        7558360607
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3893,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7558360607,
+        "fault_realtime_usec": 1791132417264525,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3892,
+        "raw_monotonic_usec": 7558360053,
+        "raw_realtime_usec": 1791132417263970,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7568740133,
+        7568740753
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3895,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7568740753,
+        "fault_realtime_usec": 1791132427644671,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3894,
+        "raw_monotonic_usec": 7568740133,
+        "raw_realtime_usec": 1791132427644050,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7572490252,
+        7572490824
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3897,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7572490824,
+        "fault_realtime_usec": 1791132431394741,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3896,
+        "raw_monotonic_usec": 7572490252,
+        "raw_realtime_usec": 1791132431394169,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7573167099,
+        7573167630
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3899,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7573167630,
+        "fault_realtime_usec": 1791132432071547,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3898,
+        "raw_monotonic_usec": 7573167099,
+        "raw_realtime_usec": 1791132432071015,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7577457105,
+        7577457652
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3901,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7577457652,
+        "fault_realtime_usec": 1791132436361569,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3900,
+        "raw_monotonic_usec": 7577457105,
+        "raw_realtime_usec": 1791132436361022,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7577801170,
+        7577801675
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3903,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7577801675,
+        "fault_realtime_usec": 1791132436705593,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3902,
+        "raw_monotonic_usec": 7577801170,
+        "raw_realtime_usec": 1791132436705088,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7618584088,
+        7618584618
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3905,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7618584618,
+        "fault_realtime_usec": 1791132477488535,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3904,
+        "raw_monotonic_usec": 7618584088,
+        "raw_realtime_usec": 1791132477488005,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7635607050,
+        7635607668
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3907,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7635607668,
+        "fault_realtime_usec": 1791132494511586,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3906,
+        "raw_monotonic_usec": 7635607050,
+        "raw_realtime_usec": 1791132494510967,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7666888296,
+        7666888826
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3909,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7666888826,
+        "fault_realtime_usec": 1791132525792744,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3908,
+        "raw_monotonic_usec": 7666888296,
+        "raw_realtime_usec": 1791132525792213,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    },
+    {
+      "active_candidates": [],
+      "causal_ownership_proven": false,
+      "correlation_observation_window_usec": [
+        7667239100,
+        7667239657
+      ],
+      "fault": {
+        "access": "READ",
+        "channel": -1,
+        "channel_name": "unknown",
+        "client": "HUB/HOST_CPU",
+        "decoded_journal_line": 3911,
+        "engine": "BAR2",
+        "fault_monotonic_usec": 7667239657,
+        "fault_realtime_usec": 1791132526143574,
+        "fault_va": "0x46f000",
+        "inst": "0x00ffbb7000",
+        "raw_journal_line": 3910,
+        "raw_monotonic_usec": 7667239100,
+        "raw_realtime_usec": 1791132526143017,
+        "raw_tuple": {
+          "inst_register": "0x000ffbb7",
+          "type": "0x00000742",
+          "unit": "0x05",
+          "vahi": "0x00000000",
+          "valo": "0x0046f000"
+        },
+        "reason": "PTE"
+      },
+      "fault_event_time_exact": false,
+      "incomplete_or_unreferenced_ranges": [],
+      "numeric_address_correlation_only": true,
+      "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
+      "recently_released_ranges": [],
+      "transition_windows": []
+    }
+  ],
+  "input_completeness_proven": false,
+  "mapping_event_count": 0,
+  "memory_address_used_for_fault_matching": false,
+  "outcomes": {
+    "INCONCLUSIVE_MAPPING_LIFECYCLE": 0,
+    "INCONCLUSIVE_MAPPING_TRANSITION": 0,
+    "MULTIPLE_NUMERIC_ACTIVE_BAR2_MAPPING_CANDIDATES": 0,
+    "NO_OBSERVED_BAR2_MAPPING_MATCH": 30,
+    "ONE_NUMERIC_ACTIVE_BAR2_MAPPING_CANDIDATE": 0,
+    "RECENTLY_RELEASED_BAR2_RANGE": 0
+  },
+  "pointer_identity_used": false,
+  "reset_event_count": 0,
+  "result_kind": "AMBIENT_BAR2_LIFETIME_CORRELATION_ONLY",
+  "schema_version": 1
+}
