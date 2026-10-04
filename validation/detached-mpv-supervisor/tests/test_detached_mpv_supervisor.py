@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 import unittest
+from contextlib import ExitStack
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -199,6 +200,74 @@ class KernelJournalVisibilityTests(unittest.TestCase):
             any("cannot prove current-boot kernel journal visibility: empty" in item
                 for item in errors)
         )
+
+
+class PreflightJournalSnapshotFailureTests(unittest.TestCase):
+    def setUp(self) -> None:
+        self.original_read_text = Path.read_text
+
+    def preflight_patches(self, journal_failure):
+        original_read_text = self.original_read_text
+
+        def fake_read_text(path: Path, *args, **kwargs) -> str:
+            if str(path) == "/sys/module/nouveau/srcversion":
+                return "test-srcversion\n"
+            return original_read_text(path, *args, **kwargs)
+
+        stack = ExitStack()
+        for patcher in (
+            patch.object(
+                supervisor,
+                "prove_kernel_journal_visibility",
+                return_value=(True, "current-boot journal visible"),
+            ),
+            patch.object(supervisor, "current_players", return_value=[]),
+            patch.object(supervisor, "journal", side_effect=journal_failure),
+            patch.object(
+                supervisor,
+                "sha256",
+                return_value=supervisor.EXPECTED_INPUT_SHA256,
+            ),
+            patch.object(Path, "is_file", return_value=True),
+            patch.object(Path, "read_text", new=fake_read_text),
+        ):
+            stack.enter_context(patcher)
+        return stack
+
+    def test_snapshot_oserror_and_timeout_preserve_four_value_contract(self) -> None:
+        failures = (
+            OSError("journal unavailable"),
+            subprocess.TimeoutExpired(cmd=["journalctl"], timeout=12),
+        )
+        for failure in failures:
+            with self.subTest(failure=type(failure).__name__):
+                with self.preflight_patches(failure):
+                    result = supervisor.preflight(require_desktop=False)
+
+                self.assertEqual(len(result), 4)
+                errors, srcversion, snapshot, observed = result
+                self.assertEqual(srcversion, "test-srcversion")
+                self.assertEqual(snapshot, "")
+                self.assertEqual(observed, {})
+                self.assertTrue(
+                    any("current-boot kernel journal query failed" in error
+                        for error in errors)
+                )
+
+    def test_check_only_snapshot_timeout_is_structured_failure(self) -> None:
+        failure = subprocess.TimeoutExpired(cmd=["journalctl"], timeout=12)
+        with self.preflight_patches(failure):
+            with (
+                patch("sys.stdout", new_callable=io.StringIO) as output,
+                patch("sys.stderr", new_callable=io.StringIO) as error_output,
+            ):
+                status = supervisor.main(["check-only", "--no-desktop"])
+
+        self.assertEqual(status, 2)
+        self.assertIn("PREFLIGHT_FAIL", output.getvalue())
+        self.assertIn("RUN_ELIGIBLE=false", output.getvalue())
+        self.assertIn("current-boot kernel journal query failed", output.getvalue())
+        self.assertNotIn("Traceback", error_output.getvalue())
 
 
 class CheckOnlyEligibilityOutputTests(unittest.TestCase):

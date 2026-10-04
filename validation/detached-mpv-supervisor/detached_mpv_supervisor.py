@@ -612,7 +612,7 @@ def preflight(
         snapshot = journal(["-k", "-b", "--no-pager", "-o", "cat"], timeout=12)
     except (OSError, subprocess.TimeoutExpired) as exc:
         errors.append(f"current-boot kernel journal query failed: {exc}")
-        return errors, srcversion, ""
+        return errors, srcversion, "", deployment_observed
     if snapshot.returncode:
         errors.append(f"cannot read current-boot kernel journal: {snapshot.stderr.strip()}")
         snapshot_text = ""
