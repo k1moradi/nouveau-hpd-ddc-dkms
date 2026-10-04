@@ -3,19 +3,21 @@
 The saved application failure boundaries are summarized in
 [`evidence/FIRST-FAILURE-COMPARISON.md`](evidence/FIRST-FAILURE-COMPARISON.md).
 
-**Status: matched A/B VA DSOs linked; neither installed nor run.** This patch
+**Status: pointer-free matched A/B VA DSOs linked; neither installed nor run.** This patch
 prepares the missing userspace records for the stage-4 BSP NEW `-EEXIST`
 investigation. It complements the kernel duplicate-layer markers in
 `validation/nouveau-nvif-duplicate-diagnostic/`.
 
 The diagnostic records only class `0x95b1`, the BSP class observed by the v5
-constructor probe. It captures:
+constructor probe. It uses the numeric NVIF key passed by Nouveau ABI16 to its
+per-file object lookup and does not use C pointer equality to join lifetimes.
+Journald's `__MONOTONIC_TIMESTAMP` supplies event time and is required by the
+offline parser. It captures:
 
-- BSP NEW: the ioctl object key and object token, route token, parent pointer
-  and channel handle, real DRM fd, class, and ioctl return;
-- BSP DEL: the exact object key sent, object/parent pointers, parent channel
-  handle, object handle, fd passed to `drmCommandWrite()`, real DRM fd, class,
-  and ioctl return;
+- BSP NEW: the exact ioctl object key, object token, route token, numeric
+  parent handle, selected fd, canonical DRM fd, class, and ioctl return;
+- BSP DEL: the exact object key sent, numeric parent/object handles, fd passed
+  to `drmCommandWrite()`, canonical DRM fd, class, and ioctl return;
 - channel free: channel ID, real DRM fd, and ioctl return.
 
 ## Matched build variants
@@ -36,6 +38,12 @@ Both variants compile the same logging code. Defining the candidate macro
 without the diagnostic macro is a compile error. Keep each build tree and
 result manifest separate; record all compiler arguments and the produced DSO
 hashes. Do not combine this diagnostic with unrelated Mesa changes.
+
+The runtime capture and parser are pinned to the reviewed kernel diagnostic
+module srcversion `936407678F3DA1E8515F5EC` and kernel
+`7.0.0-34-generic`, matching the retained deployment plan. Captures made with
+the older `29C4D0E409ABB2711FC9A10` module are rejected and are not evidence
+for this A/B checkpoint.
 
 ## Decisive capture
 
@@ -92,16 +100,31 @@ matched VA DSO builds and their source/configuration identities are recorded
 separately below.
 
 The first source-validation checkpoint is recorded in
-[`evidence/CPU-VALIDATION.md`](evidence/CPU-VALIDATION.md). The diagnostic
-patch SHA-256 is:
+[`evidence/CPU-VALIDATION.md`](evidence/CPU-VALIDATION.md). The current
+pointer-free diagnostic patch SHA-256 is:
 
 ```text
-f89c752fc445d4534f46ce45813a877b4229efdeae7d6d306429fb7462f913b7
+23e952f8c4d61c0a2ae556029bf45e21e1c718fc23570c7abccaa640c349a81a
 ```
 
-The matched VA DSO link builds are recorded in
-[`evidence/DSO-BUILD-VALIDATION.md`](evidence/DSO-BUILD-VALIDATION.md). They
-are build-only artifacts; neither variant was installed or run.
+The earlier pointer-bearing DSOs in `evidence/linked-ab-20261003` are
+superseded and must not be used for runtime testing. The current pointer-free
+DSOs were built from the hash-pinned `build-x11-va-sysroot` tree and are
+retained outside this repository:
+
+```text
+/home/keivan/nouveau-vaapi-app-validation/mesa-nvif-lifetime-ab-build-20261004-pointer-free/A/libgallium_drv_video.so
+/home/keivan/nouveau-vaapi-app-validation/mesa-nvif-lifetime-ab-build-20261004-pointer-free/B/libgallium_drv_video.so
+```
+
+Their SHA-256 values are `2a23055f8fb06d67f43b3c0e046111758ecc21b3fa285516c401cbcd2f3e9b7a`
+and `4b334f9ee31d54ee8fc4c043889c9c554e02fb665a62ee29ff8d1af735dce152`,
+respectively. The only target compile-graph change is
+`-DNOUVEAU_DIAG_NVIF_CORRECT_DEL_FD`; dependency and exported symbol
+name/type/size sets match. Link addresses are recorded separately and are not
+treated as ABI differences. The retained `manifest.json` records source and
+patch hashes, compiler path/version/hash, A/B commands and log hashes, ELF
+dependencies/symbols, and DSO hashes. Neither DSO has been installed or run.
 
 ## Runtime capture and fail-closed correlation
 
@@ -199,17 +222,18 @@ commands for a later, separately approved clean diagnostic boot are:
 python3 validation/mesa-nvif-lifetime-diagnostic/capture_nvif_lifetime_run.py \
     --variant A \
     --dso /path/to/private-A/libgallium_drv_video.so \
+    --deployment-manifest /path/to/finalized-deployment-manifest.json \
     --output-dir /path/to/new-capture-A \
     --execute
 ```
 
-Use the same command in a separate B boot, with the B DSO and a new output
-directory. The tool refuses an existing output directory. It also refuses an
-unexpected kernel or Nouveau srcversion, a changed media/DSO hash, a dirty
-whole-boot hard-stop scan, an unreadable or enabled `diag_ctxsw`, a non-`:0`
-display, inaccessible X11 session, competing video process, or contaminated
-debug environment. Neither variant has been run by preparing this profile or
-the capture code.
+Use the same command in a separate B boot, with the B DSO, the same finalized
+deployment manifest, and a new output directory. The tool refuses an existing
+output directory. It also refuses an unexpected kernel or Nouveau srcversion,
+a changed media/DSO hash, a dirty whole-boot hard-stop scan, an unreadable or
+enabled `diag_ctxsw`, a non-`:0` display, inaccessible X11 session, competing
+video process, or contaminated debug environment. Neither variant has been
+run by preparing this profile or the capture code.
 
 ### Pair comparison
 
@@ -241,6 +265,30 @@ the artifact is usable for pair comparison; it is not a causal pass.
 
 The B candidate requires a successful correct-fd DEL, successful channel
 free, and successful replacement NEW without a matching duplicate marker.
+
+## Pointer-free A/B artifacts (2026-10-04)
+
+The current diagnostic patch and linked A/B DSOs use only the stable numeric
+NVIF object key for lifecycle correlation; they do not emit object-pointer
+identity. The canonical linked artifacts are retained outside the repository:
+
+    /home/keivan/nouveau-vaapi-app-validation/mesa-nvif-lifetime-ab-build-20261004-pointer-free/A/libgallium_drv_video.so
+    /home/keivan/nouveau-vaapi-app-validation/mesa-nvif-lifetime-ab-build-20261004-pointer-free/B/libgallium_drv_video.so
+
+Variant A SHA-256:
+2a23055f8fb06d67f43b3c0e046111758ecc21b3fa285516c401cbcd2f3e9b7a.
+Variant B SHA-256:
+4b334f9ee31d54ee8fc4c043889c9c554e02fb665a62ee29ff8d1af735dce152.
+The full build/source/command/ELF comparison is copied to
+evidence/linked-ab-20261004-pointer-free/manifest.json; its SHA-256 is
+a6f70d4ebf9859e7434e32c54d080ab422e0236e3a3e419f6584da744ff4174a.
+
+The manifest proves the A/B target compile graph differs only by
+-DNOUVEAU_DIAG_NVIF_CORRECT_DEL_FD; the shared diagnostic source is otherwise
+identical, and dynamic dependency and exported symbol name/type/size sets
+match. Link addresses differ as an expected consequence of the changed
+object layout and are not treated as ABI changes. Both DSOs are build-only:
+neither is installed or run.
 Even then the result is only NVIF object-lifecycle evidence; it does not prove
 visible playback or a production fix. Parser and capture-runner tests are in
 [`tests/test_parse_nvif_lifetime_ab.py`](tests/test_parse_nvif_lifetime_ab.py)

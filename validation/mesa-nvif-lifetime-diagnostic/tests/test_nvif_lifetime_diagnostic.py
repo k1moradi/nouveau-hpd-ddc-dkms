@@ -11,7 +11,7 @@ PACKAGE = Path(__file__).resolve().parents[1]
 PATCH = PACKAGE / "patches/0001-nouveau-nvif-bsp-lifetime-diagnostic.patch"
 SOURCE = Path(os.environ.get("MESA_NOUVEAU_C_SOURCE", ""))
 SOURCE_SHA256 = "2140bca6de1666e4517ebabf97a63b417db43bfbc575198d7835d40ad92dc57f"
-PATCH_SHA256 = "f89c752fc445d4534f46ce45813a877b4229efdeae7d6d306429fb7462f913b7"
+PATCH_SHA256 = "23e952f8c4d61c0a2ae556029bf45e21e1c718fc23570c7abccaa640c349a81a"
 RELATIVE_SOURCE = Path("src/gallium/winsys/nouveau/drm/nouveau.c")
 
 
@@ -73,11 +73,12 @@ class NvifLifetimeDiagnosticTests(unittest.TestCase):
             source,
         )
         self.assertIn("(uint64_t)args.new.object", source)
-        self.assertIn("(uint64_t)args.new.token", source)
         self.assertIn("(uint64_t)args.ioctl.token", source)
-        self.assertIn("(void *)parent", source)
         self.assertIn("(uint64_t)parent->handle", source)
-        self.assertIn("drm->fd, oclass, ret", source)
+        self.assertIn("selected_fd=%d drm_fd=%d", source)
+        self.assertIn("drm->fd, drm->fd, oclass, ret", source)
+        self.assertNotIn("obj=%p", source)
+        self.assertNotIn("parent=%p", source)
 
     def test_del_variants_share_the_actual_ioctl_and_log(self) -> None:
         source = self.patched_source()
@@ -95,6 +96,7 @@ class NvifLifetimeDiagnosticTests(unittest.TestCase):
             source,
         )
         self.assertIn("(uint64_t)args.ioctl.object", source)
+        self.assertIn("selected_fd=%d drm_fd=%d", source)
         self.assertIn("delete_fd, drm->fd, obj->oclass, ret", source)
 
     def test_diagnostic_disabled_path_preserves_original_fd_calls(self) -> None:

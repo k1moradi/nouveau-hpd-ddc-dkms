@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import shutil
 import shlex
 import subprocess
@@ -32,7 +33,7 @@ EXPECTED_BASE_VERSION_SCRIPT_SHA256 = (
     "61fc96386f8ab4ca3473c7d48d2aaec54681b2ac6192bd21752518949d34a7f2"
 )
 EXPECTED_DIAGNOSTIC_PATCH_SHA256 = (
-    "f89c752fc445d4534f46ce45813a877b4229efdeae7d6d306429fb7462f913b7"
+    "23e952f8c4d61c0a2ae556029bf45e21e1c718fc23570c7abccaa640c349a81a"
 )
 # These baseline build metadata hashes were measured in the post-link audit.
 # They are mandatory pins for future helper runs, not claimed as pre-link
@@ -362,17 +363,7 @@ def clone_build(base: Path, destination: Path) -> None:
 
 def build_variant(build_dir: Path, output_root: Path, name: str) -> Path:
     log = output_root / f"build-{name}.log"
-    command = [
-        "nice",
-        "-n",
-        "10",
-        "ninja",
-        "-C",
-        str(build_dir),
-        "-j1",
-        "-v",
-        TARGET,
-    ]
+    command = write_build_command(build_dir, output_root, name)
     with log.open("w", encoding="utf-8") as stream:
         result = subprocess.run(
             command,
@@ -394,6 +385,102 @@ def build_variant(build_dir: Path, output_root: Path, name: str) -> Path:
     copied.parent.mkdir(parents=True)
     shutil.copy2(dso, copied)
     return copied
+
+
+def parse_exported_dynamic_symbols(
+    exports_text: str,
+) -> tuple[list[str], list[str]]:
+    exported_addresses: list[str] = []
+    exports: list[str] = []
+    for line in exports_text.splitlines():
+        fields = line.split()
+        if not fields:
+            continue
+        if len(fields) < 3:
+            raise RuntimeError(f"cannot parse exported symbol record: {line!r}")
+        name, symbol_type, value = fields[:3]
+        size = fields[3] if len(fields) >= 4 else "-"
+        exports.append(f"{name} {symbol_type} {size}")
+        exported_addresses.append(f"{name} {value}")
+    exports.sort()
+    exported_addresses.sort()
+    return exports, exported_addresses
+
+
+def inspect_linked_dso(dso: Path, output_dir: Path) -> dict[str, object]:
+    dynamic = run(["readelf", "-d", str(dso)])
+    needed = sorted(set(re.findall(r"\(NEEDED\).*?\[([^]]+)\]", dynamic)))
+    if not needed:
+        raise RuntimeError(f"could not read DT_NEEDED dependencies from {dso}")
+    exports_text = run(["nm", "-D", "--defined-only", "--format=posix", str(dso)])
+    exports, exported_addresses = parse_exported_dynamic_symbols(exports_text)
+    if not exports:
+        raise RuntimeError(f"could not read exported dynamic symbols from {dso}")
+    needed_file = output_dir / "dynamic-needed.txt"
+    exports_file = output_dir / "exported-dynamic-symbols.txt"
+    addresses_file = output_dir / "exported-dynamic-symbol-addresses.txt"
+    needed_file.write_text("\n".join(needed) + "\n", encoding="utf-8")
+    exports_file.write_text("\n".join(exports) + "\n", encoding="utf-8")
+    addresses_file.write_text(
+        "\n".join(exported_addresses) + "\n", encoding="utf-8"
+    )
+    return {
+        "needed_libraries": needed,
+        "needed_libraries_sha256": sha256(needed_file),
+        "exported_dynamic_symbols": exports,
+        "exported_dynamic_symbols_sha256": sha256(exports_file),
+        "exported_dynamic_symbol_addresses": exported_addresses,
+        "exported_dynamic_symbol_addresses_sha256": sha256(addresses_file),
+        "dso_size_bytes": dso.stat().st_size,
+    }
+
+
+def inspect_compiler(compile_command: str) -> dict[str, object]:
+    tokens = shlex.split(compile_command)
+    if "-c" not in tokens:
+        raise RuntimeError("pinned nouveau.c command lacks compiler -c boundary")
+    launchers: list[str] = []
+    executables: list[dict[str, str]] = []
+    candidates: list[Path] = []
+    for token in tokens:
+        if token.startswith("-"):
+            break
+        launchers.append(token)
+        resolved = shutil.which(token)
+        if not resolved:
+            continue
+        path = Path(resolved).resolve(strict=True)
+        base = path.name.lower()
+        version = run([str(path), "--version"])
+        executables.append({
+            "invoked_as": token,
+            "resolved_path": str(path),
+            "sha256": sha256(path),
+            "version_output": version,
+            "version_sha256": hashlib.sha256(version.encode("utf-8")).hexdigest(),
+        })
+        if "gcc" in base or "clang" in base or base in {"cc", "c++"}:
+            candidates.append(path)
+    if not candidates:
+        raise RuntimeError("cannot resolve compiler executable from pinned command")
+    compiler = candidates[-1]
+    return {
+        "compiler_launcher_tokens": launchers,
+        "resolved_toolchain_executables": executables,
+        "resolved_compiler_path": str(compiler),
+        "compiler_sha256": sha256(compiler),
+    }
+
+
+def write_build_command(build_dir: Path, output_root: Path, name: str) -> list[str]:
+    command = [
+        "nice", "-n", "10", "ninja", "-C", str(build_dir),
+        "-j1", "-v", TARGET,
+    ]
+    (output_root / f"build-{name}.command.json").write_text(
+        json.dumps(command, indent=2) + "\n", encoding="utf-8"
+    )
+    return command
 
 
 def main() -> int:
@@ -480,6 +567,18 @@ def main() -> int:
         dso_a = build_variant(build_a, output_root, "A")
         dso_b = build_variant(build_b, output_root, "B")
 
+        artifact_a = inspect_linked_dso(dso_a, output_root / "A")
+        artifact_b = inspect_linked_dso(dso_b, output_root / "B")
+        if artifact_a["needed_libraries"] != artifact_b["needed_libraries"]:
+            raise RuntimeError("A/B dynamic dependency sets differ")
+        if artifact_a["exported_dynamic_symbols"] != artifact_b[
+            "exported_dynamic_symbols"
+        ]:
+            raise RuntimeError("A/B exported dynamic symbol sets differ")
+        compiler_info = inspect_compiler(a_compile)
+        if inspect_compiler(b_compile) != compiler_info:
+            raise RuntimeError("A/B compiler executable/version differs")
+
         post_graph = inspect_ab_graph(build_a, build_b, base_build)
         post_hashes = dict(post_graph["hashes"])
         if post_hashes != pre_hashes:
@@ -558,18 +657,36 @@ def main() -> int:
                 "dso": str(dso_a),
                 "dso_sha256": dso_a_sha,
                 "diagnostic_strings": marker_sets["A"],
+                "build_command": json.loads(
+                    (output_root / "build-A.command.json").read_text(encoding="utf-8")
+                ),
+                "build_log_sha256": sha256(output_root / "build-A.log"),
+                "elf": artifact_a,
             },
             "variant_b": {
                 "defines": [COMMON_DEFINE, CANDIDATE_DEFINE],
                 "dso": str(dso_b),
                 "dso_sha256": dso_b_sha,
                 "diagnostic_strings": marker_sets["B"],
+                "build_command": json.loads(
+                    (output_root / "build-B.command.json").read_text(encoding="utf-8")
+                ),
+                "build_log_sha256": sha256(output_root / "build-B.log"),
+                "elf": artifact_b,
             },
+            "compiler": compiler_info,
             "build_dirs": {"A": str(build_a), "B": str(build_b)},
             "build_job_limit": 1,
             "build_priority": "nice -n 10",
             "only_compile_command_difference": CANDIDATE_DEFINE,
             "only_ninja_graph_difference": CANDIDATE_DEFINE,
+            "artifact_comparison": {
+                "a_and_b_dso_sha256_differ": dso_a_sha != dso_b_sha,
+                "dynamic_dependency_sets_equal": True,
+                "exported_dynamic_symbol_sets_equal": True,
+                "source_difference_is_only_candidate_fd_branch": True,
+                "compile_graph_difference_is_only_candidate_define": True,
+            },
             "baseline_build_references": {
                 "allowed_read_only_input": "src/gallium/targets/va/va.sym",
                 "writes_into_baseline_build_tree": 0,

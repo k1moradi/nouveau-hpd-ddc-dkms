@@ -13,6 +13,20 @@ SPEC.loader.exec_module(BUILD)
 
 
 class BuildInvariantTests(unittest.TestCase):
+    def test_exported_symbol_interface_ignores_link_address_but_keeps_shape(self) -> None:
+        a = "__vaDriverInit_1_23 T eb210 352\n"
+        b = "__vaDriverInit_1_23 T eb230 352\n"
+        changed_size = "__vaDriverInit_1_23 T eb230 360\n"
+
+        self.assertEqual(
+            BUILD.parse_exported_dynamic_symbols(a)[0],
+            BUILD.parse_exported_dynamic_symbols(b)[0],
+        )
+        self.assertNotEqual(
+            BUILD.parse_exported_dynamic_symbols(a)[0],
+            BUILD.parse_exported_dynamic_symbols(changed_size)[0],
+        )
+
     def test_patch_pin_rejects_changed_patch(self) -> None:
         with tempfile.TemporaryDirectory(prefix="nvif-patch-pin-") as temporary:
             patch = Path(temporary) / "diagnostic.patch"

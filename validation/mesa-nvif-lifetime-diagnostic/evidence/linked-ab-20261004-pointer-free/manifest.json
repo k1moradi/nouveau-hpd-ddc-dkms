@@ -1,0 +1,179 @@
+{
+  "ab_graph_post_build": {
+    "build_ninja_a_sha256": "af7b263db6353554e9be421047c6edab0e43b2914df209465e66b226a2931164",
+    "build_ninja_b_sha256": "e37ab9f4998b48a10c5e2a60bad95a72955efd4c900c0fb53ab526f0abfb5708",
+    "nouveau_compile_a_sha256": "479d3820e70c3cf877253ec726b11b7b42e7970064fd175ba0feede3f29e5103",
+    "nouveau_compile_b_sha256": "fc7d549fe9cbe98b6cf9eabf3e164e2d0103862e9f2f8c8cf6da4f3707f3e762",
+    "target_commands_a_sha256": "4be41ae75c6efc71f5dcb6a9710118d2625013181de81728808de65b0801ae8f",
+    "target_commands_b_sha256": "5af232b7da0fb13a715b54b77006807a10531b13578cb989b008841258042223"
+  },
+  "ab_graph_pre_build": {
+    "build_ninja_a_sha256": "af7b263db6353554e9be421047c6edab0e43b2914df209465e66b226a2931164",
+    "build_ninja_b_sha256": "e37ab9f4998b48a10c5e2a60bad95a72955efd4c900c0fb53ab526f0abfb5708",
+    "nouveau_compile_a_sha256": "479d3820e70c3cf877253ec726b11b7b42e7970064fd175ba0feede3f29e5103",
+    "nouveau_compile_b_sha256": "fc7d549fe9cbe98b6cf9eabf3e164e2d0103862e9f2f8c8cf6da4f3707f3e762",
+    "target_commands_a_sha256": "4be41ae75c6efc71f5dcb6a9710118d2625013181de81728808de65b0801ae8f",
+    "target_commands_b_sha256": "5af232b7da0fb13a715b54b77006807a10531b13578cb989b008841258042223"
+  },
+  "artifact_comparison": {
+    "a_and_b_dso_sha256_differ": true,
+    "compile_graph_difference_is_only_candidate_define": true,
+    "dynamic_dependency_sets_equal": true,
+    "exported_dynamic_symbol_sets_equal": true,
+    "source_difference_is_only_candidate_fd_branch": true
+  },
+  "base_build_metadata_sha256": {
+    "build.ninja": "ba2acdaa119fb43ef5c98780e19bc59af2d5cfc51bf4cf34769af06534c71ff7",
+    "compile_commands.json": "c6824053b21c8d8f6b7d68021da7f75e4ad947a41008201259543e4576206151",
+    "meson-private/coredata.dat": "5fa21fef3f842c90196b57a5e1a9b8aefefcff39db25cef0c58a0c3e872dfed7"
+  },
+  "base_build_metadata_sha256_after_build": {
+    "build.ninja": "ba2acdaa119fb43ef5c98780e19bc59af2d5cfc51bf4cf34769af06534c71ff7",
+    "compile_commands.json": "c6824053b21c8d8f6b7d68021da7f75e4ad947a41008201259543e4576206151",
+    "meson-private/coredata.dat": "5fa21fef3f842c90196b57a5e1a9b8aefefcff39db25cef0c58a0c3e872dfed7"
+  },
+  "base_dso_sha256": "aceac163eabeefe5e4c1f2eb38469239044e30671aebcec743e4277f5897b536",
+  "base_dso_sha256_after_build": "aceac163eabeefe5e4c1f2eb38469239044e30671aebcec743e4277f5897b536",
+  "base_version_script_sha256": "61fc96386f8ab4ca3473c7d48d2aaec54681b2ac6192bd21752518949d34a7f2",
+  "base_version_script_sha256_after_build": "61fc96386f8ab4ca3473c7d48d2aaec54681b2ac6192bd21752518949d34a7f2",
+  "baseline_build_references": {
+    "allowed_read_only_input": "src/gallium/targets/va/va.sym",
+    "writes_into_baseline_build_tree": 0
+  },
+  "baseline_build_tree_unchanged": true,
+  "build_dirs": {
+    "A": "/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-functional-no-mesa-diag-20260930/mesa-nvif-lifetime-ab-build-20261004-pointer-free-build-A",
+    "B": "/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-functional-no-mesa-diag-20260930/mesa-nvif-lifetime-ab-build-20261004-pointer-free-build-B"
+  },
+  "build_job_limit": 1,
+  "build_priority": "nice -n 10",
+  "compiler": {
+    "compiler_launcher_tokens": [
+      "cc"
+    ],
+    "compiler_sha256": "b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88",
+    "resolved_compiler_path": "/usr/bin/x86_64-linux-gnu-gcc-15",
+    "resolved_toolchain_executables": [
+      {
+        "invoked_as": "cc",
+        "resolved_path": "/usr/bin/x86_64-linux-gnu-gcc-15",
+        "sha256": "b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88",
+        "version_output": "x86_64-linux-gnu-gcc-15 (Ubuntu 15.2.0-16ubuntu1) 15.2.0\nCopyright (C) 2025 Free Software Foundation, Inc.\nThis is free software; see the source for copying conditions.  There is NO\nwarranty; not even for MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.\n\n",
+        "version_sha256": "60f7dc07ed00e918c903d995b6f86bfcd5452856f75f2816cc8ca379ce2b5344"
+      }
+    ]
+  },
+  "diagnostic_patch_sha256": "23e952f8c4d61c0a2ae556029bf45e21e1c718fc23570c7abccaa640c349a81a",
+  "meson_buildoptions_sha256": "db6e244c090d39149c476e885eadb3c0799e231e49d8193ae6c45db6b5a47fc6",
+  "meson_coredata_sha256": "5fa21fef3f842c90196b57a5e1a9b8aefefcff39db25cef0c58a0c3e872dfed7",
+  "only_compile_command_difference": "-DNOUVEAU_DIAG_NVIF_CORRECT_DEL_FD",
+  "only_ninja_graph_difference": "-DNOUVEAU_DIAG_NVIF_CORRECT_DEL_FD",
+  "patched_source_sha256": "5acd03c03adec44e694240bc34d5e0e1234aa18b1f0b585dc84f65d95a42d50c",
+  "post_build_graph_matches_pre_build": true,
+  "schema": 1,
+  "source_file_sha256": "2140bca6de1666e4517ebabf97a63b417db43bfbc575198d7835d40ad92dc57f",
+  "status": "LINKED_BUILD_ONLY_NOT_INSTALLED_OR_RUN",
+  "variant_a": {
+    "build_command": [
+      "nice",
+      "-n",
+      "10",
+      "ninja",
+      "-C",
+      "/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-functional-no-mesa-diag-20260930/mesa-nvif-lifetime-ab-build-20261004-pointer-free-build-A",
+      "-j1",
+      "-v",
+      "src/gallium/targets/va/libgallium_drv_video.so"
+    ],
+    "build_log_sha256": "db9754caee605a46c76e9af324d15712e218bb6c5bcfce3232403e5be5591b40",
+    "defines": [
+      "-DNOUVEAU_DIAG_NVIF_LIFETIME"
+    ],
+    "diagnostic_strings": [
+      "NOUVEAU_DIAG_NVIF_NEW",
+      "NOUVEAU_DIAG_NVIF_DEL",
+      "NOUVEAU_DIAG_NVIF_CHANNEL_FREE"
+    ],
+    "dso": "/home/keivan/nouveau-vaapi-app-validation/mesa-nvif-lifetime-ab-build-20261004-pointer-free/A/libgallium_drv_video.so",
+    "dso_sha256": "2a23055f8fb06d67f43b3c0e046111758ecc21b3fa285516c401cbcd2f3e9b7a",
+    "elf": {
+      "dso_size_bytes": 59030128,
+      "exported_dynamic_symbol_addresses": [
+        "__vaDriverInit_1_23 eb210"
+      ],
+      "exported_dynamic_symbol_addresses_sha256": "269634aef0da06134225de73c9acf92d501748d48d6bd7da7260053402be58a3",
+      "exported_dynamic_symbols": [
+        "__vaDriverInit_1_23 T 352"
+      ],
+      "exported_dynamic_symbols_sha256": "8a615d2eefbb93cdbdafe5b51b71c606b64340dd490a8e7d9b89a5c8181701d4",
+      "needed_libraries": [
+        "libX11-xcb.so.1",
+        "libc.so.6",
+        "libexpat.so.1",
+        "libgcc_s.so.1",
+        "libm.so.6",
+        "libstdc++.so.6",
+        "libxcb-dri3.so.0",
+        "libxcb-present.so.0",
+        "libxcb-sync.so.1",
+        "libxcb-xfixes.so.0",
+        "libxcb.so.1",
+        "libxshmfence.so.1",
+        "libz.so.1"
+      ],
+      "needed_libraries_sha256": "0886ff13ec573ac6eb4e2e504e73b42441911123e77cac8cacf676bd64067b4b"
+    }
+  },
+  "variant_b": {
+    "build_command": [
+      "nice",
+      "-n",
+      "10",
+      "ninja",
+      "-C",
+      "/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-functional-no-mesa-diag-20260930/mesa-nvif-lifetime-ab-build-20261004-pointer-free-build-B",
+      "-j1",
+      "-v",
+      "src/gallium/targets/va/libgallium_drv_video.so"
+    ],
+    "build_log_sha256": "d3d2ba763666ee3cc1b5936232938f52dcbdb35974920526915a1ccf308aa150",
+    "defines": [
+      "-DNOUVEAU_DIAG_NVIF_LIFETIME",
+      "-DNOUVEAU_DIAG_NVIF_CORRECT_DEL_FD"
+    ],
+    "diagnostic_strings": [
+      "NOUVEAU_DIAG_NVIF_NEW",
+      "NOUVEAU_DIAG_NVIF_DEL",
+      "NOUVEAU_DIAG_NVIF_CHANNEL_FREE"
+    ],
+    "dso": "/home/keivan/nouveau-vaapi-app-validation/mesa-nvif-lifetime-ab-build-20261004-pointer-free/B/libgallium_drv_video.so",
+    "dso_sha256": "4b334f9ee31d54ee8fc4c043889c9c554e02fb665a62ee29ff8d1af735dce152",
+    "elf": {
+      "dso_size_bytes": 59030112,
+      "exported_dynamic_symbol_addresses": [
+        "__vaDriverInit_1_23 eb230"
+      ],
+      "exported_dynamic_symbol_addresses_sha256": "ac7b010a98a0f071d362ce5046fe83dd4bd58be81b57ebc1ccb1fd66e9249175",
+      "exported_dynamic_symbols": [
+        "__vaDriverInit_1_23 T 352"
+      ],
+      "exported_dynamic_symbols_sha256": "8a615d2eefbb93cdbdafe5b51b71c606b64340dd490a8e7d9b89a5c8181701d4",
+      "needed_libraries": [
+        "libX11-xcb.so.1",
+        "libc.so.6",
+        "libexpat.so.1",
+        "libgcc_s.so.1",
+        "libm.so.6",
+        "libstdc++.so.6",
+        "libxcb-dri3.so.0",
+        "libxcb-present.so.0",
+        "libxcb-sync.so.1",
+        "libxcb-xfixes.so.0",
+        "libxcb.so.1",
+        "libxshmfence.so.1",
+        "libz.so.1"
+      ],
+      "needed_libraries_sha256": "0886ff13ec573ac6eb4e2e504e73b42441911123e77cac8cacf676bd64067b4b"
+    }
+  }
+}
