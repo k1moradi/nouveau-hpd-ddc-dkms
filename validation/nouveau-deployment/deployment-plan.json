@@ -80,7 +80,7 @@
     },
     "retained_module_builder": {
       "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/nouveau-deployment/build_retained_module.py",
-      "sha256": "3a8780be999e0c396efb30c36cea7004c55f126aa371755bdbafa58d86fe37ab"
+      "sha256": "e1f084085e7d508dc8733f7a4d90331f18d3527e0908f5629fbb501759852fc9"
     }
   },
   "input": {
