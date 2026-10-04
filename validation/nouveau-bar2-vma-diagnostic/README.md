@@ -126,8 +126,13 @@ recorded in
 The latest transition-window and source/return-code regression results are
 recorded in
 [`evidence/VMA-CORRELATOR-TRANSITION-VALIDATION-20261004.md`](evidence/VMA-CORRELATOR-TRANSITION-VALIDATION-20261004.md).
-The earlier enabled module build linked successfully, but the resulting
-module was not installed, signed, loaded, or placed in an initramfs. A clean
-full diagnostic-disabled module link and final deployment manifest remain
-pre-deployment gates. No GPU selftest or VA-API workload ran. This is
-correlation instrumentation, not a BAR2/PTE repair. `main` remains on HOLD.
+The clean full W=1 enabled and disabled module links are recorded in
+[`evidence/FULL-MODULE-BUILD-VALIDATION-20261004.md`](evidence/FULL-MODULE-BUILD-VALIDATION-20261004.md).
+Both scratch links passed, but neither result was installed, signed, loaded,
+or placed in an initramfs. The later current-boot PTE recheck is recorded in
+[`evidence/CURRENT-BOOT-PTE-RECHECK-20261004.md`](evidence/CURRENT-BOOT-PTE-RECHECK-20261004.md):
+the old module remains loaded and that boot is ineligible for GPU testing.
+The reviewed deployment manifest, installed/initramfs provenance, a fresh
+eligible boot, and a visible logged-in desktop remain prerequisites. No GPU
+selftest or VA-API workload ran. This is correlation instrumentation, not a
+BAR2/PTE repair. `main` remains on HOLD.
