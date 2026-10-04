@@ -2,6 +2,7 @@
 
 #include <errno.h>
 #include <inttypes.h>
+#include <limits.h>
 #include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -21,24 +22,22 @@
 
 static const char expected_input_sha256[] =
    "d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2";
+static const char expected_driver_sha256[] =
+   "64c5508bb7167947f932c950d5e2d2c314f631fc3919de82f757c3769758b79f";
 
 static int
-verify_input_sha256(const char *path)
+sha256_file(const char *path, char hex[65])
 {
    FILE *file = fopen(path, "rb");
    struct AVSHA *sha = NULL;
    uint8_t buffer[1024 * 1024];
    uint8_t digest[32];
-   char hex[sizeof(digest) * 2 + 1];
    size_t count;
 
-   if (!file) {
-      fprintf(stderr, "cannot open pinned input %s: %s\n", path, strerror(errno));
+   if (!file)
       return 1;
-   }
    sha = av_sha_alloc();
    if (!sha || av_sha_init(sha, 256) < 0) {
-      fprintf(stderr, "cannot initialize SHA-256 for pinned input\n");
       fclose(file);
       av_free(sha);
       return 1;
@@ -46,7 +45,6 @@ verify_input_sha256(const char *path)
    while ((count = fread(buffer, 1, sizeof(buffer), file)) > 0)
       av_sha_update(sha, buffer, count);
    if (ferror(file)) {
-      fprintf(stderr, "cannot read pinned input %s\n", path);
       fclose(file);
       av_free(sha);
       return 1;
@@ -56,12 +54,143 @@ verify_input_sha256(const char *path)
    av_free(sha);
    for (size_t i = 0; i < sizeof(digest); i++)
       snprintf(hex + i * 2, 3, "%02x", digest[i]);
-   hex[sizeof(hex) - 1] = '\0';
+   hex[64] = '\0';
+   return 0;
+}
+
+static int
+verify_input_sha256(const char *path)
+{
+   char hex[65];
+   if (sha256_file(path, hex)) {
+      fprintf(stderr, "cannot open pinned input %s: %s\n", path, strerror(errno));
+      return 1;
+   }
    printf("INPUT path=%s sha256=%s\n", path, hex);
    if (strcmp(hex, expected_input_sha256)) {
       fprintf(stderr, "pinned input SHA-256 mismatch\n");
       return 1;
    }
+   return 0;
+}
+
+static int
+prepare_va_driver(const char *driver_dir, const char *expected_driver_path,
+                  char resolved_driver[PATH_MAX])
+{
+   char link_path[PATH_MAX];
+   char *resolved_link;
+   char *resolved_expected;
+   char actual_sha256[65] = {0};
+   if (!driver_dir || !driver_dir[0]) {
+      fprintf(stderr, "VA driver search path is empty\n");
+      return 1;
+   }
+   int length = snprintf(link_path, sizeof(link_path),
+                         "%s%snouveau_drv_video.so", driver_dir,
+                         driver_dir[strlen(driver_dir) - 1] == '/' ? "" : "/");
+   if (length < 0 || (size_t)length >= sizeof(link_path)) {
+      fprintf(stderr, "VA driver search path is too long\n");
+      return 1;
+   }
+
+   resolved_link = realpath(link_path, NULL);
+   resolved_expected = realpath(expected_driver_path, NULL);
+   if (!resolved_link || !resolved_expected ||
+       strcmp(resolved_link, resolved_expected)) {
+      fprintf(stderr,
+              "VA driver alias does not resolve to the pinned DSO: "
+              "alias=%s expected=%s\n",
+              resolved_link ? resolved_link : "<unresolved>",
+              resolved_expected ? resolved_expected : "<unresolved>");
+      free(resolved_link);
+      free(resolved_expected);
+      return 1;
+   }
+   if (sha256_file(resolved_expected, actual_sha256) ||
+       strcmp(actual_sha256, expected_driver_sha256)) {
+      fprintf(stderr,
+              "VA driver DSO SHA-256 mismatch: path=%s actual=%s expected=%s\n",
+              resolved_expected,
+              actual_sha256,
+              expected_driver_sha256);
+      free(resolved_link);
+      free(resolved_expected);
+      return 1;
+   }
+   if (strlen(resolved_expected) >= PATH_MAX) {
+      fprintf(stderr, "resolved VA driver path is too long\n");
+      free(resolved_link);
+      free(resolved_expected);
+      return 1;
+   }
+   strcpy(resolved_driver, resolved_expected);
+   printf("VA_DRIVER_EXPECTED name=nouveau path=%s sha256=%s\n",
+          resolved_driver, actual_sha256);
+   free(resolved_link);
+   free(resolved_expected);
+
+   if (setenv("LIBVA_DRIVER_NAME", "nouveau", 1) ||
+       setenv("LIBVA_DRIVERS_PATH", driver_dir, 1)) {
+      fprintf(stderr, "cannot set pinned libva driver selection: %s\n",
+              strerror(errno));
+      return 1;
+   }
+   return 0;
+}
+
+static int
+verify_va_driver_mapped(const char *expected_driver_path)
+{
+   FILE *maps = fopen("/proc/self/maps", "r");
+   char *expected = realpath(expected_driver_path, NULL);
+   char *line = NULL;
+   size_t capacity = 0;
+   int found = 0;
+
+   if (!maps || !expected) {
+      fprintf(stderr, "cannot inspect mapped VA driver DSO\n");
+      if (maps)
+         fclose(maps);
+      free(expected);
+      return 1;
+   }
+
+   while (getline(&line, &capacity, maps) >= 0) {
+      char *path = strchr(line, '/');
+      if (!path)
+         continue;
+      path[strcspn(path, "\n")] = '\0';
+      size_t path_length = strlen(path);
+      static const char deleted_suffix[] = " (deleted)";
+      if (path_length >= sizeof(deleted_suffix) - 1 &&
+          !strcmp(path + path_length - (sizeof(deleted_suffix) - 1),
+                  deleted_suffix))
+         continue;
+      char *resolved = realpath(path, NULL);
+      if (resolved && !strcmp(resolved, expected))
+         found = 1;
+      free(resolved);
+      if (found)
+         break;
+   }
+   free(line);
+   fclose(maps);
+   if (!found) {
+      fprintf(stderr, "pinned Nouveau VA driver DSO is not mapped\n");
+      free(expected);
+      return 1;
+   }
+
+   char actual_sha256[65] = {0};
+   if (sha256_file(expected, actual_sha256) ||
+       strcmp(actual_sha256, expected_driver_sha256)) {
+      fprintf(stderr, "mapped VA driver DSO changed after load\n");
+      free(expected);
+      return 1;
+   }
+   printf("VA_DRIVER_MAPPED path=%s sha256=%s\n", expected, actual_sha256);
+   free(expected);
    return 0;
 }
 
@@ -266,7 +395,8 @@ try_export_surface(VADisplay display, VASurfaceID surface, const AVFrame *frame)
 }
 
 static int
-decode_first_vaapi_surface(const char *input, const char *device)
+decode_first_vaapi_surface(const char *input, const char *device,
+                           const char *expected_driver_path)
 {
    AVFormatContext *format = NULL;
    AVCodecContext *decoder = NULL;
@@ -307,6 +437,8 @@ decode_first_vaapi_surface(const char *input, const char *device)
    AVHWDeviceContext *device_context = (AVHWDeviceContext *)device_ref->data;
    AVVAAPIDeviceContext *va_context = device_context->hwctx;
    printf("VA_VENDOR %s\n", vaQueryVendorString(va_context->display));
+   if (verify_va_driver_mapped(expected_driver_path) != 0)
+      goto done;
    if (query_surface_contract(va_context->display, &query_config) != 0)
       goto done;
 
@@ -380,11 +512,17 @@ done:
 int
 main(int argc, char **argv)
 {
-   if (argc != 4 || strcmp(argv[1], "--execute")) {
-      fprintf(stderr, "usage: %s --execute INPUT /dev/dri/renderD128\n", argv[0]);
+   char resolved_driver[PATH_MAX];
+   if (argc != 6 || strcmp(argv[1], "--execute")) {
+      fprintf(stderr,
+              "usage: %s --execute INPUT /dev/dri/renderD128 "
+              "LIBVA_DRIVER_DIR EXPECTED_DRIVER_DSO\n",
+              argv[0]);
       return 2;
    }
    if (verify_input_sha256(argv[2]))
       return 2;
-   return decode_first_vaapi_surface(argv[2], argv[3]);
+   if (prepare_va_driver(argv[4], argv[5], resolved_driver))
+      return 2;
+   return decode_first_vaapi_surface(argv[2], argv[3], resolved_driver);
 }

@@ -1,6 +1,6 @@
 {
   "binary": {
-    "build_id": "5e461d5b18f72a1bf9afa8857ba8693d1bdb881e",
+    "build_id": "589b4204e529ca1321ba99213de6f7f3c7eca336",
     "direct_dynamic_dependencies": [
       {
         "path": "/usr/lib/x86_64-linux-gnu/libavformat.so.62.3.100",
@@ -28,13 +28,15 @@
         "soname": "libc.so.6"
       }
     ],
-    "path": "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004-explicit",
+    "path": "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004-pinned-driver-v2",
     "runpath": "/usr/lib/x86_64-linux-gnu",
-    "sha256": "f109aa7ed076a1c4082e15573dee877edfc43b463403202c77e60cf672ecfba7",
-    "size_bytes": 27240
+    "sha256": "099e6625a86cbeacf133d45501b5cfd6880516c999871d67c4f2fe604f8c8686",
+    "size_bytes": 35952,
+    "build_log_path": "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004-pinned-driver-v2.build.log",
+    "build_log_sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
   },
   "build_command": [
-    "cc",
+    "/usr/bin/x86_64-linux-gnu-gcc-15",
     "-std=c11",
     "-Wall",
     "-Wextra",
@@ -50,14 +52,14 @@
     "-l:libavutil.so.60",
     "-l:libva.so.2",
     "-o",
-    "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004-explicit"
+    "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004-pinned-driver-v2"
   ],
   "compiler": {
     "path": "/usr/bin/x86_64-linux-gnu-gcc-15",
     "sha256": "b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88",
     "version": "x86_64-linux-gnu-gcc-15 (Ubuntu 15.2.0-16ubuntu1) 15.2.0"
   },
-  "execution_gate": "--execute required; pinned input SHA is checked before VA device creation",
+  "execution_gate": "--execute plus exact input SHA-256, pinned driver SHA-256, symlink-target check, forced LIBVA_DRIVER_NAME/LIBVA_DRIVERS_PATH, and /proc/self/maps proof required",
   "ffmpeg_source_contract": {
     "config_call": "vaCreateConfig(hwctx->display, matched_va_profile, VAEntrypointVLD, NULL, 0, va_config)",
     "export_flags": "VA_EXPORT_SURFACE_SEPARATE_LAYERS | VA_EXPORT_SURFACE_READ_ONLY",
@@ -69,21 +71,55 @@
     "sync_before_export": true,
     "tag": "n8.0.1 retained source tree"
   },
+  "historical_failure": {
+    "capture_dir": "/home/keivan/nouveau-vaapi-app-validation/ffplay-interlaced-rejection-probe-v4-20261001T082058Z",
+    "gdb_log_path": "/home/keivan/nouveau-vaapi-app-validation/ffplay-interlaced-rejection-probe-v4-20261001T082058Z/gdb-ffplay.log",
+    "gdb_log_sha256": "a4ae1918c5e279b0afcd69e7109e134b45c78e1aa8e10772acad83855723acf6",
+    "historical_driver_path": "/home/keivan/.cache/nouveau-vaapi-followup-20260928/private-functional-no-mesa-diag-20260930/prefix-x11-va-sysroot/lib/x86_64-linux-gnu/dri/libgallium_drv_video.so",
+    "historical_driver_sha256": "aceac163eabeefe5e4c1f2eb38469239044e30671aebcec743e4277f5897b536",
+    "input_sha256": "d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2",
+    "meta_path": "/home/keivan/nouveau-vaapi-app-validation/ffplay-interlaced-rejection-probe-v4-20261001T082058Z/meta.txt",
+    "meta_sha256": "0cb1916dba19e837ccd6b507381581e0a4994a2c54d908c54a24faa7b9885a1f",
+    "observed_surface": "VASurfaceID=1 NV12 buffer->interlaced=1 export_status=6"
+  },
   "input": {
     "path": "/home/keivan/test_1080p.mkv",
     "sha256": "d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2"
   },
+  "runtime_driver": {
+    "alias_path": "/usr/lib/x86_64-linux-gnu/dri/nouveau_drv_video.so",
+    "driver_name": "nouveau",
+    "mapped_path_verified_by_program": true,
+    "package": "mesa-libgallium",
+    "package_version": "26.0.8-1ubuntu0.3",
+    "resolved_path": "/usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so",
+    "search_path": "/usr/lib/x86_64-linux-gnu/dri",
+    "sha256": "64c5508bb7167947f932c950d5e2d2c314f631fc3919de82f757c3769758b79f"
+  },
   "runtime_executed": false,
-  "schema": 2,
+  "schema": 3,
   "source": {
     "path": "validation/va-export-contract-diagnostic/va_vp3_export_probe.c",
-    "sha256": "19c397eabc9719e66952ef7980129eaefad5f10cc7434a1bebdfed52acaea054"
+    "sha256": "26e521d668a55569c5c21f1f2e1fa1174344f8bc48aa15c0a24fa873d465b26d"
   },
-  "status": "COMPILED_NOT_EXECUTED",
-  "superseded_binary": {
-    "build_id": "580f54d10cf2e0e64f2ed5600d55e6ce770fac0d",
-    "path": "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004",
-    "sha256": "69f5ccc437b76f492261f7ec72a29ba7109a7d596088b083a185e817eb04a8bf",
-    "status": "SUPERSEDED_NO_EXECUTION_GATE_DO_NOT_RUN"
-  }
+  "status": "COMPILED_NOT_EXECUTED_PINNED_DRIVER_V2",
+  "superseded_binaries": [
+    {
+      "build_id": "580f54d10cf2e0e64f2ed5600d55e6ce770fac0d",
+      "path": "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004",
+      "sha256": "69f5ccc437b76f492261f7ec72a29ba7109a7d596088b083a185e817eb04a8bf",
+      "status": "SUPERSEDED_NO_EXECUTION_GATE_DO_NOT_RUN"
+    },
+    {
+      "path": "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004-explicit",
+      "sha256": "f109aa7ed076a1c4082e15573dee877edfc43b463403202c77e60cf672ecfba7",
+      "status": "SUPERSEDED_NO_RUNTIME_DSO_PROOF_DO_NOT_RUN"
+    },
+    {
+      "path": "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004-pinned-driver",
+      "sha256": "9e05a98a9ad51a3d50007d19119ca607ec6e5923d6fec8df202d099fc678ae0a",
+      "build_id": "4b7f29f5f821cb626cda0cbf8041f913ee18b6dc",
+      "status": "SUPERSEDED_AFTER_PINNED_DSO_ERROR_PATH_REBUILD_DO_NOT_RUN"
+    }
+  ]
 }

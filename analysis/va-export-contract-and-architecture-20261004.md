@@ -28,10 +28,27 @@ The standalone probe in
 creates the same H.264 High/VLD config as the pinned FFmpeg decoder: both call
 `vaCreateConfig()` with a null attribute list and count zero. Its regression
 hashes the FFmpeg source and checks that call plus the PRIME-2 export flags.
-The probe then queries that config and synchronizes/exports an actual decoded
-surface with FFmpeg's flags. That runtime result is still
-needed to answer whether this advertised config-level support is expected to
-cover this surface class.
+The probe uses the byte-identical input recorded by the historical ffplay GDB
+capture. That capture reached a Nouveau VP3 field-array surface with
+`buffer->interlaced=1`, although the encoded stream is progressive; the AVFrame
+field flag therefore does not describe Gallium's private storage layout. The
+revised probe pins and verifies the current distro Nouveau VA DSO before VA
+initialization and in `/proc/self/maps`, then queries the config and
+synchronizes/exports the first actual decoded surface with FFmpeg's flags. It
+is a precise runtime diagnostic for the observed input/surface class, but has
+not been executed. Its result will record the advertised config attributes and
+export result; the attributes alone do not promise support for every private
+surface layout.
+
+The previous ffplay capture recorded input SHA-256
+`d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2`, matching
+the probe input exactly. The new probe targets the current distro DSO
+`/usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so` (SHA-256
+`64c5508bb7167947f932c950d5e2d2c314f631fc3919de82f757c3769758b79f`). This
+differs from the historical private DSO; the two driver binaries are not
+conflated. The probe sets the Nouveau VA driver search path, checks the
+`nouveau_drv_video.so` symlink target, and refuses to continue unless the
+expected DSO appears in its own process map.
 
 ## Existing Gallium hook review
 

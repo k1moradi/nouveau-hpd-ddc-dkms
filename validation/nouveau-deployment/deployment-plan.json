@@ -51,16 +51,20 @@
       "sha256": "79ba66cd1ddd3333d004aa3483bb47ab9da89d469bebec54f5a0417d88bb65cf"
     },
     "va_export_probe": {
-      "path": "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004-explicit",
-      "sha256": "f109aa7ed076a1c4082e15573dee877edfc43b463403202c77e60cf672ecfba7"
+      "path": "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004-pinned-driver-v2",
+      "sha256": "099e6625a86cbeacf133d45501b5cfd6880516c999871d67c4f2fe604f8c8686"
     },
     "va_export_probe_source": {
       "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/va-export-contract-diagnostic/va_vp3_export_probe.c",
-      "sha256": "19c397eabc9719e66952ef7980129eaefad5f10cc7434a1bebdfed52acaea054"
+      "sha256": "26e521d668a55569c5c21f1f2e1fa1174344f8bc48aa15c0a24fa873d465b26d"
     },
     "va_export_probe_build_manifest": {
       "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/va-export-contract-diagnostic/build-manifest.json",
-      "sha256": "c8a8e36375690691d50f55ac0d8d481e46667edccf548e87962416134dda07c7"
+      "sha256": "50c64f8e04b8bee6329cd44dca48e0b39d1b1d6043403f5d6047610aa860697d"
+    },
+    "va_export_driver_dso": {
+      "path": "/usr/lib/x86_64-linux-gnu/libgallium-26.0.8-1ubuntu0.3.so",
+      "sha256": "64c5508bb7167947f932c950d5e2d2c314f631fc3919de82f757c3769758b79f"
     },
     "mesa_ab_manifest": {
       "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/mesa-nvif-lifetime-diagnostic/evidence/linked-ab-20261004-pointer-free/manifest.json",
@@ -76,7 +80,7 @@
     },
     "deployment_finalizer": {
       "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/nouveau-deployment/finalize_install.py",
-      "sha256": "7f47a40c93bb11aae6820081f6dafba42b7348fae01d6ab422fb10bd2d8e55e9"
+      "sha256": "2ad2354bcc2e007b04d7f5607faefb3f4459a1304ac92c4642c14065c1a445f1"
     },
     "retained_module_builder": {
       "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/nouveau-deployment/build_retained_module.py",

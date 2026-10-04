@@ -24,7 +24,7 @@ identity, and checksums outside the Git tree:
 
 ```sh
 cd /home/keivan/nouveau-hpd-ddc-dkms
-BUILD_DIR=/home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-final-review
+BUILD_DIR=/home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-reboot-ready
 PYTHONDONTWRITEBYTECODE=1 python3 validation/nouveau-deployment/build_retained_module.py \
   --source-root /home/keivan/nouveau-vaapi-app-validation/nouveau-vma-fullbuild-20261004/source \
   --kernel-headers /usr/src/linux-headers-7.0.0-34-generic \
@@ -52,7 +52,7 @@ and `NO_SYSTEM_CHANGES=true`:
 
 ```sh
 cd /home/keivan/nouveau-hpd-ddc-dkms
-BUILD_DIR=/home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-final-review
+BUILD_DIR=/home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-reboot-ready
 python3 validation/nouveau-deployment/finalize_install.py \
   --build-manifest "$BUILD_DIR/build-manifest.json" \
   --raw-module "$BUILD_DIR/nouveau.ko" \
@@ -64,9 +64,9 @@ desktop may run the same command with `sudo` and `--apply`:
 
 ```sh
 sudo python3 validation/nouveau-deployment/finalize_install.py \
-  --build-manifest /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-final-review/build-manifest.json \
-  --raw-module /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-final-review/nouveau.ko \
-  --manifest-output /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-final-review/deployment-manifest.json \
+  --build-manifest /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-reboot-ready/build-manifest.json \
+  --raw-module /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-reboot-ready/nouveau.ko \
+  --manifest-output /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-reboot-ready/deployment-manifest.json \
   --apply
 ```
 
@@ -97,7 +97,7 @@ root-only module-parameter read, then run the admission check:
 sudo -v
 cd /home/keivan/nouveau-hpd-ddc-dkms
 PYTHONDONTWRITEBYTECODE=1 python3 validation/nouveau-deployment/admit_run.py \
-  --manifest /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-final-review/deployment-manifest.json
+  --manifest /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-reboot-ready/deployment-manifest.json
 ```
 
 Only the exact line `RUN_ELIGIBLE=true` with exit status zero admits a test.
@@ -145,7 +145,7 @@ mkdir -m 700 "$RUN_DIR"
 SELFTEST_DIR=/sys/kernel/debug/dri/<verified-minor>
 admit_now() {
   PYTHONDONTWRITEBYTECODE=1 python3 validation/nouveau-deployment/admit_run.py \
-    --manifest /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-final-review/deployment-manifest.json
+    --manifest /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-reboot-ready/deployment-manifest.json
 }
 archive_kernel() {
   local label="$1"
@@ -218,7 +218,7 @@ only after kernel primitive validation, on a fresh eligible boot:
 python3 validation/mesa-nvif-lifetime-diagnostic/capture_nvif_lifetime_run.py \
   --variant A \
   --dso /home/keivan/nouveau-vaapi-app-validation/mesa-nvif-lifetime-ab-build-20261004-pointer-free/A/libgallium_drv_video.so \
-  --deployment-manifest /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-final-review/deployment-manifest.json \
+  --deployment-manifest /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-reboot-ready/deployment-manifest.json \
   --output-dir /home/keivan/nouveau-vaapi-app-validation/nvif-A-$(cat /proc/sys/kernel/random/boot_id) \
   --execute
 ```
@@ -237,7 +237,7 @@ with the same command/profile, B DSO, and all three A proof files:
 python3 validation/mesa-nvif-lifetime-diagnostic/capture_nvif_lifetime_run.py \
   --variant B \
   --dso /home/keivan/nouveau-vaapi-app-validation/mesa-nvif-lifetime-ab-build-20261004-pointer-free/B/libgallium_drv_video.so \
-  --deployment-manifest /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-final-review/deployment-manifest.json \
+  --deployment-manifest /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-reboot-ready/deployment-manifest.json \
   --output-dir /home/keivan/nouveau-vaapi-app-validation/nvif-B-$(cat /proc/sys/kernel/random/boot_id) \
   --a-proof /path/to/A/proof.json \
   --a-manifest /path/to/A/manifest.json \

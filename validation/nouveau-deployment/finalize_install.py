@@ -132,6 +132,7 @@ def validate_inputs(
         "supervisor", "bar2_correlator", "nvif_capture", "nvif_parser",
         "nvif_profile", "pixel_capture", "va_export_probe",
         "va_export_probe_source", "va_export_probe_build_manifest",
+        "va_export_driver_dso",
         "mesa_ab_manifest", "mesa_nvif_diagnostic_patch",
         "admission_check", "deployment_finalizer", "retained_module_builder",
     } <= tools.keys():
