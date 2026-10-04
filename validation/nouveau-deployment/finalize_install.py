@@ -263,6 +263,24 @@ def embedded_module_hashes(initramfs: Path, temporary_root: Path) -> list[dict[s
     return results
 
 
+def matching_embedded_modules(
+    initramfs: Path,
+    expected_uncompressed_sha256: str,
+    temporary_root: Path,
+) -> list[dict[str, str]] | None:
+    if not initramfs.is_file():
+        return None
+    try:
+        embedded = embedded_module_hashes(initramfs, temporary_root)
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return None
+    if {item["uncompressed_sha256"] for item in embedded} != {
+        expected_uncompressed_sha256
+    }:
+        return None
+    return embedded
+
+
 def build_final_manifest(
     *,
     build: dict[str, Any],
@@ -430,7 +448,27 @@ def apply_install(
         os.chmod(target_temp, 0o644)
         os.replace(target_temp, target)
         subprocess.run(["depmod", "-a", kernel], check=True, timeout=60)
-        subprocess.run(["update-initramfs", "-u", "-k", kernel], check=True, timeout=300)
+        embedded = matching_embedded_modules(
+            initramfs,
+            uncompressed_sha,
+            root / "current-initramfs-check",
+        )
+        if embedded is None:
+            subprocess.run(
+                ["update-initramfs", "-u", "-k", kernel],
+                check=True,
+                timeout=900,
+            )
+            embedded = embedded_module_hashes(
+                initramfs,
+                root / "rebuilt-initramfs-check",
+            )
+            if {item["uncompressed_sha256"] for item in embedded} != {
+                uncompressed_sha
+            }:
+                raise RuntimeError(
+                    "rebuilt initramfs Nouveau module bytes do not match installed module"
+                )
 
         selected = Path(command_output(["modinfo", "-n", "nouveau"])).resolve(strict=True)
         if selected != target.resolve(strict=True):
@@ -443,7 +481,6 @@ def apply_install(
             raise RuntimeError("installed module srcversion mismatch")
         if not initramfs.is_file():
             raise RuntimeError(f"rebuilt initramfs is missing: {initramfs}")
-        embedded = embedded_module_hashes(initramfs, root)
         final = build_final_manifest(
             build=build,
             build_manifest_path=build_manifest_path,

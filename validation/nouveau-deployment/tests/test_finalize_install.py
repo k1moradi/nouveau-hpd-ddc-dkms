@@ -72,6 +72,41 @@ class ModuleCompressionTests(unittest.TestCase):
             self.assertEqual(restored.read_bytes(), payload)
 
 
+class ExistingInitramfsTests(unittest.TestCase):
+    def test_matching_embedded_module_is_reused(self):
+        with tempfile.TemporaryDirectory(prefix="initramfs-match-test-") as temporary:
+            root = Path(temporary)
+            initramfs = root / "initrd.img"
+            initramfs.write_bytes(b"initramfs fixture")
+            expected = "a" * 64
+            records = [{"path_in_initramfs": "main/nouveau.ko.zst", "uncompressed_sha256": expected}]
+            with patch.object(FINALIZER, "embedded_module_hashes", return_value=records):
+                result = FINALIZER.matching_embedded_modules(
+                    initramfs, expected, root / "extract"
+                )
+            self.assertEqual(result, records)
+
+    def test_missing_or_mismatched_embedded_module_requires_rebuild(self):
+        with tempfile.TemporaryDirectory(prefix="initramfs-mismatch-test-") as temporary:
+            root = Path(temporary)
+            initramfs = root / "initrd.img"
+            initramfs.write_bytes(b"initramfs fixture")
+            mismatch = [{
+                "path_in_initramfs": "main/nouveau.ko.zst",
+                "uncompressed_sha256": "b" * 64,
+            }]
+            with patch.object(FINALIZER, "embedded_module_hashes", return_value=mismatch):
+                result = FINALIZER.matching_embedded_modules(
+                    initramfs, "a" * 64, root / "extract"
+                )
+            self.assertIsNone(result)
+            self.assertIsNone(
+                FINALIZER.matching_embedded_modules(
+                    root / "missing-initrd.img", "a" * 64, root / "missing-check"
+                )
+            )
+
+
 class FinalManifestTests(unittest.TestCase):
     def test_validate_inputs_pins_review_tools_mesa_input_and_software_reference(self):
         with tempfile.TemporaryDirectory(prefix="deployment-inputs-test-") as temporary:

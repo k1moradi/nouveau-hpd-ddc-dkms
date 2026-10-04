@@ -80,7 +80,7 @@
     },
     "deployment_finalizer": {
       "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/nouveau-deployment/finalize_install.py",
-      "sha256": "ec3255ffbceeee69a3a385ebcfa5d2c93e06c6f624309a415ab3ab281326b394"
+      "sha256": "5e89e1591c681d040938dbc64565c65974fe2b085388086ef3ed616ed0a407d4"
     },
     "retained_module_builder": {
       "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/nouveau-deployment/build_retained_module.py",
