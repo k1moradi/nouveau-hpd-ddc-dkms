@@ -288,7 +288,105 @@ def installed_module_identity() -> dict[str, str]:
     }
 
 
-def observed_runtime(*, variant: str, dso: Path) -> dict[str, Any]:
+def validate_deployment_manifest(
+    path: Path,
+    *,
+    variant: str,
+    dso: Path,
+    module_identity: dict[str, str],
+) -> dict[str, str]:
+    manifest_path = path.resolve(strict=True)
+    manifest_bytes = manifest_path.read_bytes()
+    try:
+        manifest = json.loads(manifest_bytes)
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"deployment manifest is invalid JSON: {exc}") from exc
+    if not isinstance(manifest, dict) or manifest.get("schema") != 2:
+        raise RuntimeError("deployment manifest schema is not supported")
+    if manifest.get("status") != "FINALIZED_NOT_REBOOTED_NOT_RUNTIME_VERIFIED":
+        raise RuntimeError("deployment manifest is not a finalized package record")
+    if manifest.get("kernel") != EXPECTED_KERNEL:
+        raise RuntimeError("deployment manifest kernel does not match the pinned kernel")
+    if manifest.get("review_branch") != "review/gk104-vaapi-selftest-v8-20261002":
+        raise RuntimeError("deployment manifest is from an unexpected review branch")
+    if manifest.get("main_commit") != "7b44b1c1e282eac7c54c1cfa8c758118cd66312c":
+        raise RuntimeError("deployment manifest records an unexpected main commit")
+    module = manifest.get("nouveau")
+    initramfs = manifest.get("initramfs")
+    if not isinstance(module, dict) or not isinstance(initramfs, dict):
+        raise RuntimeError("deployment manifest lacks module/initramfs provenance")
+    expected_module = {
+        "module_path": module.get("module_path"),
+        "compressed_sha256": module.get("installed_compressed_sha256"),
+        "srcversion": module.get("srcversion"),
+        "vermagic": module.get("vermagic"),
+    }
+    if expected_module["module_path"] != module_identity["path"]:
+        raise RuntimeError("selected Nouveau path differs from deployment manifest")
+    if expected_module["compressed_sha256"] != module_identity["file_sha256"]:
+        raise RuntimeError("selected Nouveau bytes differ from deployment manifest")
+    if expected_module["srcversion"] != EXPECTED_SRCVERSION:
+        raise RuntimeError("deployment manifest Nouveau srcversion is not pinned")
+    if expected_module["srcversion"] != module_identity["srcversion"]:
+        raise RuntimeError("installed Nouveau srcversion differs from deployment manifest")
+    if expected_module["vermagic"] != module_identity["vermagic"]:
+        raise RuntimeError("installed Nouveau vermagic differs from deployment manifest")
+    params = module.get("parameters")
+    if params != {"diag_ctxsw": "N"}:
+        raise RuntimeError("deployment manifest module parameters are not pinned")
+    if module_identity["path"] != str(Path(module_identity["path"]).resolve(strict=True)):
+        raise RuntimeError("selected Nouveau path is not canonical")
+
+    initramfs_path = Path(str(initramfs.get("path", ""))).resolve(strict=True)
+    if initramfs_path != Path(f"/boot/initrd.img-{EXPECTED_KERNEL}"):
+        raise RuntimeError("deployment manifest initramfs path is not pinned")
+    if not initramfs_path.is_file() or sha256_file(initramfs_path) != initramfs.get("sha256"):
+        raise RuntimeError("current initramfs differs from deployment manifest")
+    for record_name in ("build_manifest", "deployment_plan"):
+        record = manifest.get(record_name)
+        if not isinstance(record, dict):
+            raise RuntimeError(f"deployment manifest lacks {record_name} provenance")
+        record_path = Path(str(record.get("path", ""))).resolve(strict=True)
+        if not record_path.is_file() or sha256_file(record_path) != record.get("sha256"):
+            raise RuntimeError(f"deployment {record_name} path/hash mismatch")
+
+    mesa = manifest.get("mesa")
+    variants = mesa.get("variants") if isinstance(mesa, dict) else None
+    mesa_variant = variants.get(variant) if isinstance(variants, dict) else None
+    if not isinstance(mesa_variant, dict):
+        raise RuntimeError(f"deployment manifest lacks Mesa variant {variant}")
+    resolved_dso = dso.resolve(strict=True)
+    if str(resolved_dso) != str(Path(mesa_variant.get("path", "")).resolve(strict=True)):
+        raise RuntimeError("selected Mesa DSO path differs from deployment manifest")
+    if sha256_file(resolved_dso) != mesa_variant.get("sha256"):
+        raise RuntimeError("selected Mesa DSO hash differs from deployment manifest")
+
+    tools = manifest.get("tools")
+    if not isinstance(tools, dict):
+        raise RuntimeError("deployment manifest lacks pinned diagnostic tools")
+    expected_tools = {
+        "nvif_capture": Path(__file__).resolve(strict=True),
+        "nvif_parser": Path(correlator.__file__).resolve(strict=True),
+    }
+    for name, actual_path in expected_tools.items():
+        item = tools.get(name)
+        if not isinstance(item, dict):
+            raise RuntimeError(f"deployment manifest lacks {name}")
+        planned_path = Path(str(item.get("path", ""))).resolve(strict=True)
+        if planned_path != actual_path or sha256_file(actual_path) != item.get("sha256"):
+            raise RuntimeError(f"running {name} differs from deployment manifest")
+
+    return {
+        "path": str(manifest_path),
+        "sha256": sha256_bytes(manifest_bytes),
+        "nvif_capture_sha256": tools["nvif_capture"]["sha256"],
+        "nvif_parser_sha256": tools["nvif_parser"]["sha256"],
+    }
+
+
+def observed_runtime(
+    *, variant: str, dso: Path, deployment_manifest: Path,
+) -> dict[str, Any]:
     if variant not in {"A", "B"}:
         raise RuntimeError("variant must be A or B")
     dso = dso.resolve(strict=True)
@@ -326,6 +424,12 @@ def observed_runtime(*, variant: str, dso: Path) -> dict[str, Any]:
         raise RuntimeError(
             "selected installed Nouveau module does not match the loaded srcversion"
         )
+    deployment_identity = validate_deployment_manifest(
+        deployment_manifest,
+        variant=variant,
+        dso=dso,
+        module_identity=module_identity,
+    )
     param = require_parameter_disabled(
         "diag_ctxsw",
         read_module_parameter("diag_ctxsw"),
@@ -397,11 +501,16 @@ def observed_runtime(*, variant: str, dso: Path) -> dict[str, Any]:
             xauthority=str(xauthority),
         ),
         "kernel": platform.release(),
+        "runtime_profile_sha256": EXPECTED_RUNTIME_PROFILE_SHA256,
         "nouveau_srcversion": srcversion,
         "nouveau_module_path": module_identity["path"],
         "nouveau_module_file_sha256": module_identity["file_sha256"],
         "nouveau_module_srcversion": module_identity["srcversion"],
         "nouveau_module_vermagic": module_identity["vermagic"],
+        "deployment_manifest_path": deployment_identity["path"],
+        "deployment_manifest_sha256": deployment_identity["sha256"],
+        "nvif_capture_sha256": deployment_identity["nvif_capture_sha256"],
+        "nvif_parser_sha256": deployment_identity["nvif_parser_sha256"],
         "nouveau_parameters": {"diag_ctxsw": param.upper()},
         "dso_sha256": dso_hash,
         "dso_resolved_path": str(dso),
@@ -504,12 +613,25 @@ def _export_delta(cursor: str) -> bytes:
 
 def execute_capture(
     *, variant: str, dso: Path, output_dir: Path,
+    deployment_manifest: Path | None = None,
     runtime: dict[str, Any] | None = None,
+    a_proof: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     profile = load_profile()
-    runtime = runtime or observed_runtime(variant=variant, dso=dso)
+    if runtime is None:
+        if deployment_manifest is None:
+            raise RuntimeError("a finalized deployment manifest is required")
+        runtime = observed_runtime(
+            variant=variant,
+            dso=dso,
+            deployment_manifest=deployment_manifest,
+        )
     if runtime["variant"] != variant:
         raise RuntimeError("observed runtime variant mismatch")
+    if variant == "B" and not a_proof:
+        raise RuntimeError("Variant B requires a verified exact Variant A chain proof")
+    if variant == "A" and a_proof is not None:
+        raise RuntimeError("an A-chain proof must not be supplied to Variant A")
     output_dir = output_dir.resolve()
     if output_dir.exists():
         raise RuntimeError(f"refusing to overwrite capture directory: {output_dir}")
@@ -541,6 +663,12 @@ def execute_capture(
         *profile["argv"],
     ]
     manifest = dict(runtime)
+    if a_proof is not None:
+        manifest["a_chain_proof"] = {
+            "proof_sha256": a_proof["proof_sha256"],
+            "manifest_sha256": a_proof["manifest_sha256"],
+            "journal_delta_sha256": a_proof["journal_delta_sha256"],
+        }
     manifest["launcher_argv"] = launcher
     manifest["dso_alias_path"] = str(alias)
     manifest["preflight_journal_path"] = "journal-preflight.jsonl"
@@ -737,6 +865,35 @@ def execute_capture(
     return manifest
 
 
+def validate_a_proof_matches_b_runtime(
+    a_proof: dict[str, Any], runtime: dict[str, Any]
+) -> None:
+    identity = a_proof["identity"]
+    if identity["boot_id"] == runtime["boot_id"]:
+        raise RuntimeError("Variant B must run on a different boot from proven A")
+    if identity["dso_sha256"] != correlator.EXPECTED_DSO_SHA256["A"]:
+        raise RuntimeError("verified A proof does not use the pinned Variant A DSO")
+    same_setup_fields = (
+        "input_sha256", "command_argv", "normalized_environment", "kernel",
+        "runtime_profile_sha256", "nouveau_srcversion", "nouveau_module_path",
+        "nouveau_module_file_sha256", "nouveau_module_srcversion",
+        "nouveau_module_vermagic", "nouveau_parameters", "mpv_sha256",
+        "mpv_resolved_path", "systemd_cat_sha256", "systemd_cat_resolved_path",
+        "working_directory", "deployment_manifest_path",
+        "deployment_manifest_sha256", "nvif_capture_sha256",
+        "nvif_parser_sha256",
+    )
+    mismatched = [
+        name for name in same_setup_fields
+        if identity.get(name) != runtime.get(name)
+    ]
+    if mismatched:
+        raise RuntimeError(
+            "Variant B runtime differs from proven A setup: "
+            + ", ".join(mismatched)
+        )
+
+
 def capture_exit_status(result: dict[str, Any], *, variant: str) -> int:
     """Return a nonzero status when a capture is unsafe or inconclusive.
 
@@ -774,7 +931,11 @@ def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--variant", choices=("A", "B"), required=True)
     parser.add_argument("--dso", type=Path, required=True)
+    parser.add_argument("--deployment-manifest", type=Path)
     parser.add_argument("--output-dir", type=Path, required=True)
+    parser.add_argument("--a-proof", type=Path)
+    parser.add_argument("--a-manifest", type=Path)
+    parser.add_argument("--a-journal", type=Path)
     parser.add_argument(
         "--execute",
         action="store_true",
@@ -785,12 +946,37 @@ def main(argv: list[str] | None = None) -> int:
         print("REFUSED: --execute is required; no workload was launched", file=sys.stderr)
         return 2
     try:
-        runtime = observed_runtime(variant=args.variant, dso=args.dso)
+        a_proof: dict[str, Any] | None = None
+        proof_arguments = (args.a_proof, args.a_manifest, args.a_journal)
+        if args.variant == "A":
+            if any(proof_arguments):
+                raise RuntimeError("Variant A does not accept a prior A-chain proof")
+        else:
+            if not all(proof_arguments):
+                raise RuntimeError(
+                    "Variant B requires --a-proof, --a-manifest, and --a-journal"
+                )
+            assert args.a_proof and args.a_manifest and args.a_journal
+            a_proof = correlator.validate_a_proof_files(
+                proof_path=args.a_proof,
+                manifest_path=args.a_manifest,
+                journal_path=args.a_journal,
+            )
+        if args.deployment_manifest is None:
+            raise RuntimeError("--deployment-manifest is required for execution")
+        runtime = observed_runtime(
+            variant=args.variant,
+            dso=args.dso,
+            deployment_manifest=args.deployment_manifest,
+        )
+        if a_proof is not None:
+            validate_a_proof_matches_b_runtime(a_proof, runtime)
         result = execute_capture(
             variant=args.variant,
             dso=args.dso,
             output_dir=args.output_dir,
             runtime=runtime,
+            a_proof=a_proof,
         )
     except (OSError, RuntimeError, KeyError, ValueError) as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

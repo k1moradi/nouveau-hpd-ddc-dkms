@@ -29,21 +29,21 @@ PREFIXES = {
 }
 REQUIRED_FIELDS = {
     "new": {
-        "key", "obj", "object_token", "route_token", "parent",
-        "parent_handle", "fd", "class", "ret",
+        "key", "parent_handle", "route_token", "selected_fd",
+        "drm_fd", "class", "ret",
     },
     "delete": {
-        "key", "obj", "parent", "parent_handle", "object_handle",
-        "fd", "drm_fd", "class", "ret",
+        "key", "parent_handle", "object_handle", "selected_fd",
+        "drm_fd", "class", "ret",
     },
     "channel_free": {"channel", "fd", "ret"},
     "duplicate": {"layer", "key", "class"},
 }
 HEX_FIELDS = {
-    "key", "obj", "object_token", "route_token", "parent",
-    "parent_handle", "object_handle", "channel", "class",
+    "key", "route_token", "parent_handle", "object_handle", "channel",
+    "class",
 }
-DECIMAL_FIELDS = {"fd", "drm_fd", "ret"}
+DECIMAL_FIELDS = {"fd", "drm_fd", "selected_fd", "ret"}
 FIELD_RE = re.compile(r"([A-Za-z_][A-Za-z_0-9]*)=([^\s]+)")
 ERRNO_EEXIST = -17
 BSP_CLASS = 0x95B1
@@ -59,13 +59,22 @@ EXPECTED_INPUT_SHA256 = (
     "d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2"
 )
 EXPECTED_KERNEL = "7.0.0-34-generic"
-EXPECTED_NOUVEAU_SRCVERSION = "29C4D0E409ABB2711FC9A10"
+EXPECTED_NOUVEAU_SRCVERSION = "936407678F3DA1E8515F5EC"
+EXPECTED_KERNEL_SOURCE_ARCHIVE_SHA256 = (
+    "a874e1fb08d2ee695b08e0c8ce6fd2c76a4bf7ffa98882fbabd233380ef8a85a"
+)
+EXPECTED_KERNEL_PATCH_SHA256 = {
+    "0009-drm-nouveau-log-nvif-duplicate-layer.patch":
+        "442b14bfb53201dc7c9e7ac8bcfd6a1f74bb94280a8d766ffc119bcf20d327fc",
+    "0010-drm-nouveau-correlate-instmem-vma-selftest.patch":
+        "472886814c7dd67ff2685bc50791030f24f4267f6a22be16f57ce5c9e1b4818e",
+}
 EXPECTED_RUNTIME_PROFILE_SHA256 = (
     "697f1192da6c8e02cd63cbcad89dc2ba7453d0dff79990b9dc170ad951693438"
 )
 EXPECTED_DSO_SHA256 = {
-    "A": "1d8f71c5ad0884a43496cfb199e7a38eb5528441e3f24daf4dbf3f7a7c4a28f9",
-    "B": "0fe4c64811e3bc77ddd00842796dbd9a8c3906599c74612ec81433ba6ebfd056",
+    "A": "2a23055f8fb06d67f43b3c0e046111758ecc21b3fa285516c401cbcd2f3e9b7a",
+    "B": "4b334f9ee31d54ee8fc4c043889c9c554e02fb665a62ee29ff8d1af735dce152",
 }
 RUNTIME_PROFILE_PATH = Path(__file__).with_name("runtime-profile.json")
 REQUIRED_ENVIRONMENT_KEYS = {
@@ -394,7 +403,18 @@ def _parse_event(record: dict[str, Any], sequence: int) -> Event | None:
         raise ValueError(
             f"{prefix} record missing fields: {', '.join(sorted(missing))}"
         )
+    allowed = REQUIRED_FIELDS[kind] | ({"channel"} if kind == "duplicate" else set())
+    unexpected = fields.keys() - allowed
+    if unexpected:
+        raise ValueError(
+            f"{prefix} record has unexpected fields: "
+            f"{', '.join(sorted(unexpected))}"
+        )
     parsed = {name: _parse_number(name, value) for name, value in fields.items()}
+    if kind == "new" and parsed["selected_fd"] != parsed["drm_fd"]:
+        raise ValueError("NEW selected fd must equal the canonical DRM fd")
+    if kind == "new" and parsed["route_token"] != parsed["parent_handle"]:
+        raise ValueError("NEW route token must equal the numeric parent handle")
     if kind in {"new", "delete", "duplicate"}:
         if parsed.get("class") != BSP_CLASS:
             return None
@@ -480,10 +500,9 @@ def _matching_chains(
             if int(first.fields["ret"]) != 0:
                 continue
             if any((
-                int(new.fields["obj"]) != key
-                or int(new.fields["key"]) != key
-                or int(new.fields["object_token"]) != key
-                or int(new.fields["route_token"]) != int(new.fields["parent_handle"])
+                int(new.fields["key"]) != key
+                or int(new.fields["route_token"])
+                != int(new.fields["parent_handle"])
             ) for new in (first, second)):
                 continue
 
@@ -492,11 +511,18 @@ def _matching_chains(
                 if event.kind == "delete"
                 and event.pid == pid
                 and int(event.fields["key"]) == key
-                and int(event.fields["obj"]) == int(first.fields["obj"])
-                and int(event.fields["parent"]) == int(first.fields["parent"])
+                and int(event.fields["class"]) == BSP_CLASS
+                and int(event.fields["parent_handle"])
+                == int(first.fields["parent_handle"])
                 and _between(event, first, second)
             ]
             for deletion in deletes:
+                canonical_fd = int(deletion.fields["drm_fd"])
+                if (
+                    int(first.fields["drm_fd"]) != canonical_fd
+                    or int(second.fields["drm_fd"]) != canonical_fd
+                ):
+                    continue
                 frees = [
                     event for event in userspace
                     if event.kind == "channel_free"
@@ -523,14 +549,16 @@ def _matching_chains(
 
                     if variant == "A":
                         accepted = (
-                            int(deletion.fields["fd"]) != int(deletion.fields["drm_fd"])
+                            int(deletion.fields["selected_fd"])
+                            != int(deletion.fields["drm_fd"])
                             and int(deletion.fields["ret"]) <= 0
                             and int(second.fields["ret"]) == ERRNO_EEXIST
                             and duplicate is not None
                         )
                     else:
                         accepted = (
-                            int(deletion.fields["fd"]) == int(deletion.fields["drm_fd"])
+                            int(deletion.fields["selected_fd"])
+                            == int(deletion.fields["drm_fd"])
                             and int(deletion.fields["ret"]) == 0
                             and int(second.fields["ret"]) == 0
                             and duplicate is None
@@ -591,6 +619,200 @@ def analyze(events: list[Event], variant: str) -> dict[str, Any]:
     }
 
 
+def _run_hard_stops(
+    manifest: dict[str, Any], external: list[dict[str, Any]] | None = None
+) -> list[dict[str, Any]]:
+    records: list[dict[str, Any]] = []
+    for source in (
+        manifest["preflight_hard_stops"],
+        manifest["postrun_hard_stops"],
+        external or [],
+    ):
+        for record in source:
+            if record not in records:
+                records.append(record)
+    return records
+
+
+def _journal_boundary_valid(manifest: dict[str, Any]) -> bool:
+    return bool(manifest["journal_boundary_proven"]) and not manifest[
+        "journal_monitor_error"
+    ]
+
+
+def classify_a_run(
+    events: list[Event],
+    manifest: dict[str, Any],
+    hard_stops: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    evidence = analyze(events, "A")
+    stops = _run_hard_stops(manifest, hard_stops)
+    clean = (
+        _journal_boundary_valid(manifest)
+        and not stops
+        and not manifest["workload_timed_out"]
+    )
+    chain = evidence["result"] in {
+        "BASELINE_REPRODUCED_EEXIST_CHAIN",
+        "BASELINE_REPRODUCED_EEXIST_AFTER_ZERO_RETURN_DEL",
+    }
+    if (
+        clean
+        and chain
+        and manifest["termination_reason"] == "bsp-eexist"
+        and manifest["workload_returncode"] != 0
+    ):
+        outcome = "A_CHAIN_PROVEN"
+    elif (
+        clean
+        and not chain
+        and manifest["termination_reason"] == "process-exit"
+        and manifest["workload_returncode"] == 0
+    ):
+        outcome = "A_CHAIN_NOT_REPRODUCED"
+    else:
+        outcome = "A_INCONCLUSIVE"
+
+    return {
+        "outcome": outcome,
+        "evidence": evidence,
+        "hard_stop_records": stops,
+        "run_valid": clean,
+        "claim_boundary": (
+            "A_CHAIN_PROVEN is an observed key/fd/result/order chain in the "
+            "Nouveau diagnostics. It does not prove visible playback or a fix."
+        ),
+    }
+
+
+SINGLE_A_IDENTITY_FIELDS = (
+    "boot_id", "input_sha256", "command_argv", "normalized_environment",
+    "deployment_manifest_path", "deployment_manifest_sha256",
+    "nvif_capture_sha256", "nvif_parser_sha256",
+    "kernel", "runtime_profile_sha256", "nouveau_srcversion",
+    "nouveau_module_path", "nouveau_module_file_sha256",
+    "nouveau_module_srcversion", "nouveau_module_vermagic",
+    "nouveau_parameters", "mpv_sha256", "mpv_resolved_path",
+    "systemd_cat_sha256", "systemd_cat_resolved_path", "working_directory",
+    "xauthority_sha256", "dso_sha256",
+)
+
+
+def single_a_report(
+    events: list[Event],
+    manifest: dict[str, Any],
+    manifest_bytes: bytes,
+    journal_bytes: bytes,
+    hard_stops: list[dict[str, Any]],
+) -> dict[str, Any]:
+    result = classify_a_run(events, manifest, hard_stops)
+    result["schema"] = 1
+    result["variant"] = "A"
+    result["manifest_sha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+    result["identity"] = {
+        name: manifest[name] for name in SINGLE_A_IDENTITY_FIELDS
+    }
+    result["journal_delta_sha256"] = hashlib.sha256(journal_bytes).hexdigest()
+    return result
+
+
+def validate_a_proof_files(
+    *, proof_path: Path, manifest_path: Path, journal_path: Path,
+) -> dict[str, Any]:
+    """Recompute and verify the exact A-chain proof before allowing Variant B."""
+    try:
+        proof_bytes = proof_path.read_bytes()
+        proof = json.loads(proof_bytes)
+        manifest_bytes = manifest_path.read_bytes()
+        manifest = read_manifest(manifest_path, "A")
+        journal_bytes = journal_path.read_bytes()
+    except (OSError, json.JSONDecodeError) as exc:
+        raise ValueError(f"cannot load Variant A proof artifacts: {exc}") from exc
+
+    if not isinstance(proof, dict):
+        raise ValueError("Variant A proof is not a JSON object")
+    if hashlib.sha256(journal_bytes).hexdigest() != manifest[
+        "journal_delta_sha256"
+    ]:
+        raise ValueError("Variant A journal delta SHA-256 does not match manifest")
+    if journal_boot_ids(journal_bytes) != {manifest["boot_id"]}:
+        raise ValueError("Variant A journal boot ID does not match manifest")
+    try:
+        events = read_events(io.StringIO(journal_bytes.decode("utf-8")))
+    except UnicodeDecodeError as exc:
+        raise ValueError("Variant A journal is not valid UTF-8") from exc
+    hard_stops = hard_stop_records(journal_bytes)
+    if hard_stops != manifest["postrun_hard_stops"]:
+        raise ValueError("Variant A hard-stop records do not match journal")
+
+    expected = single_a_report(
+        events, manifest, manifest_bytes, journal_bytes, hard_stops
+    )
+    if expected["outcome"] != "A_CHAIN_PROVEN":
+        raise ValueError(
+            f"Variant A artifacts do not prove the required chain: {expected['outcome']}"
+        )
+    if proof != expected:
+        raise ValueError(
+            "Variant A proof does not exactly match recomputed manifest/journal evidence"
+        )
+    return {
+        "proof_sha256": hashlib.sha256(proof_bytes).hexdigest(),
+        "manifest_sha256": expected["manifest_sha256"],
+        "journal_delta_sha256": expected["journal_delta_sha256"],
+        "identity": expected["identity"],
+    }
+
+def classify_b_run(
+    events: list[Event],
+    manifest: dict[str, Any],
+    *,
+    a_chain_proven: bool,
+    hard_stops: list[dict[str, Any]] | None = None,
+) -> dict[str, Any]:
+    evidence = analyze(events, "B")
+    stops = _run_hard_stops(manifest, hard_stops)
+    abi16_duplicates = [
+        event for event in events
+        if event.kind == "duplicate"
+        and str(event.fields["layer"]) == "abi16"
+    ]
+    clean = (
+        _journal_boundary_valid(manifest)
+        and not stops
+        and not manifest["workload_timed_out"]
+        and manifest["termination_reason"] == "process-exit"
+        and manifest["workload_returncode"] == 0
+    )
+    if not a_chain_proven:
+        outcome = "A_INCONCLUSIVE"
+    elif (
+        clean
+        and not abi16_duplicates
+        and evidence["result"] == "CANDIDATE_LIFECYCLE_SUCCEEDED"
+    ):
+        outcome = "B_CORRECTION_PROVEN"
+    elif clean:
+        outcome = "B_CORRECTION_FAILED"
+    else:
+        outcome = "A_INCONCLUSIVE"
+
+    return {
+        "outcome": outcome,
+        "evidence": evidence,
+        "hard_stop_records": stops,
+        "abi16_duplicate_records": [asdict(event) for event in abi16_duplicates],
+        "run_valid": clean,
+        "a_chain_proven": a_chain_proven,
+        "claim_boundary": (
+            "B_CORRECTION_PROVEN means only that the matched same-key NVIF "
+            "lifecycle changed as predicted. It does not establish visible "
+            "playback acceptance. B_CORRECTION_FAILED means B did not meet "
+            "those proof criteria; inspect run_valid before inferring why."
+        ),
+    }
+
+
 def read_manifest(path: Path, expected_variant: str) -> dict[str, Any]:
     try:
         manifest = json.loads(path.read_text(encoding="utf-8"))
@@ -599,9 +821,11 @@ def read_manifest(path: Path, expected_variant: str) -> dict[str, Any]:
     required = {
         "schema", "variant", "boot_id", "input_sha256", "command_argv",
         "launcher_argv", "normalized_environment", "kernel",
-        "nouveau_srcversion", "nouveau_parameters", "nouveau_module_path",
+        "runtime_profile_sha256", "nouveau_srcversion", "nouveau_parameters", "nouveau_module_path",
         "nouveau_module_file_sha256", "nouveau_module_srcversion",
-        "nouveau_module_vermagic", "dso_sha256",
+        "nouveau_module_vermagic", "deployment_manifest_path",
+        "deployment_manifest_sha256", "nvif_capture_sha256",
+        "nvif_parser_sha256", "dso_sha256",
         "dso_resolved_path", "dso_alias_path", "mpv_sha256",
         "mpv_resolved_path", "systemd_cat_sha256",
         "systemd_cat_resolved_path", "journal_start_cursor",
@@ -623,7 +847,7 @@ def read_manifest(path: Path, expected_variant: str) -> dict[str, Any]:
     if manifest["schema"] != 2 or manifest["variant"] != expected_variant:
         raise ValueError(f"{expected_variant} manifest schema/variant mismatch")
     for field in (
-        "boot_id", "kernel", "nouveau_srcversion", "nouveau_module_path",
+        "boot_id", "kernel", "runtime_profile_sha256", "nouveau_srcversion", "nouveau_module_path",
         "nouveau_module_srcversion", "nouveau_module_vermagic", "dso_sha256",
     ):
         if not isinstance(manifest[field], str) or not manifest[field]:
@@ -666,6 +890,8 @@ def read_manifest(path: Path, expected_variant: str) -> dict[str, Any]:
             f"{expected_variant} selected Nouveau module file is unavailable: {exc}"
         ) from exc
     profile = load_runtime_profile()
+    if manifest["runtime_profile_sha256"] != EXPECTED_RUNTIME_PROFILE_SHA256:
+        raise ValueError(f"{expected_variant} runtime profile SHA-256 is not pinned")
     if manifest["input_sha256"] != profile["input_sha256"]:
         raise ValueError(
             f"{expected_variant} manifest input SHA-256 is not the pinned file"
@@ -811,7 +1037,201 @@ def read_manifest(path: Path, expected_variant: str) -> dict[str, Any]:
         manifest["journal_monitor_error"], str
     ):
         raise ValueError(f"{expected_variant} journal monitor error is invalid")
+    _validate_deployment_provenance(manifest, expected_variant)
     return manifest
+
+
+def _validate_deployment_provenance(
+    run: dict[str, Any], variant: str,
+) -> None:
+    """Bind a run to the exact finalized module/DSO/tools deployment record."""
+    for name in (
+        "deployment_manifest_sha256",
+        "nvif_capture_sha256",
+        "nvif_parser_sha256",
+    ):
+        value = run.get(name)
+        if not isinstance(value, str) or not re.fullmatch(r"[0-9a-f]{64}", value):
+            raise ValueError(f"{variant} manifest has invalid {name}")
+
+    raw_path = run.get("deployment_manifest_path")
+    if not isinstance(raw_path, str) or not Path(raw_path).is_absolute():
+        raise ValueError(f"{variant} deployment manifest path must be absolute")
+    path = Path(raw_path)
+    try:
+        resolved = path.resolve(strict=True)
+        payload = path.read_bytes()
+    except OSError as exc:
+        raise ValueError(f"{variant} deployment manifest is unavailable: {exc}") from exc
+    if resolved != path:
+        raise ValueError(f"{variant} deployment manifest path is not canonical")
+    if hashlib.sha256(payload).hexdigest() != run["deployment_manifest_sha256"]:
+        raise ValueError(f"{variant} deployment manifest SHA-256 mismatch")
+    try:
+        deployment = json.loads(payload)
+    except json.JSONDecodeError as exc:
+        raise ValueError(f"{variant} deployment manifest is invalid JSON") from exc
+    if not isinstance(deployment, dict) or deployment.get("schema") != 2:
+        raise ValueError(f"{variant} deployment manifest schema is unsupported")
+    if deployment.get("status") != "FINALIZED_NOT_REBOOTED_NOT_RUNTIME_VERIFIED":
+        raise ValueError(f"{variant} deployment manifest is not finalized")
+    if deployment.get("review_branch") != "review/gk104-vaapi-selftest-v8-20261002":
+        raise ValueError(f"{variant} deployment manifest review branch is unexpected")
+    if deployment.get("main_commit") != "7b44b1c1e282eac7c54c1cfa8c758118cd66312c":
+        raise ValueError(f"{variant} deployment manifest main commit is unexpected")
+    if deployment.get("kernel") != run["kernel"]:
+        raise ValueError(f"{variant} deployment manifest kernel mismatch")
+    review_commit = deployment.get("review_commit")
+    if not isinstance(review_commit, str) or not re.fullmatch(r"[0-9a-f]{40}", review_commit):
+        raise ValueError(f"{variant} deployment manifest review commit is invalid")
+
+    source = deployment.get("source")
+    if not isinstance(source, dict):
+        raise ValueError(f"{variant} deployment manifest lacks source pins")
+    if source.get("kernel_source_archive_sha256") != EXPECTED_KERNEL_SOURCE_ARCHIVE_SHA256:
+        raise ValueError(f"{variant} deployment kernel source hash is not pinned")
+    if source.get("patch_sha256") != EXPECTED_KERNEL_PATCH_SHA256:
+        raise ValueError(f"{variant} deployment kernel patch hashes are not pinned")
+
+    module = deployment.get("nouveau")
+    initramfs = deployment.get("initramfs")
+    if not isinstance(module, dict) or not isinstance(initramfs, dict):
+        raise ValueError(f"{variant} deployment manifest lacks module/initramfs records")
+    module_identity = {
+        "module_path": run["nouveau_module_path"],
+        "installed_compressed_sha256": run["nouveau_module_file_sha256"],
+        "srcversion": run["nouveau_module_srcversion"],
+        "vermagic": run["nouveau_module_vermagic"],
+    }
+    for field, expected in module_identity.items():
+        if module.get(field) != expected:
+            raise ValueError(f"{variant} deployment Nouveau {field} mismatch")
+    if module.get("parameters") != run["nouveau_parameters"]:
+        raise ValueError(f"{variant} deployment Nouveau parameters mismatch")
+    initramfs_path = initramfs.get("path")
+    initramfs_sha = initramfs.get("sha256")
+    if initramfs_path != "/boot/initrd.img-7.0.0-34-generic":
+        raise ValueError(f"{variant} deployment initramfs path is not pinned")
+    if not isinstance(initramfs_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", initramfs_sha):
+        raise ValueError(f"{variant} deployment initramfs hash is invalid")
+
+    for record_name in ("build_manifest", "deployment_plan"):
+        record = deployment.get(record_name)
+        if not isinstance(record, dict):
+            raise ValueError(f"{variant} deployment lacks {record_name}")
+        record_path_text = record.get("path")
+        record_hash = record.get("sha256")
+        if not isinstance(record_path_text, str) or not Path(record_path_text).is_absolute():
+            raise ValueError(f"{variant} deployment {record_name} path is invalid")
+        if not isinstance(record_hash, str) or not re.fullmatch(r"[0-9a-f]{64}", record_hash):
+            raise ValueError(f"{variant} deployment {record_name} hash is invalid")
+        record_path = Path(record_path_text)
+        try:
+            if (
+                record_path.resolve(strict=True) != record_path
+                or not record_path.is_file()
+                or _sha256_file(record_path) != record_hash
+            ):
+                raise ValueError(f"{variant} deployment {record_name} hash mismatch")
+        except OSError as exc:
+            raise ValueError(f"{variant} deployment {record_name} is unavailable: {exc}") from exc
+        try:
+            record_json = json.loads(record_path.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError) as exc:
+            raise ValueError(f"{variant} deployment {record_name} is invalid JSON") from exc
+        if not isinstance(record_json, dict):
+            raise ValueError(f"{variant} deployment {record_name} is not an object")
+        if record_name == "build_manifest":
+            if (
+                record_json.get("status") != "CLEAN_ENABLED_BUILD_RETAINED_NOT_INSTALLED"
+                or record_json.get("review_commit") != review_commit
+                or record_json.get("review_branch") != deployment["review_branch"]
+                or record_json.get("main_commit") != deployment["main_commit"]
+                or record_json.get("kernel_release") != deployment["kernel"]
+                or record_json.get("kernel_source_archive_sha256")
+                != EXPECTED_KERNEL_SOURCE_ARCHIVE_SHA256
+                or record_json.get("patch_sha256") != EXPECTED_KERNEL_PATCH_SHA256
+                or record_json.get("srcversion") != module.get("srcversion")
+                or record_json.get("vermagic") != module.get("vermagic")
+                or record_json.get("raw_module_sha256") != module.get("raw_module_sha256")
+            ):
+                raise ValueError(f"{variant} deployment build manifest identity mismatch")
+        elif (
+            record_json.get("schema") != 1
+            or record_json.get("expected_review_branch") != deployment["review_branch"]
+            or record_json.get("expected_main_commit") != deployment["main_commit"]
+            or record_json.get("kernel_release") != deployment["kernel"]
+            or record_json.get("kernel_source_archive_sha256")
+            != EXPECTED_KERNEL_SOURCE_ARCHIVE_SHA256
+            or record_json.get("patch_sha256") != EXPECTED_KERNEL_PATCH_SHA256
+            or record_json.get("expected_srcversion") != module.get("srcversion")
+            or record_json.get("expected_vermagic") != module.get("vermagic")
+            or record_json.get("module_install_path") != module.get("module_path")
+            or record_json.get("module_parameters") != module.get("parameters")
+        ):
+            raise ValueError(f"{variant} deployment plan identity mismatch")
+
+    input_record = deployment.get("input")
+    profile = load_runtime_profile()
+    if (
+        not isinstance(input_record, dict)
+        or input_record.get("path") != str(Path(profile["argv"][-1]).resolve())
+        or input_record.get("sha256") != run["input_sha256"]
+        or run["input_sha256"] != EXPECTED_INPUT_SHA256
+    ):
+        raise ValueError(f"{variant} deployment input provenance mismatch")
+
+    mesa = deployment.get("mesa")
+    variants = mesa.get("variants") if isinstance(mesa, dict) else None
+    mesa_record = variants.get(variant) if isinstance(variants, dict) else None
+    if not isinstance(mesa_record, dict):
+        raise ValueError(f"{variant} deployment manifest lacks Mesa variant")
+    if mesa_record.get("path") != run["dso_resolved_path"]:
+        raise ValueError(f"{variant} deployment Mesa path mismatch")
+    if mesa_record.get("sha256") != run["dso_sha256"]:
+        raise ValueError(f"{variant} deployment Mesa DSO hash mismatch")
+    plan_variants = json.loads(
+        Path(deployment["deployment_plan"]["path"]).read_text(encoding="utf-8")
+    ).get("mesa_variants")
+    if not isinstance(plan_variants, dict) or plan_variants.get(variant) != mesa_record:
+        raise ValueError(f"{variant} deployment plan Mesa variant mismatch")
+
+    tools = deployment.get("tools")
+    if not isinstance(tools, dict):
+        raise ValueError(f"{variant} deployment manifest lacks tool provenance")
+    expected_tools = {
+        "nvif_capture": (
+            Path(__file__).with_name("capture_nvif_lifetime_run.py"),
+            run["nvif_capture_sha256"],
+        ),
+        "nvif_parser": (Path(__file__), run["nvif_parser_sha256"]),
+    }
+    for name, (expected_path, expected_hash) in expected_tools.items():
+        record = tools.get(name)
+        if not isinstance(record, dict):
+            raise ValueError(f"{variant} deployment manifest lacks {name}")
+        tool_path_text = record.get("path")
+        if not isinstance(tool_path_text, str) or not Path(tool_path_text).is_absolute():
+            raise ValueError(f"{variant} deployment {name} path is invalid")
+        tool_path = Path(tool_path_text)
+        try:
+            actual_path = expected_path.resolve(strict=True)
+            if (
+                tool_path.resolve(strict=True) != actual_path
+                or record.get("sha256") != expected_hash
+                or _sha256_file(actual_path) != expected_hash
+            ):
+                raise ValueError(f"{variant} deployment {name} provenance mismatch")
+        except OSError as exc:
+            raise ValueError(f"{variant} deployment {name} is unavailable: {exc}") from exc
+    plan_tools = json.loads(
+        Path(deployment["deployment_plan"]["path"]).read_text(encoding="utf-8")
+    ).get("tools")
+    if not isinstance(plan_tools, dict):
+        raise ValueError(f"{variant} deployment plan lacks tools")
+    for name in ("nvif_capture", "nvif_parser"):
+        if plan_tools.get(name) != tools.get(name):
+            raise ValueError(f"{variant} deployment plan {name} mismatch")
 
 
 def compare_runs(
@@ -827,6 +1247,7 @@ def compare_runs(
         "command_argv",
         "normalized_environment",
         "kernel",
+        "runtime_profile_sha256",
         "nouveau_srcversion",
         "nouveau_module_path",
         "nouveau_module_file_sha256",
@@ -839,6 +1260,10 @@ def compare_runs(
         "mpv_resolved_path",
         "systemd_cat_sha256",
         "systemd_cat_resolved_path",
+        "deployment_manifest_path",
+        "deployment_manifest_sha256",
+        "nvif_capture_sha256",
+        "nvif_parser_sha256",
     )
     mismatched = [
         field for field in same_fields
@@ -859,54 +1284,18 @@ def compare_runs(
 
     hard_stops_a = hard_stops_a or []
     hard_stops_b = hard_stops_b or []
-    all_hard_stops_a: list[dict[str, Any]] = []
-    all_hard_stops_b: list[dict[str, Any]] = []
-    for target, records in (
-        (all_hard_stops_a, manifest_a["preflight_hard_stops"]),
-        (all_hard_stops_a, manifest_a["postrun_hard_stops"]),
-        (all_hard_stops_a, hard_stops_a),
-        (all_hard_stops_b, manifest_b["preflight_hard_stops"]),
-        (all_hard_stops_b, manifest_b["postrun_hard_stops"]),
-        (all_hard_stops_b, hard_stops_b),
-    ):
-        for record in records:
-            if record not in target:
-                target.append(record)
-
-    result_a = analyze(events_a, "A")
-    result_b = analyze(events_b, "B")
-    if any(
-        record.get("source") == "kernel"
-        for record in (*all_hard_stops_a, *all_hard_stops_b)
-    ):
-        outcome = "KERNEL_FAILURE"
-    elif all_hard_stops_a or all_hard_stops_b:
-        outcome = "WORKLOAD_FAILURE"
-    elif not all((
-        manifest_a["journal_boundary_proven"],
-        manifest_b["journal_boundary_proven"],
-    )) or manifest_a["journal_monitor_error"] or manifest_b["journal_monitor_error"]:
-        outcome = "JOURNAL_BOUNDARY_UNPROVEN"
-    elif any((
-        manifest_a["workload_timed_out"],
-        manifest_b["workload_timed_out"],
-        manifest_a["workload_returncode"] != 0
-        and manifest_a["termination_reason"] != "bsp-eexist",
-        manifest_b["workload_returncode"] != 0
-        and manifest_b["termination_reason"] != "bsp-eexist",
-    )):
-        outcome = "INCOMPLETE_WORKLOAD"
-    elif result_a["result"] == "INCONCLUSIVE_NVKM_DUPLICATE_IDENTITY_WEAK":
-        outcome = "INCONCLUSIVE_NVKM_DUPLICATE_IDENTITY_WEAK"
-    elif result_a["result"] not in {
-        "BASELINE_REPRODUCED_EEXIST_CHAIN",
-        "BASELINE_REPRODUCED_EEXIST_AFTER_ZERO_RETURN_DEL",
-    }:
-        outcome = "INCONCLUSIVE_BASELINE_NOT_REPRODUCED"
-    elif result_b["result"] != "CANDIDATE_LIFECYCLE_SUCCEEDED":
-        outcome = "INCONCLUSIVE_CANDIDATE_LIFECYCLE_NOT_CLEAN"
+    result_a = classify_a_run(events_a, manifest_a, hard_stops_a)
+    a_proven = result_a["outcome"] == "A_CHAIN_PROVEN"
+    result_b = classify_b_run(
+        events_b,
+        manifest_b,
+        a_chain_proven=a_proven,
+        hard_stops=hard_stops_b,
+    )
+    if result_a["outcome"] != "A_CHAIN_PROVEN":
+        outcome = result_a["outcome"]
     else:
-        outcome = "A_REPRODUCED_B_LIFECYCLE_SUCCEEDED"
+        outcome = result_b["outcome"]
     return {
         "outcome": outcome,
         "variant_a": result_a,
@@ -917,25 +1306,71 @@ def compare_runs(
             "same_nouveau_parameters": True,
             "separate_boots": True,
             "pinned_dso_hashes": True,
+            "same_deployment_manifest_and_nvif_tools": True,
             "journal_deltas_hash_verified": True,
         },
-        "hard_stop_records": {"A": all_hard_stops_a, "B": all_hard_stops_b},
+        "hard_stop_records": {
+            "A": result_a["hard_stop_records"],
+            "B": result_b["hard_stop_records"],
+        },
         "claim_boundary": (
-            "Matched NVIF lifecycle evidence only; this is not visible playback "
-            "acceptance or release approval. Confirm manifests from observed "
-            "runtime provenance."
+            "Only the listed A/B causal outcomes are emitted. Pointer identity "
+            "is not used; the numeric NVIF object key and channel handles are "
+            "compared. No outcome proves visible playback."
         ),
     }
 
 
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--journal-a", type=Path, required=True)
-    parser.add_argument("--manifest-a", type=Path, required=True)
-    parser.add_argument("--journal-b", type=Path, required=True)
-    parser.add_argument("--manifest-b", type=Path, required=True)
+    parser.add_argument("--variant", choices=("A",))
+    parser.add_argument("--journal", type=Path)
+    parser.add_argument("--manifest", type=Path)
+    parser.add_argument("--journal-a", type=Path)
+    parser.add_argument("--manifest-a", type=Path)
+    parser.add_argument("--journal-b", type=Path)
+    parser.add_argument("--manifest-b", type=Path)
     args = parser.parse_args(argv)
     try:
+        if args.variant == "A":
+            if not args.journal or not args.manifest or any((
+                args.journal_a, args.manifest_a, args.journal_b, args.manifest_b
+            )):
+                raise ValueError(
+                    "single-run A analysis requires only --journal and --manifest"
+                )
+            manifest_bytes = args.manifest.read_bytes()
+            manifest_a = read_manifest(args.manifest, "A")
+            journal_a = args.journal.read_bytes()
+            if hashlib.sha256(journal_a).hexdigest() != manifest_a[
+                "journal_delta_sha256"
+            ]:
+                raise ValueError("A journal delta SHA-256 does not match its manifest")
+            if journal_boot_ids(journal_a) != {manifest_a["boot_id"]}:
+                raise ValueError("A journal delta boot ID does not match its manifest")
+            events_a = read_events(io.StringIO(journal_a.decode("utf-8")))
+            stops_a = hard_stop_records(journal_a)
+            if stops_a != manifest_a["postrun_hard_stops"]:
+                raise ValueError("A postrun hard-stop records do not match its journal")
+            result = single_a_report(
+                events_a, manifest_a, manifest_bytes, journal_a, stops_a
+            )
+            print(json.dumps(result, indent=2, sort_keys=True))
+            return 0 if result["outcome"] == "A_CHAIN_PROVEN" else 3
+
+        if any((
+            not args.journal_a,
+            not args.manifest_a,
+            not args.journal_b,
+            not args.manifest_b,
+            args.journal,
+            args.manifest,
+        )):
+            raise ValueError(
+                "paired comparison requires --journal-a/--manifest-a and "
+                "--journal-b/--manifest-b"
+            )
+        assert args.journal_a and args.manifest_a and args.journal_b and args.manifest_b
         manifest_a = read_manifest(args.manifest_a, "A")
         manifest_b = read_manifest(args.manifest_b, "B")
         journal_a = args.journal_a.read_bytes()
@@ -966,9 +1401,9 @@ def main(argv: list[str] | None = None) -> int:
         print(f"ERROR: {exc}", file=sys.stderr)
         return 2
     print(json.dumps(result, indent=2, sort_keys=True))
-    if result["outcome"] == "A_REPRODUCED_B_LIFECYCLE_SUCCEEDED":
+    if result["outcome"] == "B_CORRECTION_PROVEN":
         return 0
-    if result["outcome"].startswith(("INCONCLUSIVE", "JOURNAL_BOUNDARY", "INCOMPLETE")):
+    if result["outcome"] in {"A_CHAIN_NOT_REPRODUCED", "A_INCONCLUSIVE"}:
         return 3
     return 4
 

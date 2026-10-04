@@ -352,6 +352,101 @@ class NvifLifetimeCaptureTests(unittest.TestCase):
         self.assertIn("--execute is required", output.getvalue())
         observe.assert_not_called()
 
+    def test_variant_b_cli_requires_a_recomputed_a_proof_before_preflight(self) -> None:
+        output = io.StringIO()
+        with (
+            mock.patch.object(capture, "observed_runtime") as observe,
+            contextlib.redirect_stderr(output),
+        ):
+            status = capture.main([
+                "--variant", "B",
+                "--dso", "/tmp/unused.so",
+                "--output-dir", "/tmp/unused-capture",
+                "--execute",
+            ])
+        self.assertEqual(status, 2)
+        self.assertIn("requires --a-proof, --a-manifest, and --a-journal", output.getvalue())
+        observe.assert_not_called()
+
+    def test_variant_b_direct_capture_requires_proof_before_creating_output(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            output_dir = Path(temporary) / "capture-B"
+            with self.assertRaisesRegex(RuntimeError, "requires a verified exact"):
+                capture.execute_capture(
+                    variant="B",
+                    dso=Path("/tmp/not-used.so"),
+                    output_dir=output_dir,
+                    runtime={"variant": "B"},
+                )
+            self.assertFalse(output_dir.exists())
+
+    def test_variant_b_proof_must_match_same_kernel_module_and_workload(self) -> None:
+        fields = (
+            "input_sha256", "command_argv", "normalized_environment", "kernel",
+            "runtime_profile_sha256", "nouveau_srcversion", "nouveau_module_path",
+            "nouveau_module_file_sha256", "nouveau_module_srcversion",
+            "nouveau_module_vermagic", "nouveau_parameters", "mpv_sha256",
+            "mpv_resolved_path", "systemd_cat_sha256", "systemd_cat_resolved_path",
+            "working_directory", "deployment_manifest_path",
+            "deployment_manifest_sha256", "nvif_capture_sha256",
+            "nvif_parser_sha256",
+        )
+        a_identity = {
+            field: f"pinned-{field}" for field in fields
+        }
+        a_identity.update({
+            "boot_id": "boot-a",
+            "dso_sha256": correlator.EXPECTED_DSO_SHA256["A"],
+        })
+        runtime = {field: a_identity[field] for field in fields}
+        runtime.update({
+            "boot_id": "boot-b",
+            "dso_sha256": correlator.EXPECTED_DSO_SHA256["B"],
+        })
+        capture.validate_a_proof_matches_b_runtime(
+            {"identity": a_identity}, runtime
+        )
+        runtime["nouveau_module_file_sha256"] = "different-module"
+        with self.assertRaisesRegex(RuntimeError, "nouveau_module_file_sha256"):
+            capture.validate_a_proof_matches_b_runtime(
+                {"identity": a_identity}, runtime
+            )
+
+    def test_variant_b_proof_must_match_deployment_and_diagnostic_tool_hashes(self) -> None:
+        fields = (
+            "input_sha256", "command_argv", "normalized_environment", "kernel",
+            "runtime_profile_sha256", "nouveau_srcversion", "nouveau_module_path",
+            "nouveau_module_file_sha256", "nouveau_module_srcversion",
+            "nouveau_module_vermagic", "nouveau_parameters", "mpv_sha256",
+            "mpv_resolved_path", "systemd_cat_sha256", "systemd_cat_resolved_path",
+            "working_directory", "deployment_manifest_path",
+            "deployment_manifest_sha256", "nvif_capture_sha256",
+            "nvif_parser_sha256",
+        )
+        a_identity = {field: f"pinned-{field}" for field in fields}
+        a_identity.update({
+            "boot_id": "boot-a",
+            "dso_sha256": correlator.EXPECTED_DSO_SHA256["A"],
+        })
+        runtime = {field: a_identity[field] for field in fields}
+        runtime.update({
+            "boot_id": "boot-b",
+            "dso_sha256": correlator.EXPECTED_DSO_SHA256["B"],
+        })
+
+        for field in (
+            "deployment_manifest_sha256",
+            "nvif_capture_sha256",
+            "nvif_parser_sha256",
+        ):
+            with self.subTest(field=field):
+                runtime[field] = f"different-{field}"
+                with self.assertRaisesRegex(RuntimeError, field):
+                    capture.validate_a_proof_matches_b_runtime(
+                        {"identity": a_identity}, runtime
+                    )
+                runtime[field] = a_identity[field]
+
     def test_capture_cli_exit_status_fails_closed_for_unexpected_outcomes(self) -> None:
         cases = (
             ("A clean run without the expected failure is inconclusive", "A", {
@@ -436,7 +531,11 @@ class NvifLifetimeCaptureTests(unittest.TestCase):
             mock.patch.object(capture, "run_checked") as run_checked,
         ):
             with self.assertRaisesRegex(RuntimeError, "unexpected kernel"):
-                capture.observed_runtime(variant="A", dso=dso)
+                capture.observed_runtime(
+                    variant="A",
+                    dso=dso,
+                    deployment_manifest=Path("/nonexistent/deployment-manifest.json"),
+                )
         run_checked.assert_not_called()
 
     def test_existing_output_directory_is_never_overwritten(self) -> None:

@@ -16,6 +16,162 @@ import parse_nvif_lifetime_ab as parser
 
 TEST_MODULE_PATH = Path(__file__).parent / "fixtures" / "synthetic-nouveau-module.bin"
 TEST_MODULE_SHA256 = hashlib.sha256(TEST_MODULE_PATH.read_bytes()).hexdigest()
+TEST_PROVENANCE_ROOT = Path(tempfile.mkdtemp(prefix="nvif-parser-provenance-"))
+TEST_MESA_DSO_PATHS = {
+    "A": Path(
+        "/home/keivan/nouveau-vaapi-app-validation/"
+        "mesa-nvif-lifetime-ab-build-20261004-pointer-free/A/"
+        "libgallium_drv_video.so"
+    ),
+    "B": Path(
+        "/home/keivan/nouveau-vaapi-app-validation/"
+        "mesa-nvif-lifetime-ab-build-20261004-pointer-free/B/"
+        "libgallium_drv_video.so"
+    ),
+}
+
+
+def write_test_deployment_manifest(
+    *,
+    dso_paths: dict[str, Path] | None = None,
+    module_path: Path = TEST_MODULE_PATH,
+) -> tuple[Path, str, dict[str, str]]:
+    """Create a complete, isolated deployment record for parser tests."""
+    dso_paths = dso_paths or TEST_MESA_DSO_PATHS
+    root = Path(tempfile.mkdtemp(prefix="case-", dir=TEST_PROVENANCE_ROOT))
+    build_path = root / "build-manifest.json"
+    plan_path = root / "deployment-plan.json"
+    build_path.write_text(
+        json.dumps({
+            "status": "CLEAN_ENABLED_BUILD_RETAINED_NOT_INSTALLED",
+            "kernel_release": parser.EXPECTED_KERNEL,
+            "review_commit": "c97442c053137b0ad48f507c9e72770e08756489",
+            "review_branch": "review/gk104-vaapi-selftest-v8-20261002",
+            "main_commit": "7b44b1c1e282eac7c54c1cfa8c758118cd66312c",
+            "kernel_source_archive_sha256": parser.EXPECTED_KERNEL_SOURCE_ARCHIVE_SHA256,
+            "patch_sha256": parser.EXPECTED_KERNEL_PATCH_SHA256,
+            "srcversion": parser.EXPECTED_NOUVEAU_SRCVERSION,
+            "vermagic": "7.0.0-34-generic SMP preempt mod_unload modversions",
+            "raw_module_sha256": hashlib.sha256(module_path.read_bytes()).hexdigest(),
+        }, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    capture_path = Path(__file__).resolve().parents[1] / "capture_nvif_lifetime_run.py"
+    parser_path = Path(parser.__file__).resolve()
+    tool_hashes = {
+        "nvif_capture_sha256": hashlib.sha256(capture_path.read_bytes()).hexdigest(),
+        "nvif_parser_sha256": hashlib.sha256(parser_path.read_bytes()).hexdigest(),
+    }
+    mesa_variants = {
+        variant: {
+            "path": str(path.resolve()),
+            "sha256": parser.EXPECTED_DSO_SHA256[variant],
+        }
+        for variant, path in dso_paths.items()
+    }
+    tools = {
+        "nvif_capture": {
+            "path": str(capture_path),
+            "sha256": tool_hashes["nvif_capture_sha256"],
+        },
+        "nvif_parser": {
+            "path": str(parser_path),
+            "sha256": tool_hashes["nvif_parser_sha256"],
+        },
+    }
+    input_record = {
+        "path": str(Path(parser.load_runtime_profile()["argv"][-1]).resolve()),
+        "sha256": parser.EXPECTED_INPUT_SHA256,
+    }
+    plan_path.write_text(
+        json.dumps({
+            "schema": 1,
+            "expected_review_branch": "review/gk104-vaapi-selftest-v8-20261002",
+            "expected_main_commit": "7b44b1c1e282eac7c54c1cfa8c758118cd66312c",
+            "kernel_release": parser.EXPECTED_KERNEL,
+            "kernel_source_archive_sha256": parser.EXPECTED_KERNEL_SOURCE_ARCHIVE_SHA256,
+            "patch_sha256": parser.EXPECTED_KERNEL_PATCH_SHA256,
+            "expected_srcversion": parser.EXPECTED_NOUVEAU_SRCVERSION,
+            "expected_vermagic": "7.0.0-34-generic SMP preempt mod_unload modversions",
+            "module_install_path": str(module_path.resolve()),
+            "module_parameters": {"diag_ctxsw": "N"},
+            "mesa_variants": mesa_variants,
+            "tools": tools,
+            "input": input_record,
+        }, sort_keys=True) + "\n",
+        encoding="utf-8",
+    )
+    deployment = {
+        "schema": 2,
+        "status": "FINALIZED_NOT_REBOOTED_NOT_RUNTIME_VERIFIED",
+        "review_branch": "review/gk104-vaapi-selftest-v8-20261002",
+        "review_commit": "c97442c053137b0ad48f507c9e72770e08756489",
+        "main_commit": "7b44b1c1e282eac7c54c1cfa8c758118cd66312c",
+        "kernel": parser.EXPECTED_KERNEL,
+        "source": {
+            "kernel_source_archive_sha256": parser.EXPECTED_KERNEL_SOURCE_ARCHIVE_SHA256,
+            "patch_sha256": parser.EXPECTED_KERNEL_PATCH_SHA256,
+        },
+        "build_manifest": {
+            "path": str(build_path.resolve()),
+            "sha256": hashlib.sha256(build_path.read_bytes()).hexdigest(),
+        },
+        "deployment_plan": {
+            "path": str(plan_path.resolve()),
+            "sha256": hashlib.sha256(plan_path.read_bytes()).hexdigest(),
+        },
+        "nouveau": {
+            "module_path": str(module_path.resolve()),
+            "installed_compressed_sha256": hashlib.sha256(
+                module_path.read_bytes()
+            ).hexdigest(),
+            "raw_module_sha256": hashlib.sha256(
+                module_path.read_bytes()
+            ).hexdigest(),
+            "srcversion": parser.EXPECTED_NOUVEAU_SRCVERSION,
+            "vermagic": "7.0.0-34-generic SMP preempt mod_unload modversions",
+            "parameters": {"diag_ctxsw": "N"},
+        },
+        "initramfs": {
+            "path": "/boot/initrd.img-7.0.0-34-generic",
+            "sha256": "f" * 64,
+        },
+        "mesa": {
+            "variants": mesa_variants
+        },
+        "tools": tools,
+        "input": input_record,
+    }
+    deployment_path = root / "deployment-manifest.json"
+    payload = json.dumps(deployment, indent=2, sort_keys=True).encode() + b"\n"
+    deployment_path.write_bytes(payload)
+    return (
+        deployment_path.resolve(),
+        hashlib.sha256(payload).hexdigest(),
+        tool_hashes,
+    )
+
+
+DEFAULT_TEST_DEPLOYMENT_PATH, DEFAULT_TEST_DEPLOYMENT_SHA, DEFAULT_TEST_TOOL_HASHES = (
+    write_test_deployment_manifest()
+)
+
+
+def bind_test_deployment(
+    item: dict[str, object],
+    *,
+    dso_paths: dict[str, Path] | None = None,
+    module_path: Path = TEST_MODULE_PATH,
+) -> None:
+    deployment_path, deployment_sha, tool_hashes = write_test_deployment_manifest(
+        dso_paths=dso_paths,
+        module_path=module_path,
+    )
+    item.update({
+        "deployment_manifest_path": str(deployment_path),
+        "deployment_manifest_sha256": deployment_sha,
+        **tool_hashes,
+    })
 
 
 def journal_line(
@@ -41,20 +197,34 @@ def journal_line(
     return json.dumps(record)
 
 
-def new_line(*, ret: int, route: int, parent: int = 0x22) -> str:
+def new_line(
+    *,
+    ret: int,
+    route: int,
+    key: int = 0x500,
+    selected_fd: int = 9,
+    drm_fd: int = 9,
+) -> str:
     return (
-        "NOUVEAU_DIAG_NVIF_NEW key=0x500 obj=0x500 "
-        f"object_token=0x500 route_token=0x{route:x} parent=0x{parent:x} "
-        f"parent_handle=0x{route:x} fd=9 class=0x000095b1 "
+        f"NOUVEAU_DIAG_NVIF_NEW key=0x{key:x} "
+        f"parent_handle=0x{route:x} route_token=0x{route:x} "
+        f"selected_fd={selected_fd} drm_fd={drm_fd} class=0x000095b1 "
         f"ret={ret}"
     )
 
 
-def del_line(*, fd: int, ret: int) -> str:
+def del_line(
+    *,
+    selected_fd: int,
+    ret: int,
+    key: int = 0x500,
+    parent_handle: int = 0x2,
+    drm_fd: int = 9,
+) -> str:
     return (
-        "NOUVEAU_DIAG_NVIF_DEL key=0x500 obj=0x500 parent=0x22 "
-        "parent_handle=0x2 object_handle=0x501 "
-        f"fd={fd} drm_fd=9 class=0x000095b1 ret={ret}"
+        f"NOUVEAU_DIAG_NVIF_DEL key=0x{key:x} "
+        f"parent_handle=0x{parent_handle:x} object_handle=0x501 "
+        f"selected_fd={selected_fd} drm_fd={drm_fd} class=0x000095b1 ret={ret}"
     )
 
 
@@ -76,11 +246,21 @@ def duplicate_line(*, layer: str = "abi16", channel: int = 0x3,
 def baseline_records(*, duplicate_channel: int = 0x3,
                      duplicate_layer: str = "abi16",
                      duplicate_key: int = 0x500,
+                     delete_key: int = 0x500,
+                     replacement_key: int = 0x500,
                      delete_ret: int = -9,
+                     delete_drm_fd: int = 9,
                      include_free: bool = True) -> str:
     records = [
         journal_line(new_line(ret=0, route=0x2), 100),
-        journal_line(del_line(fd=2, ret=delete_ret), 200),
+        journal_line(
+            del_line(
+                selected_fd=2,
+                ret=delete_ret,
+                key=delete_key,
+                drm_fd=delete_drm_fd,
+            ), 200
+        ),
     ]
     if include_free:
         records.append(journal_line(channel_free_line(), 300))
@@ -95,7 +275,9 @@ def baseline_records(*, duplicate_channel: int = 0x3,
             390,
             pid=None,
         ),
-        journal_line(new_line(ret=-17, route=0x3, parent=0x23), 400),
+        journal_line(
+            new_line(ret=-17, route=0x3, key=replacement_key), 400
+        ),
     ])
     return "\n".join(records) + "\n"
 
@@ -104,10 +286,14 @@ def candidate_records(*, delete_fd: int = 9, delete_ret: int = 0,
                       second_ret: int = 0) -> str:
     return "\n".join([
         journal_line(new_line(ret=0, route=0x2), 100, boot_id="boot-b"),
-        journal_line(del_line(fd=delete_fd, ret=delete_ret), 200, boot_id="boot-b"),
+        journal_line(
+            del_line(selected_fd=delete_fd, ret=delete_ret),
+            200,
+            boot_id="boot-b",
+        ),
         journal_line(channel_free_line(), 300, boot_id="boot-b"),
         journal_line(
-            new_line(ret=second_ret, route=0x3, parent=0x23),
+            new_line(ret=second_ret, route=0x3),
             400,
             boot_id="boot-b",
         ),
@@ -145,6 +331,7 @@ def manifest(variant: str, *, boot_id: str | None = None) -> dict[str, object]:
         ],
         "normalized_environment": environment,
         "kernel": "7.0.0-34-generic",
+        "runtime_profile_sha256": parser.EXPECTED_RUNTIME_PROFILE_SHA256,
         "nouveau_srcversion": parser.EXPECTED_NOUVEAU_SRCVERSION,
         "nouveau_module_path": str(TEST_MODULE_PATH.resolve()),
         "nouveau_module_file_sha256": TEST_MODULE_SHA256,
@@ -152,9 +339,12 @@ def manifest(variant: str, *, boot_id: str | None = None) -> dict[str, object]:
         "nouveau_module_vermagic": (
             "7.0.0-34-generic SMP preempt mod_unload modversions"
         ),
+        "deployment_manifest_path": str(DEFAULT_TEST_DEPLOYMENT_PATH),
+        "deployment_manifest_sha256": DEFAULT_TEST_DEPLOYMENT_SHA,
+        **DEFAULT_TEST_TOOL_HASHES,
         "nouveau_parameters": {"diag_ctxsw": "N"},
         "dso_sha256": parser.EXPECTED_DSO_SHA256[variant],
-        "dso_resolved_path": f"/tmp/{variant}/libgallium_drv_video.so",
+        "dso_resolved_path": str(TEST_MESA_DSO_PATHS[variant].resolve()),
         "dso_alias_path": f"/tmp/{variant}/driver/nouveau_drv_video.so",
         "mpv_sha256": "d" * 64,
         "mpv_resolved_path": "/usr/bin/mpv",
@@ -176,6 +366,13 @@ def manifest(variant: str, *, boot_id: str | None = None) -> dict[str, object]:
     }
 
 
+def proven_a_manifest() -> dict[str, object]:
+    result = manifest("A")
+    result["termination_reason"] = "bsp-eexist"
+    result["workload_returncode"] = -2
+    return result
+
+
 class NvifLifetimeParserTests(unittest.TestCase):
     def parse(self, text: str) -> list[parser.Event]:
         return parser.read_events(io.StringIO(text))
@@ -186,6 +383,121 @@ class NvifLifetimeParserTests(unittest.TestCase):
         self.assertEqual(result["result"], "BASELINE_REPRODUCED_EEXIST_CHAIN")
         self.assertEqual(result["matching_lifecycles"][0]["duplicate_layer"], "abi16")
         self.assertEqual(result["matching_lifecycles"][0]["delete_ret"], -9)
+
+    def test_a_chain_proof_uses_numeric_key_and_channel_handles_only(self) -> None:
+        events = self.parse(baseline_records())
+        result = parser.classify_a_run(events, proven_a_manifest())
+        self.assertEqual(result["outcome"], "A_CHAIN_PROVEN")
+        self.assertEqual(
+            result["evidence"]["matching_lifecycles"][0]["key"],
+            0x500,
+        )
+        new_event = next(event for event in events if event.kind == "new")
+        self.assertNotIn("obj", new_event.fields)
+        self.assertNotIn("parent", new_event.fields)
+
+    def test_a_clean_natural_run_without_chain_is_not_reproduced(self) -> None:
+        result = parser.classify_a_run([], manifest("A"))
+        self.assertEqual(result["outcome"], "A_CHAIN_NOT_REPRODUCED")
+
+    def test_hard_stop_before_replacement_makes_a_chain_inconclusive(self) -> None:
+        lines = baseline_records().splitlines()
+        lines.insert(
+            3,
+            journal_line(
+                "nouveau fifo: fault engine 05 [BAR2] "
+                "client 07 [HUB/HOST_CPU] reason 02 [PTE]",
+                350,
+                pid=None,
+            ),
+        )
+        capture = "\n".join(lines) + "\n"
+        result = parser.classify_a_run(
+            self.parse(capture),
+            proven_a_manifest(),
+            parser.hard_stop_records(capture.encode()),
+        )
+        self.assertEqual(result["outcome"], "A_INCONCLUSIVE")
+
+    def test_wrong_delete_key_cannot_match_lifecycle(self) -> None:
+        result = parser.analyze(
+            self.parse(baseline_records(delete_key=0x501)),
+            "A",
+        )
+
+    def test_delete_canonical_fd_must_match_both_new_records(self) -> None:
+        result = parser.analyze(
+            self.parse(baseline_records(delete_drm_fd=10)),
+            "A",
+        )
+        self.assertEqual(
+            result["result"],
+            "INCONCLUSIVE_BASELINE_NOT_REPRODUCED",
+        )
+        self.assertEqual(
+            result["result"],
+            "INCONCLUSIVE_BASELINE_NOT_REPRODUCED",
+        )
+
+    def test_replacement_with_different_key_cannot_match_lifecycle(self) -> None:
+        result = parser.analyze(
+            self.parse(baseline_records(replacement_key=0x501)),
+            "A",
+        )
+        self.assertEqual(
+            result["result"],
+            "INCONCLUSIVE_BASELINE_NOT_REPRODUCED",
+        )
+
+    def test_del_result_is_required(self) -> None:
+        text = baseline_records().replace(" ret=-9", "", 1)
+        with self.assertRaisesRegex(ValueError, "DEL record missing fields: ret"):
+            self.parse(text)
+
+    def test_pointer_fields_are_rejected_as_unpinned_identity(self) -> None:
+        text = baseline_records().replace(
+            "parent_handle=0x2",
+            "parent_handle=0x2 obj=0x500",
+            1,
+        )
+        with self.assertRaisesRegex(ValueError, "unexpected fields: obj"):
+            self.parse(text)
+
+    def test_b_correction_requires_prior_a_proof(self) -> None:
+        result = parser.classify_b_run(
+            self.parse(candidate_records()),
+            manifest("B"),
+            a_chain_proven=False,
+        )
+        self.assertEqual(result["outcome"], "A_INCONCLUSIVE")
+
+    def test_b_correction_exact_chain_and_failed_correction(self) -> None:
+        clean = parser.classify_b_run(
+            self.parse(candidate_records()),
+            manifest("B"),
+            a_chain_proven=True,
+        )
+        failed = parser.classify_b_run(
+            self.parse(candidate_records(delete_fd=2, delete_ret=-9)),
+            manifest("B"),
+            a_chain_proven=True,
+        )
+        self.assertEqual(clean["outcome"], "B_CORRECTION_PROVEN")
+        self.assertEqual(failed["outcome"], "B_CORRECTION_FAILED")
+
+    def test_b_correction_requires_no_abi16_duplicate_anywhere_in_run(self) -> None:
+        text = candidate_records() + journal_line(
+            "nouveau 0000:01:00.0: drm: "
+            + duplicate_line(layer="abi16", channel=0x99, key=0x999),
+            500,
+            pid=None,
+            boot_id="boot-b",
+        ) + "\n"
+        result = parser.classify_b_run(
+            self.parse(text), manifest("B"), a_chain_proven=True
+        )
+        self.assertEqual(result["outcome"], "B_CORRECTION_FAILED")
+        self.assertEqual(len(result["abi16_duplicate_records"]), 1)
 
     def test_baseline_accepts_zero_return_wrong_fd_del_only_with_stale_key_proof(
         self,
@@ -299,33 +611,29 @@ class NvifLifetimeParserTests(unittest.TestCase):
             manifest("A"),
             manifest("B"),
         )
-        self.assertEqual(result["outcome"], "INCONCLUSIVE_BASELINE_NOT_REPRODUCED")
+        self.assertEqual(result["outcome"], "A_CHAIN_NOT_REPRODUCED")
 
     def test_pair_comparison_accepts_only_matching_a_and_b_sequences(self) -> None:
-        baseline = manifest("A")
-        baseline["workload_returncode"] = -2
-        baseline["termination_reason"] = "bsp-eexist"
+        baseline = proven_a_manifest()
         result = parser.compare_runs(
             self.parse(baseline_records()),
             self.parse(candidate_records()),
             baseline,
             manifest("B"),
         )
-        self.assertEqual(result["outcome"], "A_REPRODUCED_B_LIFECYCLE_SUCCEEDED")
+        self.assertEqual(result["outcome"], "B_CORRECTION_PROVEN")
 
     def test_pair_comparison_accepts_zero_return_del_with_abi16_stale_key(self) -> None:
-        baseline = manifest("A")
-        baseline["workload_returncode"] = -2
-        baseline["termination_reason"] = "bsp-eexist"
+        baseline = proven_a_manifest()
         result = parser.compare_runs(
             self.parse(baseline_records(delete_ret=0)),
             self.parse(candidate_records()),
             baseline,
             manifest("B"),
         )
-        self.assertEqual(result["outcome"], "A_REPRODUCED_B_LIFECYCLE_SUCCEEDED")
+        self.assertEqual(result["outcome"], "B_CORRECTION_PROVEN")
         self.assertEqual(
-            result["variant_a"]["result"],
+            result["variant_a"]["evidence"]["result"],
             "BASELINE_REPRODUCED_EEXIST_AFTER_ZERO_RETURN_DEL",
         )
 
@@ -339,7 +647,7 @@ class NvifLifetimeParserTests(unittest.TestCase):
             baseline,
             manifest("B"),
         )
-        self.assertEqual(result["outcome"], "INCOMPLETE_WORKLOAD")
+        self.assertEqual(result["outcome"], "A_INCONCLUSIVE")
 
     def test_pair_comparison_rejects_workload_mismatch(self) -> None:
         candidate = manifest("B")
@@ -367,7 +675,7 @@ class NvifLifetimeParserTests(unittest.TestCase):
         result = parser.compare_runs(
             self.parse(baseline_records()),
             self.parse(candidate_records()),
-            manifest("A"),
+            proven_a_manifest(),
             manifest("B"),
             hard_stops_b=[{
                 "source": "kernel",
@@ -375,13 +683,13 @@ class NvifLifetimeParserTests(unittest.TestCase):
                 "message": "nouveau fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]",
             }],
         )
-        self.assertEqual(result["outcome"], "KERNEL_FAILURE")
+        self.assertEqual(result["outcome"], "A_INCONCLUSIVE")
 
     def test_workload_fatal_is_scoped_and_overrides_lifecycle_success(self) -> None:
         result = parser.compare_runs(
             self.parse(baseline_records()),
             self.parse(candidate_records()),
-            manifest("A"),
+            proven_a_manifest(),
             manifest("B"),
             hard_stops_b=[{
                 "source": "workload",
@@ -389,7 +697,7 @@ class NvifLifetimeParserTests(unittest.TestCase):
                 "message": "Bus error",
             }],
         )
-        self.assertEqual(result["outcome"], "WORKLOAD_FAILURE")
+        self.assertEqual(result["outcome"], "A_INCONCLUSIVE")
 
     def test_unproven_journal_boundary_overrides_lifecycle_success(self) -> None:
         candidate = manifest("B")
@@ -397,10 +705,10 @@ class NvifLifetimeParserTests(unittest.TestCase):
         result = parser.compare_runs(
             self.parse(baseline_records()),
             self.parse(candidate_records()),
-            manifest("A"),
+            proven_a_manifest(),
             candidate,
         )
-        self.assertEqual(result["outcome"], "JOURNAL_BOUNDARY_UNPROVEN")
+        self.assertEqual(result["outcome"], "A_INCONCLUSIVE")
 
     def test_nonzero_workload_overrides_lifecycle_success(self) -> None:
         candidate = manifest("B")
@@ -408,10 +716,10 @@ class NvifLifetimeParserTests(unittest.TestCase):
         result = parser.compare_runs(
             self.parse(baseline_records()),
             self.parse(candidate_records()),
-            manifest("A"),
+            proven_a_manifest(),
             candidate,
         )
-        self.assertEqual(result["outcome"], "INCOMPLETE_WORKLOAD")
+        self.assertEqual(result["outcome"], "A_INCONCLUSIVE")
 
     def test_hard_stop_classifier_catches_delayed_bar2_and_ctxsw(self) -> None:
         self.assertEqual(
@@ -517,6 +825,31 @@ class NvifLifetimeParserTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "DSO SHA-256"):
                 parser.read_manifest(path, "A")
 
+    def test_deployment_provenance_binds_module_dso_and_current_nvif_tools(self) -> None:
+        item = manifest("A")
+        parser._validate_deployment_provenance(item, "A")
+
+        bad_tool = dict(item)
+        bad_tool["nvif_parser_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "parser provenance mismatch"):
+            parser._validate_deployment_provenance(bad_tool, "A")
+
+        bad_module = dict(item)
+        bad_module["nouveau_module_file_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "installed_compressed_sha256 mismatch"):
+            parser._validate_deployment_provenance(bad_module, "A")
+
+    def test_deployment_manifest_file_hash_is_rechecked(self) -> None:
+        item = manifest("A")
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "deployment-manifest.json"
+            path.write_bytes(
+                Path(item["deployment_manifest_path"]).read_bytes() + b" "
+            )
+            item["deployment_manifest_path"] = str(path)
+            with self.assertRaisesRegex(ValueError, "deployment manifest SHA-256 mismatch"):
+                parser._validate_deployment_provenance(item, "A")
+
     def test_manifest_loader_accepts_workload_hard_stop_artifact(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -539,10 +872,8 @@ class NvifLifetimeParserTests(unittest.TestCase):
             item.update({
                 "dso_resolved_path": str(dso),
                 "dso_alias_path": str(alias),
-                "nouveau_module_path": str(module),
-                "nouveau_module_file_sha256": hashlib.sha256(
-                    module.read_bytes()
-                ).hexdigest(),
+                "nouveau_module_path": str(TEST_MODULE_PATH.resolve()),
+                "nouveau_module_file_sha256": TEST_MODULE_SHA256,
                 "preflight_journal_sha256": hashlib.sha256(
                     preflight.read_bytes()
                 ).hexdigest(),
@@ -554,6 +885,7 @@ class NvifLifetimeParserTests(unittest.TestCase):
                 }],
                 "workload_returncode": -7,
             })
+            bind_test_deployment(item, dso_paths={"A": dso, "B": TEST_MESA_DSO_PATHS["B"]})
             path = root / "manifest.json"
             path.write_text(json.dumps(item), encoding="utf-8")
             media = Path(parser.load_runtime_profile()["argv"][-1])
@@ -743,6 +1075,17 @@ class NvifLifetimeParserTests(unittest.TestCase):
                 candidate,
             )
 
+    def test_pair_comparison_requires_identical_deployment_and_nvif_tools(self) -> None:
+        candidate = manifest("B")
+        candidate["deployment_manifest_sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "deployment_manifest_sha256"):
+            parser.compare_runs(
+                self.parse(baseline_records()),
+                self.parse(candidate_records()),
+                manifest("A"),
+                candidate,
+            )
+
     def test_cli_emits_machine_readable_pair_result(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -756,6 +1099,8 @@ class NvifLifetimeParserTests(unittest.TestCase):
             journal_b.write_bytes(data_b)
             item_a = manifest("A")
             item_b = manifest("B")
+            item_a["termination_reason"] = "bsp-eexist"
+            item_a["workload_returncode"] = -2
             item_a["journal_delta_sha256"] = hashlib.sha256(data_a).hexdigest()
             item_b["journal_delta_sha256"] = hashlib.sha256(data_b).hexdigest()
             for variant, item in (("A", item_a), ("B", item_b)):
@@ -781,6 +1126,19 @@ class NvifLifetimeParserTests(unittest.TestCase):
                 ).hexdigest()
                 item["nouveau_module_path"] = str(TEST_MODULE_PATH.resolve())
                 item["nouveau_module_file_sha256"] = TEST_MODULE_SHA256
+            bind_test_deployment(
+                item_a,
+                dso_paths={
+                    "A": root / "A" / "libgallium_drv_video.so",
+                    "B": root / "B" / "libgallium_drv_video.so",
+                },
+            )
+            item_b.update({
+                "deployment_manifest_path": item_a["deployment_manifest_path"],
+                "deployment_manifest_sha256": item_a["deployment_manifest_sha256"],
+                "nvif_capture_sha256": item_a["nvif_capture_sha256"],
+                "nvif_parser_sha256": item_a["nvif_parser_sha256"],
+            })
             item_a["journal_delta_sha256"] = hashlib.sha256(data_a).hexdigest()
             item_b["journal_delta_sha256"] = hashlib.sha256(data_b).hexdigest()
             manifest_a.write_text(json.dumps(item_a), encoding="utf-8")
@@ -809,8 +1167,85 @@ class NvifLifetimeParserTests(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(
             json.loads(output.getvalue())["outcome"],
-            "A_REPRODUCED_B_LIFECYCLE_SUCCEEDED",
+            "B_CORRECTION_PROVEN",
         )
+
+    def test_single_a_cli_emits_reusable_proof_only_for_exact_chain(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal = root / "journal-delta.jsonl"
+            manifest_path = root / "manifest.json"
+            data = baseline_records().encode("utf-8")
+            journal.write_bytes(data)
+            item = proven_a_manifest()
+            item["journal_delta_sha256"] = hashlib.sha256(data).hexdigest()
+            manifest_path.write_text(json.dumps(item), encoding="utf-8")
+            manifest_sha256 = hashlib.sha256(manifest_path.read_bytes()).hexdigest()
+            output = io.StringIO()
+            with (
+                mock.patch.object(parser, "read_manifest", return_value=item),
+                redirect_stdout(output),
+            ):
+                status = parser.main([
+                    "--variant", "A",
+                    "--journal", str(journal),
+                    "--manifest", str(manifest_path),
+                ])
+
+        report = json.loads(output.getvalue())
+        self.assertEqual(status, 0)
+        self.assertEqual(report["outcome"], "A_CHAIN_PROVEN")
+        self.assertEqual(
+            report["identity"]["input_sha256"], parser.EXPECTED_INPUT_SHA256
+        )
+        self.assertEqual(report["manifest_sha256"], manifest_sha256)
+
+    def test_a_proof_files_are_recomputed_before_variant_b(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            journal_path = root / "journal-delta.jsonl"
+            manifest_path = root / "manifest.json"
+            proof_path = root / "proof.json"
+            journal_bytes = baseline_records().encode("utf-8")
+            journal_path.write_bytes(journal_bytes)
+            item = proven_a_manifest()
+            item["journal_delta_sha256"] = hashlib.sha256(journal_bytes).hexdigest()
+            manifest_bytes = json.dumps(item, sort_keys=True).encode("utf-8") + b"\n"
+            manifest_path.write_bytes(manifest_bytes)
+            events = parser.read_events(io.StringIO(journal_bytes.decode("utf-8")))
+            proof = parser.single_a_report(
+                events,
+                item,
+                manifest_bytes,
+                journal_bytes,
+                parser.hard_stop_records(journal_bytes),
+            )
+            proof_path.write_text(json.dumps(proof), encoding="utf-8")
+
+            with mock.patch.object(parser, "read_manifest", return_value=item):
+                validated = parser.validate_a_proof_files(
+                    proof_path=proof_path,
+                    manifest_path=manifest_path,
+                    journal_path=journal_path,
+                )
+
+            self.assertEqual(
+                validated["identity"]["dso_sha256"],
+                parser.EXPECTED_DSO_SHA256["A"],
+            )
+            self.assertEqual(
+                validated["journal_delta_sha256"],
+                hashlib.sha256(journal_bytes).hexdigest(),
+            )
+            proof["outcome"] = "A_CHAIN_NOT_REPRODUCED"
+            proof_path.write_text(json.dumps(proof), encoding="utf-8")
+            with mock.patch.object(parser, "read_manifest", return_value=item):
+                with self.assertRaisesRegex(ValueError, "does not exactly match"):
+                    parser.validate_a_proof_files(
+                        proof_path=proof_path,
+                        manifest_path=manifest_path,
+                        journal_path=journal_path,
+                    )
 
     def test_cli_classifies_workload_hard_stop_end_to_end(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
@@ -831,14 +1266,18 @@ class NvifLifetimeParserTests(unittest.TestCase):
             journal_b.write_bytes(data_b)
             item_a = manifest("A")
             item_b = manifest("B")
+            item_a["termination_reason"] = "bsp-eexist"
+            item_a["workload_returncode"] = -2
             item_a["journal_delta_sha256"] = hashlib.sha256(data_a).hexdigest()
             item_b["journal_delta_sha256"] = hashlib.sha256(data_b).hexdigest()
             item_b["termination_reason"] = "workload-hard-stop"
             item_b["postrun_hard_stops"] = parser.hard_stop_records(data_b)
             item_b["workload_returncode"] = -7
 
+            pair_dso_paths: dict[str, Path] = {}
             for variant, item in (("A", item_a), ("B", item_b)):
                 dso = root / variant / "libgallium_drv_video.so"
+                pair_dso_paths[variant] = dso
                 alias = root / variant / "driver" / "nouveau_drv_video.so"
                 dso.parent.mkdir(parents=True)
                 alias.parent.mkdir(parents=True)
@@ -860,6 +1299,14 @@ class NvifLifetimeParserTests(unittest.TestCase):
                 ).hexdigest()
                 item["nouveau_module_path"] = str(TEST_MODULE_PATH.resolve())
                 item["nouveau_module_file_sha256"] = TEST_MODULE_SHA256
+            bind_test_deployment(item_a, dso_paths=pair_dso_paths)
+            item_b.update({
+                "deployment_manifest_path": item_a["deployment_manifest_path"],
+                "deployment_manifest_sha256": item_a["deployment_manifest_sha256"],
+                "nvif_capture_sha256": item_a["nvif_capture_sha256"],
+                "nvif_parser_sha256": item_a["nvif_parser_sha256"],
+            })
+            for variant, item in (("A", item_a), ("B", item_b)):
                 (root / variant / "manifest.json").write_text(
                     json.dumps(item),
                     encoding="utf-8",
@@ -888,8 +1335,8 @@ class NvifLifetimeParserTests(unittest.TestCase):
                 ])
 
         result = json.loads(output.getvalue())
-        self.assertEqual(result["outcome"], "WORKLOAD_FAILURE")
-        self.assertEqual(status, 4)
+        self.assertEqual(result["outcome"], "A_INCONCLUSIVE")
+        self.assertEqual(status, 3)
 
     def test_cli_returns_nonzero_for_inconclusive_and_kernel_failure(self) -> None:
         cases = (
@@ -914,7 +1361,7 @@ class NvifLifetimeParserTests(unittest.TestCase):
                     "kinds": ["CTXSW_TIMEOUT"],
                     "message": "nouveau fifo: SCHED_ERROR 0a [CTXSW_TIMEOUT]",
                 }],
-                4,
+                3,
             ),
         )
         for name, text_a, text_b, stops_b, expected_status in cases:
