@@ -21,9 +21,48 @@ VMA and CPU mapping exist. It does not call the side-effecting
 
 After the last `nvkm_done()`, the test logs only the cached
 `range_source=last_observed` range. It does not query the VMA until a new
-`nvkm_kmap()` has succeeded. Object pointer values are short-lived diagnostic
-labels; they are not allocation identity across destruction, and matching a
-fault address to a VMA range is numerical address-range correlation only.
+`nvkm_kmap()` has succeeded. Object pointer values in this current log format
+are ignored as identities by the offline parser.
+
+## Offline fault/VMA correlation
+
+`correlate_v3.py` consumes a saved current-boot kernel journal in JSONL form:
+
+```sh
+journalctl -k -b --no-pager -o json > boot-kernel.jsonl
+python3 correlate_v3.py boot-kernel.jsonl > v3-correlation.json
+```
+
+It requires kernel transport, a single boot ID, and monotonic timestamps on
+every diagnostic record. It reconstructs the fault VA from `VAHI:VALO` and
+compares it with VMA ranges reported as `src=current`. Cached
+`src=last_observed` values never create a match. Failed or unavailable
+snapshots during an active-map stage, a changed range while references are
+held, equal timestamps, release windows, overlapping numeric ranges, a missing
+final release boundary between the nested map and reacquisition, and incomplete
+test lifecycles remain inconclusive. The current patch does not log each
+cleanup `nvkm_done()`; the range from `verified` to `destroying` is treated as
+a release transition rather than a proven continuously mapped interval.
+
+`ONE_NUMERIC_ACTIVE_VMA_CANDIDATE` means only that the numeric BAR2 fault VA
+fell within a range reported current during an active map-reference interval.
+It is **not** proof that a particular allocation caused the fault, that the
+hardware used that mapping, or that the fault is related to video. The parsed
+instance address is reported separately and is not used for ownership
+inference. No VMM/PTE state is read by this analysis.
+
+CLI status 0 means at least one BAR2 fault record was parsed and a correlation
+report was emitted; it does not mean the fault was explained. Status 3 means
+there were no fault records to analyze, status 4 means records span multiple
+boots and were not compared, and status 2 means the input failed validation.
+An empty fault set is not evidence of a clean or healthy BAR2 path.
+
+The parser's CPU-only regression suite is:
+
+```sh
+PYTHONDONTWRITEBYTECODE=1 python3 -m unittest -v \
+  validation/nouveau-bar2-vma-diagnostic/tests/test_correlate_v3.py
+```
 
 ## Pinned source and patch
 
@@ -46,8 +85,9 @@ tree with whitespace errors rejected.
 ## Validation and limits
 
 See [`evidence/BUILD-VALIDATION-20261003.md`](evidence/BUILD-VALIDATION-20261003.md)
-for exact CPU test and W=1 build commands, module hashes, and the current
-clean-boot gate result.
+for the earlier CPU test and W=1 build commands and module hashes. The offline
+parser and its separate CPU results are recorded in
+[`evidence/VMA-CORRELATOR-CPU-VALIDATION-20261003.md`](evidence/VMA-CORRELATOR-CPU-VALIDATION-20261003.md).
 
 The enabled module build linked successfully, but the resulting module was
 not installed, signed, loaded, or placed in an initramfs. No GPU selftest or
