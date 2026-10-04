@@ -32,6 +32,16 @@ CONTIGUOUS_ACTIVE_TRANSITIONS = {
     ("nested_acquired", "nested_ref_remaining"),
     ("reacquired", "verified"),
 }
+V3_LIFECYCLE_PREFIX = (
+    "allocated",
+    "kmap_acquired",
+    "nested_acquired",
+    "nested_ref_remaining",
+    "released",
+    "reacquired",
+    "verified",
+)
+V3_CLEANUP_STAGES = ("destroying", "destroyed")
 U64_LIMIT = 1 << 64
 
 
@@ -158,9 +168,15 @@ def parse_records(lines: Iterable[str]) -> tuple[list[VmaEvent], list[FaultEvent
         if marker == VMA_MARKER:
             required = {"vmm", "id", "stage", "src", "va", "len", "rc"}
             missing = required - fields.keys()
+            unexpected = fields.keys() - (required | {"obj"})
             if missing:
                 raise CorrelationInputError(
                     f"line {line_no}: VMA record missing {sorted(missing)}"
+                )
+            if unexpected:
+                raise CorrelationInputError(
+                    f"line {line_no}: VMA record has unexpected fields "
+                    f"{sorted(unexpected)}"
                 )
             if fields["vmm"] != "BAR2":
                 raise CorrelationInputError(
@@ -176,6 +192,11 @@ def parse_records(lines: Iterable[str]) -> tuple[list[VmaEvent], list[FaultEvent
             if stage not in known_stages:
                 raise CorrelationInputError(
                     f"line {line_no}: unknown VMA stage {stage!r}"
+                )
+            if stage == "allocated" and source != "unavailable":
+                raise CorrelationInputError(
+                    f"line {line_no}: allocated stage must begin with "
+                    "src=unavailable"
                 )
             start = _number(fields["va"], "VMA start", base=16)
             size = _number(fields["len"], "VMA size", base=16)
@@ -214,31 +235,66 @@ def parse_records(lines: Iterable[str]) -> tuple[list[VmaEvent], list[FaultEvent
         else:
             required = {"unit", "inst", "valo", "vahi", "type"}
             missing = required - fields.keys()
+            unexpected = fields.keys() - required
             if missing:
                 raise CorrelationInputError(
                     f"line {line_no}: BAR2 fault record missing {sorted(missing)}"
                 )
+            if unexpected:
+                raise CorrelationInputError(
+                    f"line {line_no}: BAR2 fault record has unexpected fields "
+                    f"{sorted(unexpected)}"
+                )
             unit = _number(fields["unit"], "fault unit", base=16)
+            if unit >= (1 << 8):
+                raise CorrelationInputError(
+                    f"line {line_no}: fault unit exceeds 8 bits"
+                )
             if unit != 0x05:
                 raise CorrelationInputError(
                     f"line {line_no}: BAR2 fault marker has non-BAR2 unit {unit:#x}"
                 )
             valo = _number(fields["valo"], "fault VALO", base=16)
             vahi = _number(fields["vahi"], "fault VAHI", base=16)
-            if valo >= (1 << 32) or vahi >= (1 << 32):
-                raise CorrelationInputError(f"line {line_no}: fault VA register exceeds 32 bits")
+            instance = _number(fields["inst"], "fault instance", base=16)
+            fault_type = _number(fields["type"], "fault type", base=16)
+            for label, value in (
+                ("fault INST", instance),
+                ("fault VALO", valo),
+                ("fault VAHI", vahi),
+                ("fault TYPE", fault_type),
+            ):
+                if value >= (1 << 32):
+                    raise CorrelationInputError(
+                        f"line {line_no}: {label} register exceeds 32 bits"
+                    )
             faults.append(
                 FaultEvent(
                     boot_id=boot_id,
                     monotonic_usec=timestamp,
                     sequence=sequence,
                     unit=unit,
-                    instance=_number(fields["inst"], "fault instance", base=16) << 12,
+                    instance=instance << 12,
                     address=(vahi << 32) | valo,
-                    fault_type=_number(fields["type"], "fault type", base=16),
+                    fault_type=fault_type,
                 )
             )
     return vmas, faults
+
+
+def _lifecycle_complete(test_events: list[VmaEvent]) -> bool:
+    """Require a canonical lifecycle prefix followed by complete cleanup.
+
+    The prefix may stop early when the selftest aborts; it may not skip or
+    reorder a stage. Cleanup must still be observed through destruction.
+    """
+    stages = tuple(event.stage for event in test_events)
+    if len(stages) < 3 or stages[-2:] != V3_CLEANUP_STAGES:
+        return False
+    observed_prefix = stages[:-2]
+    if not observed_prefix or len(observed_prefix) > len(V3_LIFECYCLE_PREFIX):
+        return False
+    return observed_prefix == V3_LIFECYCLE_PREFIX[:len(observed_prefix)]
 
 
 def _segments(events: list[VmaEvent]) -> tuple[list[Segment], dict[int, bool]]:
@@ -247,12 +303,12 @@ def _segments(events: list[VmaEvent]) -> tuple[list[Segment], dict[int, bool]]:
         by_test.setdefault(event.test_id, []).append(event)
 
     segments: list[Segment] = []
-    destroyed: dict[int, bool] = {}
+    lifecycle_complete: dict[int, bool] = {}
     for test_id, test_events in by_test.items():
         test_events.sort(key=lambda event: (event.monotonic_usec, event.sequence))
+        lifecycle_complete[test_id] = _lifecycle_complete(test_events)
         current: VmaEvent | None = None
         unavailable_since: VmaEvent | None = None
-        ended = False
         for event in test_events:
             if event.stage in ACTIVE_STAGES:
                 if event.source == "current":
@@ -288,7 +344,6 @@ def _segments(events: list[VmaEvent]) -> tuple[list[Segment], dict[int, bool]]:
                                 )
                             )
                             current = event
-                            ended = False
                             continue
                         if (current.start, current.size) != (event.start, event.size):
                             # A map reference should keep the BAR2 VMA stable.
@@ -307,7 +362,6 @@ def _segments(events: list[VmaEvent]) -> tuple[list[Segment], dict[int, bool]]:
                                 )
                             )
                             current = event
-                            ended = False
                             continue
                         segments.append(
                             Segment(
@@ -322,7 +376,6 @@ def _segments(events: list[VmaEvent]) -> tuple[list[Segment], dict[int, bool]]:
                             )
                         )
                     current = event
-                    ended = False
                 else:
                     if current is not None:
                         segments.append(
@@ -355,7 +408,6 @@ def _segments(events: list[VmaEvent]) -> tuple[list[Segment], dict[int, bool]]:
                     # did not prove a current range. Never extend an older
                     # cached address through this interval.
                     unavailable_since = event
-                    ended = False
             elif event.stage in RELEASE_STAGES:
                 if current is not None:
                     segments.append(
@@ -385,8 +437,6 @@ def _segments(events: list[VmaEvent]) -> tuple[list[Segment], dict[int, bool]]:
                         )
                     )
                     unavailable_since = None
-                if event.stage == "destroyed":
-                    ended = True
         if current is not None:
             segments.append(
                 Segment(
@@ -400,7 +450,6 @@ def _segments(events: list[VmaEvent]) -> tuple[list[Segment], dict[int, bool]]:
                     stage_end=None,
                 )
             )
-            ended = False
         elif unavailable_since is not None:
             segments.append(
                 Segment(
@@ -414,9 +463,7 @@ def _segments(events: list[VmaEvent]) -> tuple[list[Segment], dict[int, bool]]:
                     stage_end=None,
                 )
             )
-            ended = False
-        destroyed[test_id] = ended
-    return segments, destroyed
+    return segments, lifecycle_complete
 
 
 def correlate(lines: Iterable[str]) -> dict[str, object]:
@@ -440,7 +487,7 @@ def correlate(lines: Iterable[str]) -> dict[str, object]:
             "faults": [],
         }
 
-    segments, destroyed = _segments(vmas)
+    segments, lifecycle_complete = _segments(vmas)
     results: list[dict[str, object]] = []
     for fault in sorted(faults, key=lambda event: (event.monotonic_usec, event.sequence)):
         matching: list[Segment] = []
@@ -494,7 +541,7 @@ def correlate(lines: Iterable[str]) -> dict[str, object]:
             outcome = "INCONCLUSIVE_TEST_LIFECYCLE_INCOMPLETE"
             candidates = [asdict(item) for item in open_segments]
         elif unavailable:
-            if any(not destroyed.get(item.test_id, False) for item in unavailable):
+            if any(not lifecycle_complete.get(item.test_id, False) for item in unavailable):
                 outcome = "INCONCLUSIVE_TEST_LIFECYCLE_INCOMPLETE"
             else:
                 outcome = "INCONCLUSIVE_ACTIVE_VMA_UNAVAILABLE"
@@ -502,25 +549,33 @@ def correlate(lines: Iterable[str]) -> dict[str, object]:
         elif changed:
             if any(item.kind == "lifecycle_gap" for item in changed):
                 outcome = "INCONCLUSIVE_VMA_LIFECYCLE_GAP"
+            elif any(not lifecycle_complete.get(item.test_id, False) for item in changed):
+                outcome = "INCONCLUSIVE_TEST_LIFECYCLE_INCOMPLETE"
             else:
                 outcome = "INCONCLUSIVE_VMA_CHANGED_DURING_ACTIVE_MAP"
             candidates = [asdict(item) for item in changed]
         elif transition:
-            outcome = "INCONCLUSIVE_RELEASE_TRANSITION_WINDOW"
+            if any(not lifecycle_complete.get(item.test_id, False) for item in transition):
+                outcome = "INCONCLUSIVE_TEST_LIFECYCLE_INCOMPLETE"
+            else:
+                outcome = "INCONCLUSIVE_RELEASE_TRANSITION_WINDOW"
             candidates = [asdict(item) for item in transition]
         elif len(matching) > 1:
-            outcome = "AMBIGUOUS_MULTIPLE_NUMERIC_VMA_CANDIDATES"
+            if any(not lifecycle_complete.get(item.test_id, False) for item in matching):
+                outcome = "INCONCLUSIVE_TEST_LIFECYCLE_INCOMPLETE"
+            else:
+                outcome = "AMBIGUOUS_MULTIPLE_NUMERIC_VMA_CANDIDATES"
             candidates = [asdict(item) for item in matching]
         elif len(matching) == 1:
             item = matching[0]
-            if not destroyed.get(item.test_id, False):
+            if not lifecycle_complete.get(item.test_id, False):
                 outcome = "INCONCLUSIVE_TEST_LIFECYCLE_INCOMPLETE"
                 candidates = [asdict(item)]
             else:
                 outcome = "ONE_NUMERIC_ACTIVE_VMA_CANDIDATE"
                 candidates = [asdict(item)]
         else:
-            outcome = "NO_ACTIVE_V3_VMA_MATCH"
+            outcome = "NO_OBSERVED_ACTIVE_V3_VMA_MATCH"
             candidates = []
 
         results.append(

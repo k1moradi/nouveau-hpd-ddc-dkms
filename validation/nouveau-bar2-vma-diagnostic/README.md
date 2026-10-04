@@ -40,16 +40,25 @@ compares it with VMA ranges reported as `src=current`. Cached
 snapshots during an active-map stage, a changed range while references are
 held, equal timestamps, release windows, overlapping numeric ranges, a missing
 final release boundary between the nested map and reacquisition, and incomplete
-test lifecycles remain inconclusive. The current patch does not log each
-cleanup `nvkm_done()`; the range from `verified` to `destroying` is treated as
-a release transition rather than a proven continuously mapped interval.
+test lifecycles remain inconclusive. A lifecycle must begin with
+`allocated src=unavailable`, follow the recorded stage transition rules, and
+end with `destroying` then `destroyed`. Valid early selftest failures may go
+from an observed stage directly to cleanup; they are complete failure
+lifecycles, not success lifecycles. The current patch does not log each cleanup
+`nvkm_done()`; the range from `verified` to `destroying` is treated as a
+release transition rather than a proven continuously mapped interval.
 
 `ONE_NUMERIC_ACTIVE_VMA_CANDIDATE` means only that the numeric BAR2 fault VA
 fell within a range reported current during an active map-reference interval.
 It is **not** proof that a particular allocation caused the fault, that the
 hardware used that mapping, or that the fault is related to video. The parsed
 instance address is reported separately and is not used for ownership
-inference. No VMM/PTE state is read by this analysis.
+inference. `NO_OBSERVED_ACTIVE_V3_VMA_MATCH` means no VMA interval present in
+the supplied input contained the numeric fault VA; it does not prove the input
+is a complete journal or that no unobserved mapping existed. No VMM/PTE state
+is read by this analysis. The parser validates the current record field sets,
+including 32-bit register widths, and rejects extra fields until the schema is
+explicitly updated.
 
 CLI status 0 means at least one BAR2 fault record was parsed and a correlation
 report was emitted; it does not mean the fault was explained. Status 3 means
@@ -88,6 +97,9 @@ See [`evidence/BUILD-VALIDATION-20261003.md`](evidence/BUILD-VALIDATION-20261003
 for the earlier CPU test and W=1 build commands and module hashes. The offline
 parser and its separate CPU results are recorded in
 [`evidence/VMA-CORRELATOR-CPU-VALIDATION-20261003.md`](evidence/VMA-CORRELATOR-CPU-VALIDATION-20261003.md).
+The later lifecycle-completeness review correction and updated test counts are
+recorded in
+[`evidence/VMA-CORRELATOR-REVIEW-FOLLOWUP-20261003.md`](evidence/VMA-CORRELATOR-REVIEW-FOLLOWUP-20261003.md).
 
 The enabled module build linked successfully, but the resulting module was
 not installed, signed, loaded, or placed in an initramfs. No GPU selftest or
