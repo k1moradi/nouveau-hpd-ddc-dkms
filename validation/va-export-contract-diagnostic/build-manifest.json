@@ -1,0 +1,89 @@
+{
+  "binary": {
+    "build_id": "5e461d5b18f72a1bf9afa8857ba8693d1bdb881e",
+    "direct_dynamic_dependencies": [
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libavformat.so.62.3.100",
+        "sha256": "727804ca2781f4d2c7a12ab01b3180b7f071e535718c713241b073e58db96868",
+        "soname": "libavformat.so.62"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libavcodec.so.62.11.100",
+        "sha256": "f2f7634772627cd3180700f2c7bfb81377d6367042136a576fea9230c45a0beb",
+        "soname": "libavcodec.so.62"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libavutil.so.60.8.100",
+        "sha256": "56557dd89c99afd4c7c1f62297fc0f4c19ed97e29bd903937fac480d38fbe3a5",
+        "soname": "libavutil.so.60"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libva.so.2.2300.0",
+        "sha256": "4a6b851f244e5d3c0ca08ba6861106050f3caaa631721e3f87d621caeec34065",
+        "soname": "libva.so.2"
+      },
+      {
+        "path": "/usr/lib/x86_64-linux-gnu/libc.so.6",
+        "sha256": "85e64f97e348786a8fb4d9f3d52fec289e2fb86bba20f0731dfe61990525e0f7",
+        "soname": "libc.so.6"
+      }
+    ],
+    "path": "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004-explicit",
+    "runpath": "/usr/lib/x86_64-linux-gnu",
+    "sha256": "f109aa7ed076a1c4082e15573dee877edfc43b463403202c77e60cf672ecfba7",
+    "size_bytes": 27240
+  },
+  "build_command": [
+    "cc",
+    "-std=c11",
+    "-Wall",
+    "-Wextra",
+    "-Werror",
+    "-I/usr/include/x86_64-linux-gnu",
+    "-I/home/keivan/.cache/nouveau-mesa-diag-20260928/sysroot/usr/include",
+    "-I/home/keivan/.cache/vaapi-app-source-review/ffmpeg-n8.0.1",
+    "/home/keivan/nouveau-hpd-ddc-dkms/validation/va-export-contract-diagnostic/va_vp3_export_probe.c",
+    "-L/usr/lib/x86_64-linux-gnu",
+    "-Wl,-rpath,/usr/lib/x86_64-linux-gnu",
+    "-l:libavformat.so.62",
+    "-l:libavcodec.so.62",
+    "-l:libavutil.so.60",
+    "-l:libva.so.2",
+    "-o",
+    "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004-explicit"
+  ],
+  "compiler": {
+    "path": "/usr/bin/x86_64-linux-gnu-gcc-15",
+    "sha256": "b5f1b773a7c733738352000c92a077dc5852a1a2fc6d836b1e411be1e9ec5f88",
+    "version": "x86_64-linux-gnu-gcc-15 (Ubuntu 15.2.0-16ubuntu1) 15.2.0"
+  },
+  "execution_gate": "--execute required; pinned input SHA is checked before VA device creation",
+  "ffmpeg_source_contract": {
+    "config_call": "vaCreateConfig(hwctx->display, matched_va_profile, VAEntrypointVLD, NULL, 0, va_config)",
+    "export_flags": "VA_EXPORT_SURFACE_SEPARATE_LAYERS | VA_EXPORT_SURFACE_READ_ONLY",
+    "export_memory_type": "VA_SURFACE_ATTRIB_MEM_TYPE_DRM_PRIME_2",
+    "files": {
+      "libavcodec/vaapi_decode.c": "dd9db7f515923d288935af0620498cea97054561bce67a7e797d3facc5764586",
+      "libavutil/hwcontext_vaapi.c": "84e9bd59a0cc88a542d3a3692c001251e6c7c833a01390d60244b47843eacd51"
+    },
+    "sync_before_export": true,
+    "tag": "n8.0.1 retained source tree"
+  },
+  "input": {
+    "path": "/home/keivan/test_1080p.mkv",
+    "sha256": "d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2"
+  },
+  "runtime_executed": false,
+  "schema": 2,
+  "source": {
+    "path": "validation/va-export-contract-diagnostic/va_vp3_export_probe.c",
+    "sha256": "19c397eabc9719e66952ef7980129eaefad5f10cc7434a1bebdfed52acaea054"
+  },
+  "status": "COMPILED_NOT_EXECUTED",
+  "superseded_binary": {
+    "build_id": "580f54d10cf2e0e64f2ed5600d55e6ce770fac0d",
+    "path": "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004",
+    "sha256": "69f5ccc437b76f492261f7ec72a29ba7109a7d596088b083a185e817eb04a8bf",
+    "status": "SUPERSEDED_NO_EXECUTION_GATE_DO_NOT_RUN"
+  }
+}
