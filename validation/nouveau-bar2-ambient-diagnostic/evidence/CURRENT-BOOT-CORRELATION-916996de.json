@@ -1,15 +1,15 @@
 {
   "allocation_id_count": 0,
   "boot_id": "916996de28054cf19dd1abb2a60380f8",
+  "diagnostic_sequence_gaps_rejected": true,
   "fault_count": 30,
   "faults": [
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        867460045,
-        867461158
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -33,20 +33,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 1,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": null,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        1320024161,
-        1320024790
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -70,20 +74,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 2,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 452564116,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        1320505140,
-        1320505727
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -107,20 +115,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 3,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 480979,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7358461147,
-        7358461811
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -144,20 +156,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 4,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 6037956007,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7367750114,
-        7367750707
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -181,20 +197,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 5,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 9288967,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7372317104,
-        7372317655
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -218,20 +238,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 6,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 4566990,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7376538234,
-        7376538749
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -255,20 +279,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 7,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 4221130,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7391042454,
-        7391042931
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -292,20 +320,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 8,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 14504220,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7395807110,
-        7395807668
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -329,20 +361,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 9,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 4764656,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7480498040,
-        7480498625
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -366,20 +402,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 10,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 84690930,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7484444078,
-        7484444656
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -403,20 +443,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 11,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 3946038,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7484966066,
-        7484966600
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -440,20 +484,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 12,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 521988,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7499821081,
-        7499821595
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -477,20 +525,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 13,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 14855015,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7500469277,
-        7500469789
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -514,20 +566,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 14,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 648196,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7504358108,
-        7504358654
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -551,20 +607,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 15,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 3888831,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7523681214,
-        7523681752
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -588,20 +648,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 16,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 19323106,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7530109103,
-        7530109664
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -625,20 +689,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 17,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 6427889,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7542438133,
-        7542438748
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -662,20 +730,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 18,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 12329030,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7546466098,
-        7546466640
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -699,20 +771,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 19,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 4027965,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7547253175,
-        7547253698
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -736,20 +812,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 20,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 787077,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7558360053,
-        7558360607
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -773,20 +853,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 21,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 11106878,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7568740133,
-        7568740753
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -810,20 +894,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 22,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 10380080,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7572490252,
-        7572490824
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -847,20 +935,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 23,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 3750119,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7573167099,
-        7573167630
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -884,20 +976,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 24,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 676847,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7577457105,
-        7577457652
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -921,20 +1017,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 25,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 4290006,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7577801170,
-        7577801675
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -958,20 +1058,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 26,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 344065,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7618584088,
-        7618584618
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -995,20 +1099,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 27,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 40782918,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7635607050,
-        7635607668
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -1032,20 +1140,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 28,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 17022962,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7666888296,
-        7666888826
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -1069,20 +1181,24 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 29,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 31281246,
+      "transition_records": [],
+      "zero_ref_candidates": []
     },
     {
       "active_candidates": [],
+      "bar2_reset_generation_at_fault": 0,
+      "bar2_resets_before_fault": 0,
+      "bar2_resets_since_previous_fault": 0,
       "causal_ownership_proven": false,
-      "correlation_observation_window_usec": [
-        7667239100,
-        7667239657
-      ],
       "fault": {
         "access": "READ",
         "channel": -1,
@@ -1106,27 +1222,27 @@
         },
         "reason": "PTE"
       },
-      "fault_event_time_exact": false,
-      "incomplete_or_unreferenced_ranges": [],
+      "fault_ordinal": 30,
+      "incomplete_lifecycles": [],
       "numeric_address_correlation_only": true,
       "outcome": "NO_OBSERVED_BAR2_MAPPING_MATCH",
-      "recently_released_ranges": [],
-      "transition_windows": []
+      "post_fault_recovery_reset_generations": [],
+      "recently_evicted_ranges": [],
+      "reset_in_progress_at_fault": false,
+      "resident_candidates": [],
+      "time_since_previous_fault_usec": 350804,
+      "transition_records": [],
+      "zero_ref_candidates": []
     }
   ],
   "input_completeness_proven": false,
   "mapping_event_count": 0,
   "memory_address_used_for_fault_matching": false,
   "outcomes": {
-    "INCONCLUSIVE_MAPPING_LIFECYCLE": 0,
-    "INCONCLUSIVE_MAPPING_TRANSITION": 0,
-    "MULTIPLE_NUMERIC_ACTIVE_BAR2_MAPPING_CANDIDATES": 0,
-    "NO_OBSERVED_BAR2_MAPPING_MATCH": 30,
-    "ONE_NUMERIC_ACTIVE_BAR2_MAPPING_CANDIDATE": 0,
-    "RECENTLY_RELEASED_BAR2_RANGE": 0
+    "NO_OBSERVED_BAR2_MAPPING_MATCH": 30
   },
   "pointer_identity_used": false,
   "reset_event_count": 0,
   "result_kind": "AMBIENT_BAR2_LIFETIME_CORRELATION_ONLY",
-  "schema_version": 1
+  "schema_version": 2
 }
