@@ -147,6 +147,23 @@ class ProgressiveExportPatchTests(unittest.TestCase):
         self.assertIn("close(desc->objects[i].fd)", export)
         self.assertEqual(export.count("staging_buffer->destroy(staging_buffer)"), 2)
 
+    def test_staging_preserves_coded_storage_extent_and_export_descriptor_size(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mesa-progressive-export-") as temporary:
+            source = self.apply_patch(Path(temporary)).read_text(encoding="utf-8")
+
+        helper_start = source.index("vlVaCreateProgressiveExportBuffer(")
+        helper_end = source.index("\n}\n#endif", helper_start)
+        helper = source[helper_start:helper_end]
+        self.assertIn("tmpl.width = src->width;", helper)
+        self.assertIn("tmpl.height = src->height;", helper)
+
+        export_start = source.index("vlVaExportSurfaceHandle(")
+        export = source[export_start:]
+        self.assertIn("staging_surface.templat = surf->templat;", export)
+        self.assertIn("staging_surface.templat.interlaced = false;", export)
+        self.assertIn("desc->width = surf->templat.width;", export)
+        self.assertIn("desc->height = surf->templat.height;", export)
+
 
 if __name__ == "__main__":
     unittest.main()
