@@ -84,12 +84,34 @@ class CorrelateV3Tests(unittest.TestCase):
         self.assertEqual(item["outcome"], "ONE_NUMERIC_ACTIVE_VMA_CANDIDATE")
         self.assertEqual(item["candidates"][0]["test_id"], 1)
 
-    def test_cached_released_range_never_matches_after_release(self) -> None:
+    def test_fault_during_reacquire_call_is_inconclusive(self) -> None:
         records = complete_test()
         records.append(fault(45))
         item = correlate_module.correlate(records)["faults"][0]
-        self.assertEqual(item["outcome"], "NO_OBSERVED_ACTIVE_V3_VMA_MATCH")
-        self.assertEqual(item["candidates"], [])
+        self.assertEqual(
+            item["outcome"], "INCONCLUSIVE_REACQUIRE_TRANSITION_WINDOW"
+        )
+        self.assertEqual(item["candidates"][0]["kind"], "reacquire_transition")
+
+    def test_fault_during_initial_kmap_call_is_inconclusive(self) -> None:
+        records = complete_test()
+        records.append(fault(7))
+        item = correlate_module.correlate(records)["faults"][0]
+        self.assertEqual(
+            item["outcome"], "INCONCLUSIVE_INITIAL_KMAP_TRANSITION_WINDOW"
+        )
+        self.assertEqual(
+            item["candidates"][0]["kind"], "initial_kmap_transition"
+        )
+
+    def test_fault_during_destroy_call_is_inconclusive(self) -> None:
+        records = complete_test()
+        records.append(fault(75))
+        item = correlate_module.correlate(records)["faults"][0]
+        self.assertEqual(
+            item["outcome"], "INCONCLUSIVE_DESTROY_TRANSITION_WINDOW"
+        )
+        self.assertEqual(item["candidates"][0]["kind"], "destroy_transition")
 
     def test_fault_in_unlogged_last_release_interval_is_inconclusive(self) -> None:
         records = complete_test()
@@ -127,11 +149,19 @@ class CorrelateV3Tests(unittest.TestCase):
         self.assertEqual(item["outcome"], "INCONCLUSIVE_TEST_LIFECYCLE_INCOMPLETE")
 
     def test_failed_current_lookup_does_not_extend_cached_vma_range(self) -> None:
-        records = complete_test()
-        records[2] = vma(
-            1, "nested_acquired", "unavailable", 20, rc=-95
-        )
-        item = correlate_module.correlate([*records, fault(25)])["faults"][0]
+        records = [
+            vma(1, "allocated", "unavailable", 5),
+            vma(1, "kmap_acquired", "unavailable", 10, rc=-95),
+            vma(1, "nested_acquired", "current", 20),
+            vma(1, "nested_ref_remaining", "current", 30),
+            vma(1, "released", "last_observed", 40),
+            vma(1, "reacquired", "current", 50),
+            vma(1, "verified", "current", 60),
+            vma(1, "destroying", "last_observed", 70),
+            vma(1, "destroyed", "last_observed", 80),
+            fault(15),
+        ]
+        item = correlate_module.correlate(records)["faults"][0]
         self.assertEqual(item["outcome"], "INCONCLUSIVE_ACTIVE_VMA_UNAVAILABLE")
         self.assertEqual(item["candidates"][0]["kind"], "unavailable")
 
@@ -222,6 +252,41 @@ class CorrelateV3Tests(unittest.TestCase):
             item["outcome"], "INCONCLUSIVE_RELEASE_TRANSITION_WINDOW"
         )
 
+    def test_released_cannot_be_terminal_early_failure_stage(self) -> None:
+        records = [
+            vma(1, "allocated", "unavailable", 5),
+            vma(1, "kmap_acquired", "current", 10),
+            vma(1, "nested_acquired", "current", 20),
+            vma(1, "nested_ref_remaining", "current", 30),
+            vma(1, "released", "last_observed", 40),
+            vma(1, "destroying", "last_observed", 50),
+            vma(1, "destroyed", "last_observed", 60),
+            fault(15),
+        ]
+        item = correlate_module.correlate(records)["faults"][0]
+        self.assertEqual(
+            item["outcome"], "INCONCLUSIVE_TEST_LIFECYCLE_INCOMPLETE"
+        )
+
+    def test_fault_in_impossible_released_to_destroying_gap_is_inconclusive(self) -> None:
+        records = [
+            vma(1, "allocated", "unavailable", 5),
+            vma(1, "kmap_acquired", "current", 10),
+            vma(1, "nested_acquired", "current", 20),
+            vma(1, "nested_ref_remaining", "current", 30),
+            vma(1, "released", "last_observed", 40),
+            vma(1, "destroying", "last_observed", 50),
+            vma(1, "destroyed", "last_observed", 60),
+            fault(45),
+        ]
+        item = correlate_module.correlate(records)["faults"][0]
+        self.assertEqual(
+            item["outcome"], "INCONCLUSIVE_TEST_LIFECYCLE_INCOMPLETE"
+        )
+        self.assertEqual(
+            item["candidates"][0]["kind"], "invalid_stage_transition"
+        )
+
     def test_allocated_stage_must_have_unavailable_source(self) -> None:
         with self.assertRaisesRegex(
             correlate_module.CorrelationInputError,
@@ -229,6 +294,69 @@ class CorrelateV3Tests(unittest.TestCase):
         ):
             correlate_module.correlate(
                 [vma(1, "allocated", "last_observed", 5)]
+            )
+
+    def test_unavailable_active_snapshot_requires_failed_lookup(self) -> None:
+        with self.assertRaisesRegex(
+            correlate_module.CorrelationInputError,
+            "unavailable active lookup requires nonzero rc",
+        ):
+            correlate_module.correlate(
+                [
+                    vma(1, "allocated", "unavailable", 5),
+                    vma(1, "kmap_acquired", "unavailable", 10, rc=0),
+                ]
+            )
+
+    def test_last_observed_requires_prior_current_snapshot(self) -> None:
+        with self.assertRaisesRegex(
+            correlate_module.CorrelationInputError,
+            "last_observed has no prior current snapshot",
+        ):
+            correlate_module.correlate(
+                [
+                    vma(1, "allocated", "unavailable", 5),
+                    vma(1, "kmap_acquired", "last_observed", 10, rc=-5),
+                ]
+            )
+
+    def test_unavailable_after_current_snapshot_is_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            correlate_module.CorrelationInputError,
+            "unavailable follows a cached current snapshot",
+        ):
+            correlate_module.correlate(
+                [
+                    vma(1, "allocated", "unavailable", 5),
+                    vma(1, "kmap_acquired", "current", 10),
+                    vma(1, "nested_acquired", "unavailable", 20, rc=-95),
+                ]
+            )
+
+    def test_nonrefresh_stage_requires_zero_lookup_result(self) -> None:
+        with self.assertRaisesRegex(
+            correlate_module.CorrelationInputError,
+            "non-refresh stage released requires rc=0",
+        ):
+            correlate_module.correlate(
+                [
+                    vma(1, "allocated", "unavailable", 5),
+                    vma(1, "kmap_acquired", "current", 10),
+                    vma(1, "released", "last_observed", 20, rc=-5),
+                ]
+            )
+
+    def test_nonrefresh_stage_source_must_match_cached_snapshot_state(self) -> None:
+        with self.assertRaisesRegex(
+            correlate_module.CorrelationInputError,
+            "released source should be last_observed, got unavailable",
+        ):
+            correlate_module.correlate(
+                [
+                    vma(1, "allocated", "unavailable", 5),
+                    vma(1, "kmap_acquired", "current", 10),
+                    vma(1, "released", "unavailable", 20),
+                ]
             )
 
     def test_unobserved_vma_input_is_not_global_negative_proof(self) -> None:

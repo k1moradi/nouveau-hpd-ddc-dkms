@@ -19,10 +19,12 @@ BAR2 VMA only while the memory object's map refcount is positive and both the
 VMA and CPU mapping exist. It does not call the side-effecting
 `nvkm_memory_bar2()` helper.
 
-After the last `nvkm_done()`, the test logs only the cached
-`range_source=last_observed` range. It does not query the VMA until a new
-`nvkm_kmap()` has succeeded. Object pointer values in this current log format
-are ignored as identities by the offline parser.
+Non-refresh records after `nvkm_done()` use the last observed range when one
+exists, otherwise `src=unavailable`; they do not query the VMA. The stage log
+after a `nvkm_kmap()` attempt may query the accessor, but the callback reports
+`src=current` only if its locked checks see an active map ref, VMA, and CPU
+mapping. Object pointer values in this current log format are ignored as
+identities by the offline parser.
 
 ## Offline fault/VMA correlation
 
@@ -38,15 +40,35 @@ every diagnostic record. It reconstructs the fault VA from `VAHI:VALO` and
 compares it with VMA ranges reported as `src=current`. Cached
 `src=last_observed` values never create a match. Failed or unavailable
 snapshots during an active-map stage, a changed range while references are
-held, equal timestamps, release windows, overlapping numeric ranges, a missing
-final release boundary between the nested map and reacquisition, and incomplete
-test lifecycles remain inconclusive. A lifecycle must begin with
-`allocated src=unavailable`, follow the recorded stage transition rules, and
-end with `destroying` then `destroyed`. Valid early selftest failures may go
-from an observed stage directly to cleanup; they are complete failure
-lifecycles, not success lifecycles. The current patch does not log each cleanup
-`nvkm_done()`; the range from `verified` to `destroying` is treated as a
-release transition rather than a proven continuously mapped interval.
+held, equal timestamps, transition windows, overlapping numeric ranges, a
+missing final release boundary between the nested map and reacquisition, and
+incomplete test lifecycles remain inconclusive. A lifecycle must begin with
+`allocated src=unavailable`, follow legal stage transitions, and end with
+`destroying` then `destroyed`. Early failure cleanup is allowed only from a
+reachable stage; in particular, `released` cannot go directly to cleanup
+because the patched selftest calls and logs `nvkm_kmap()` reacquisition before
+any later failure path.
+
+The correlator identifies three source-visible transition windows:
+
+| Edge | Outcome | Why the interval is unresolved |
+|---|---|---|
+| `allocated` → `kmap_acquired` | `INCONCLUSIVE_INITIAL_KMAP_TRANSITION_WINDOW` | The first VMA snapshot is logged only after `nvkm_kmap()` returns. |
+| `released` → `reacquired` | `INCONCLUSIVE_REACQUIRE_TRANSITION_WINDOW` | The mapping may be absent or may have become active before the reacquisition record. |
+| `destroying` → `destroyed` | `INCONCLUSIVE_DESTROY_TRANSITION_WINDOW` | The memory unref and destruction occur between these records. |
+
+These labels identify timing gaps only. They do not establish that a fault
+belongs to the selftest or a particular memory object. Other impossible stage
+edges are reported as `INCONCLUSIVE_TEST_LIFECYCLE_INCOMPLETE`. The kernel
+patch does not log each cleanup `nvkm_done()`; the range from the last active
+snapshot to `destroying` is treated as a release transition, not as a proven
+continuously mapped interval.
+
+The parser also enforces the logger's `src`/`rc` contract per test ID:
+`allocated` and non-refresh stages report `rc=0`; `current` means a successful
+refresh; `last_observed` means a failed refresh after a current snapshot was
+seen; and `unavailable` means a failed refresh before any current snapshot.
+Cached snapshot state is not reset during one test ID.
 
 `ONE_NUMERIC_ACTIVE_VMA_CANDIDATE` means only that the numeric BAR2 fault VA
 fell within a range reported current during an active map-reference interval.
@@ -101,7 +123,11 @@ The later lifecycle-completeness review correction and updated test counts are
 recorded in
 [`evidence/VMA-CORRELATOR-REVIEW-FOLLOWUP-20261003.md`](evidence/VMA-CORRELATOR-REVIEW-FOLLOWUP-20261003.md).
 
-The enabled module build linked successfully, but the resulting module was
-not installed, signed, loaded, or placed in an initramfs. No GPU selftest or
-VA-API workload ran. This is correlation instrumentation, not a BAR2/PTE
-repair. `main` remains on HOLD.
+The latest transition-window and source/return-code regression results are
+recorded in
+[`evidence/VMA-CORRELATOR-TRANSITION-VALIDATION-20261004.md`](evidence/VMA-CORRELATOR-TRANSITION-VALIDATION-20261004.md).
+The earlier enabled module build linked successfully, but the resulting
+module was not installed, signed, loaded, or placed in an initramfs. A clean
+full diagnostic-disabled module link and final deployment manifest remain
+pre-deployment gates. No GPU selftest or VA-API workload ran. This is
+correlation instrumentation, not a BAR2/PTE repair. `main` remains on HOLD.

@@ -32,16 +32,36 @@ CONTIGUOUS_ACTIVE_TRANSITIONS = {
     ("nested_acquired", "nested_ref_remaining"),
     ("reacquired", "verified"),
 }
-V3_LIFECYCLE_PREFIX = (
+V3_CLEANUP_STAGES = ("destroying", "destroyed")
+V3_VALID_CLEANUP_PREDECESSORS = {
     "allocated",
     "kmap_acquired",
     "nested_acquired",
     "nested_ref_remaining",
-    "released",
     "reacquired",
     "verified",
-)
-V3_CLEANUP_STAGES = ("destroying", "destroyed")
+}
+V3_ALLOWED_NEXT_STAGES = {
+    "allocated": {"kmap_acquired", "destroying"},
+    "kmap_acquired": {"nested_acquired", "destroying"},
+    "nested_acquired": {"nested_ref_remaining", "destroying"},
+    "nested_ref_remaining": {"released", "destroying"},
+    "released": {"reacquired"},
+    "reacquired": {"verified", "destroying"},
+    "verified": {"destroying"},
+    "destroying": {"destroyed"},
+    "destroyed": set(),
+}
+V3_TRANSITION_KIND_BY_EDGE = {
+    ("allocated", "kmap_acquired"): "initial_kmap_transition",
+    ("released", "reacquired"): "reacquire_transition",
+    ("destroying", "destroyed"): "destroy_transition",
+}
+V3_TRANSITION_OUTCOME_BY_KIND = {
+    "initial_kmap_transition": "INCONCLUSIVE_INITIAL_KMAP_TRANSITION_WINDOW",
+    "reacquire_transition": "INCONCLUSIVE_REACQUIRE_TRANSITION_WINDOW",
+    "destroy_transition": "INCONCLUSIVE_DESTROY_TRANSITION_WINDOW",
+}
 U64_LIMIT = 1 << 64
 
 
@@ -138,6 +158,70 @@ def _fields(message: str, marker: str, line_no: int) -> dict[str, str]:
             )
         fields[key] = value
     return fields
+
+
+def _validate_vma_source_contract(events: list[VmaEvent]) -> None:
+    """Validate src/rc against the logger's refresh and cache semantics."""
+    by_test: dict[int, list[VmaEvent]] = {}
+    for event in events:
+        by_test.setdefault(event.test_id, []).append(event)
+
+    for test_id, test_events in by_test.items():
+        test_events.sort(key=lambda event: (event.monotonic_usec, event.sequence))
+        # A last_observed source must be justified by a prior current snapshot
+        # in this test's supplied journal records. Missing history is not
+        # silently filled in from pointer or address reuse assumptions.
+        cached_snapshot = False
+
+        for event in test_events:
+            if event.stage == "allocated":
+                if event.source != "unavailable" or event.lookup_rc != 0:
+                    raise CorrelationInputError(
+                        f"test {test_id}: allocated requires src=unavailable and rc=0"
+                    )
+                cached_snapshot = False
+                continue
+
+            if event.stage in ACTIVE_STAGES:
+                if event.source == "current":
+                    # The record parser already requires rc=0 and a nonempty
+                    # range for a current snapshot.
+                    cached_snapshot = True
+                elif event.source == "last_observed":
+                    if event.lookup_rc == 0:
+                        raise CorrelationInputError(
+                            f"test {test_id}: last_observed active lookup requires nonzero rc"
+                        )
+                    if not cached_snapshot:
+                        raise CorrelationInputError(
+                            f"test {test_id}: last_observed has no prior current snapshot"
+                        )
+                    cached_snapshot = True
+                else:  # unavailable
+                    if event.lookup_rc == 0:
+                        raise CorrelationInputError(
+                            f"test {test_id}: unavailable active lookup requires nonzero rc"
+                        )
+                    if cached_snapshot:
+                        raise CorrelationInputError(
+                            f"test {test_id}: unavailable follows a cached current snapshot"
+                        )
+                    cached_snapshot = False
+                continue
+
+            if event.lookup_rc != 0:
+                raise CorrelationInputError(
+                    f"test {test_id}: non-refresh stage {event.stage} requires rc=0"
+                )
+
+            expected_source = (
+                "last_observed" if cached_snapshot else "unavailable"
+            )
+            if event.source != expected_source:
+                raise CorrelationInputError(
+                    f"test {test_id}: {event.stage} source should be "
+                    f"{expected_source}, got {event.source}"
+                )
 
 
 def parse_records(lines: Iterable[str]) -> tuple[list[VmaEvent], list[FaultEvent]]:
@@ -279,22 +363,23 @@ def parse_records(lines: Iterable[str]) -> tuple[list[VmaEvent], list[FaultEvent
                     fault_type=fault_type,
                 )
             )
+    _validate_vma_source_contract(vmas)
     return vmas, faults
 
 
 def _lifecycle_complete(test_events: list[VmaEvent]) -> bool:
-    """Require a canonical lifecycle prefix followed by complete cleanup.
-
-    The prefix may stop early when the selftest aborts; it may not skip or
-    reorder a stage. Cleanup must still be observed through destruction.
-    """
+    """Require a legal selftest path, including a reachable cleanup edge."""
     stages = tuple(event.stage for event in test_events)
     if len(stages) < 3 or stages[-2:] != V3_CLEANUP_STAGES:
         return False
-    observed_prefix = stages[:-2]
-    if not observed_prefix or len(observed_prefix) > len(V3_LIFECYCLE_PREFIX):
+    if stages[0] != "allocated":
         return False
-    return observed_prefix == V3_LIFECYCLE_PREFIX[:len(observed_prefix)]
+    if stages[-3] not in V3_VALID_CLEANUP_PREDECESSORS:
+        return False
+    return all(
+        right in V3_ALLOWED_NEXT_STAGES.get(left, set())
+        for left, right in zip(stages, stages[1:])
+    )
 
 
 def _segments(events: list[VmaEvent]) -> tuple[list[Segment], dict[int, bool]]:
@@ -307,6 +392,47 @@ def _segments(events: list[VmaEvent]) -> tuple[list[Segment], dict[int, bool]]:
     for test_id, test_events in by_test.items():
         test_events.sort(key=lambda event: (event.monotonic_usec, event.sequence))
         lifecycle_complete[test_id] = _lifecycle_complete(test_events)
+
+        for previous, event in zip(test_events, test_events[1:]):
+            edge = (previous.stage, event.stage)
+            transition_kind = V3_TRANSITION_KIND_BY_EDGE.get(edge)
+            if transition_kind is not None:
+                segments.append(
+                    Segment(
+                        test_id=test_id,
+                        start=None,
+                        size=None,
+                        start_usec=previous.monotonic_usec,
+                        end_usec=event.monotonic_usec,
+                        kind=transition_kind,
+                        stage_start=previous.stage,
+                        stage_end=event.stage,
+                    )
+                )
+            elif event.stage not in V3_ALLOWED_NEXT_STAGES.get(previous.stage, set()):
+                # Current-to-current gaps are emitted below with their existing
+                # more specific classification. Other impossible edges need
+                # an explicit temporal interval so they cannot look like an
+                # ordinary no-match result.
+                current_pair_handled = (
+                    previous.stage in ACTIVE_STAGES
+                    and event.stage in ACTIVE_STAGES
+                    and previous.source == "current"
+                    and event.source == "current"
+                )
+                if not current_pair_handled:
+                    segments.append(
+                        Segment(
+                            test_id=test_id,
+                            start=None,
+                            size=None,
+                            start_usec=previous.monotonic_usec,
+                            end_usec=event.monotonic_usec,
+                            kind="invalid_stage_transition",
+                            stage_start=previous.stage,
+                            stage_end=event.stage,
+                        )
+                    )
         current: VmaEvent | None = None
         unavailable_since: VmaEvent | None = None
         for event in test_events:
@@ -495,12 +621,30 @@ def correlate(lines: Iterable[str]) -> dict[str, object]:
         open_segments: list[Segment] = []
         unavailable: list[Segment] = []
         changed: list[Segment] = []
+        temporal_transitions: list[Segment] = []
+        invalid_lifecycle: list[Segment] = []
         boundary = False
         for segment in segments:
             end = segment.end_usec
             in_time = fault.monotonic_usec > segment.start_usec and (
                 end is None or fault.monotonic_usec < end
             )
+            if segment.kind in V3_TRANSITION_OUTCOME_BY_KIND:
+                if fault.monotonic_usec == segment.start_usec or (
+                    end is not None and fault.monotonic_usec == end
+                ):
+                    boundary = True
+                elif in_time:
+                    temporal_transitions.append(segment)
+                continue
+            if segment.kind == "invalid_stage_transition":
+                if fault.monotonic_usec == segment.start_usec or (
+                    end is not None and fault.monotonic_usec == end
+                ):
+                    boundary = True
+                elif in_time:
+                    invalid_lifecycle.append(segment)
+                continue
             if segment.kind in {
                 "unavailable", "unavailable_open", "vma_changed", "lifecycle_gap"
             }:
@@ -537,6 +681,20 @@ def correlate(lines: Iterable[str]) -> dict[str, object]:
         if boundary:
             outcome = "INCONCLUSIVE_EQUAL_TIMESTAMP_ORDER"
             candidates: list[dict[str, object]] = []
+        elif invalid_lifecycle:
+            outcome = "INCONCLUSIVE_TEST_LIFECYCLE_INCOMPLETE"
+            candidates = [asdict(item) for item in invalid_lifecycle]
+        elif temporal_transitions:
+            outcomes = {
+                V3_TRANSITION_OUTCOME_BY_KIND[item.kind]
+                for item in temporal_transitions
+            }
+            outcome = (
+                outcomes.pop()
+                if len(outcomes) == 1
+                else "INCONCLUSIVE_OVERLAPPING_V3_TRANSITIONS"
+            )
+            candidates = [asdict(item) for item in temporal_transitions]
         elif open_segments:
             outcome = "INCONCLUSIVE_TEST_LIFECYCLE_INCOMPLETE"
             candidates = [asdict(item) for item in open_segments]
