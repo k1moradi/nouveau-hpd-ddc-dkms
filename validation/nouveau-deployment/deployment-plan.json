@@ -1,0 +1,96 @@
+{
+  "schema": 1,
+  "expected_review_branch": "review/gk104-vaapi-selftest-v8-20261002",
+  "expected_main_commit": "7b44b1c1e282eac7c54c1cfa8c758118cd66312c",
+  "kernel_release": "7.0.0-34-generic",
+  "kernel_source_archive_sha256": "a874e1fb08d2ee695b08e0c8ce6fd2c76a4bf7ffa98882fbabd233380ef8a85a",
+  "patch_sha256": {
+    "0009-drm-nouveau-log-nvif-duplicate-layer.patch": "442b14bfb53201dc7c9e7ac8bcfd6a1f74bb94280a8d766ffc119bcf20d327fc",
+    "0010-drm-nouveau-correlate-instmem-vma-selftest.patch": "472886814c7dd67ff2685bc50791030f24f4267f6a22be16f57ce5c9e1b4818e"
+  },
+  "expected_srcversion": "936407678F3DA1E8515F5EC",
+  "expected_vermagic": "7.0.0-34-generic SMP preempt mod_unload modversions",
+  "module_install_path": "/lib/modules/7.0.0-34-generic/updates/dkms/nouveau.ko.zst",
+  "initramfs_path": "/boot/initrd.img-7.0.0-34-generic",
+  "module_parameters": {
+    "diag_ctxsw": "N"
+  },
+  "mesa_variants": {
+    "A": {
+      "path": "/home/keivan/nouveau-vaapi-app-validation/mesa-nvif-lifetime-ab-build-20261004-pointer-free/A/libgallium_drv_video.so",
+      "sha256": "2a23055f8fb06d67f43b3c0e046111758ecc21b3fa285516c401cbcd2f3e9b7a"
+    },
+    "B": {
+      "path": "/home/keivan/nouveau-vaapi-app-validation/mesa-nvif-lifetime-ab-build-20261004-pointer-free/B/libgallium_drv_video.so",
+      "sha256": "4b334f9ee31d54ee8fc4c043889c9c554e02fb665a62ee29ff8d1af735dce152"
+    }
+  },
+  "tools": {
+    "supervisor": {
+      "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/detached-mpv-supervisor/detached_mpv_supervisor.py",
+      "sha256": "933a39ca4cdd164a8d74600b3f5d0e0e84bcbc18aadf0f8e4cb2f2c4b032b20e"
+    },
+    "bar2_correlator": {
+      "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/nouveau-bar2-vma-diagnostic/correlate_v3.py",
+      "sha256": "3b90b9d47fc394f33194e82070ea3fbd22a457dddb6a753e90dbf8b1071483dd"
+    },
+    "nvif_capture": {
+      "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/mesa-nvif-lifetime-diagnostic/capture_nvif_lifetime_run.py",
+      "sha256": "ae0e37d72753f629c4e0989cbd132a10c13c275b4483f1cb7734bb9f8ad7f691"
+    },
+    "nvif_parser": {
+      "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/mesa-nvif-lifetime-diagnostic/parse_nvif_lifetime_ab.py",
+      "sha256": "5a697d37e421df186bd75db742a558118f7106e11dcf6699c7a7a059d126fd0d"
+    },
+    "nvif_profile": {
+      "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/mesa-nvif-lifetime-diagnostic/runtime-profile.json",
+      "sha256": "697f1192da6c8e02cd63cbcad89dc2ba7453d0dff79990b9dc170ad951693438"
+    },
+    "pixel_capture": {
+      "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/late-pixelation/capture_compare_nv12.py",
+      "sha256": "79ba66cd1ddd3333d004aa3483bb47ab9da89d469bebec54f5a0417d88bb65cf"
+    },
+    "va_export_probe": {
+      "path": "/home/keivan/nouveau-vaapi-app-validation/va-vp3-export-probe-20261004-explicit",
+      "sha256": "f109aa7ed076a1c4082e15573dee877edfc43b463403202c77e60cf672ecfba7"
+    },
+    "va_export_probe_source": {
+      "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/va-export-contract-diagnostic/va_vp3_export_probe.c",
+      "sha256": "19c397eabc9719e66952ef7980129eaefad5f10cc7434a1bebdfed52acaea054"
+    },
+    "va_export_probe_build_manifest": {
+      "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/va-export-contract-diagnostic/build-manifest.json",
+      "sha256": "c8a8e36375690691d50f55ac0d8d481e46667edccf548e87962416134dda07c7"
+    },
+    "mesa_ab_manifest": {
+      "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/mesa-nvif-lifetime-diagnostic/evidence/linked-ab-20261004-pointer-free/manifest.json",
+      "sha256": "a6f70d4ebf9859e7434e32c54d080ab422e0236e3a3e419f6584da744ff4174a"
+    },
+    "mesa_nvif_diagnostic_patch": {
+      "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/mesa-nvif-lifetime-diagnostic/patches/0001-nouveau-nvif-bsp-lifetime-diagnostic.patch",
+      "sha256": "23e952f8c4d61c0a2ae556029bf45e21e1c718fc23570c7abccaa640c349a81a"
+    },
+    "admission_check": {
+      "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/nouveau-deployment/admit_run.py",
+      "sha256": "12a5dce0364c14232300f5355bfde50c1209f7870a2ead1f586ad78e52356f33"
+    },
+    "deployment_finalizer": {
+      "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/nouveau-deployment/finalize_install.py",
+      "sha256": "7f47a40c93bb11aae6820081f6dafba42b7348fae01d6ab422fb10bd2d8e55e9"
+    },
+    "retained_module_builder": {
+      "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/nouveau-deployment/build_retained_module.py",
+      "sha256": "3a8780be999e0c396efb30c36cea7004c55f126aa371755bdbafa58d86fe37ab"
+    }
+  },
+  "input": {
+    "path": "/home/keivan/test_1080p.mkv",
+    "sha256": "d1bab5275bcb585791fbfb15c801c1aab582256e7b7fca280c76f78a0a1c1ec2"
+  },
+  "software_reference": {
+    "manifest_path": "/home/keivan/nouveau-vaapi-app-validation/late-pixelation-sw-530-20261004/manifest.json",
+    "manifest_sha256": "b05d433fde7d37581464cafe356c68de6eab20a672ffa9c36b91758eb54b291d",
+    "container_path": "/home/keivan/nouveau-vaapi-app-validation/late-pixelation-sw-530-20261004/software.nut",
+    "container_sha256": "8c53f7ea946dbf36d9588aae95051e9f2b9bfbd92dfe83806ace8744bb029aa1"
+  }
+}
