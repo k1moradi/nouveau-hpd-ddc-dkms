@@ -76,7 +76,7 @@
     },
     "admission_check": {
       "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/nouveau-deployment/admit_run.py",
-      "sha256": "12a5dce0364c14232300f5355bfde50c1209f7870a2ead1f586ad78e52356f33"
+      "sha256": "66ba598043da4b79d00993728e4dc8f6c0c2dbdba37e30063963054076e0bf24"
     },
     "deployment_finalizer": {
       "path": "/home/keivan/nouveau-hpd-ddc-dkms/validation/nouveau-deployment/finalize_install.py",

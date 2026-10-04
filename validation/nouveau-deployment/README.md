@@ -89,14 +89,15 @@ manifest/container hashes.
 
 ## 3. One-command post-boot admission
 
-From a terminal inside the logged-in local X11 desktop, do not run the script
-with `sudo`. Refresh the noninteractive privilege timestamp for its one
-root-only module-parameter read, then run the admission check:
+From a terminal inside the logged-in local X11 desktop, run the checker through
+`sudo` while preserving that session's identity and display variables. The
+checker validates `SUDO_UID` against the active physical X11 session before it
+uses root access to inspect the mode-restricted initramfs:
 
 ```sh
-sudo -v
 cd /home/keivan/nouveau-hpd-ddc-dkms
-PYTHONDONTWRITEBYTECODE=1 python3 validation/nouveau-deployment/admit_run.py \
+sudo --preserve-env=DISPLAY,XAUTHORITY,XDG_SESSION_ID,XDG_SESSION_TYPE,XDG_RUNTIME_DIR \
+  env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 validation/nouveau-deployment/admit_run.py \
   --manifest /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-reboot-ready/deployment-manifest.json
 ```
 
@@ -144,7 +145,8 @@ RUN_DIR=/home/keivan/nouveau-vaapi-app-validation/first-reviewed-boot-$(cat /pro
 mkdir -m 700 "$RUN_DIR"
 SELFTEST_DIR=/sys/kernel/debug/dri/<verified-minor>
 admit_now() {
-  PYTHONDONTWRITEBYTECODE=1 python3 validation/nouveau-deployment/admit_run.py \
+  sudo --preserve-env=DISPLAY,XAUTHORITY,XDG_SESSION_ID,XDG_SESSION_TYPE,XDG_RUNTIME_DIR \
+    env PYTHONDONTWRITEBYTECODE=1 /usr/bin/python3 validation/nouveau-deployment/admit_run.py \
     --manifest /home/keivan/nouveau-vaapi-app-validation/v3-deploy-20261004-reboot-ready/deployment-manifest.json
 }
 archive_kernel() {

@@ -275,6 +275,77 @@ class AdmissionTests(unittest.TestCase):
         self.assertIn("desktop session belongs to a different Unix user", errors)
         self.assertIn("desktop session is not attached to a real VT", errors)
 
+    def test_sudo_admission_checks_the_invoking_desktop_users_uid(self):
+        env = {
+            "XDG_SESSION_ID": "7",
+            "DISPLAY": ":0",
+            "SUDO_UID": "1000",
+        }
+        session = (
+            "Active=yes\nRemote=no\nType=x11\nClass=user\nSeat=seat0\n"
+            "User=1000\nVTNr=2\nDisplay=:0\n"
+        )
+
+        def fake_command(argv, timeout=20):
+            if argv[0] == "loginctl":
+                return subprocess.CompletedProcess(argv, 0, session, "")
+            return subprocess.CompletedProcess(argv, 0, "X11 reachable", "")
+
+        with (
+            patch.object(ADMISSION.os, "geteuid", return_value=0),
+            patch.object(ADMISSION, "command", side_effect=fake_command),
+        ):
+            self.assertEqual(ADMISSION.session_errors(env), [])
+
+    def test_root_admission_without_sudo_uid_fails_closed(self):
+        env = {"XDG_SESSION_ID": "7", "DISPLAY": ":0"}
+        session = (
+            "Active=yes\nRemote=no\nType=x11\nClass=user\nSeat=seat0\n"
+            "User=1000\nVTNr=2\nDisplay=:0\n"
+        )
+
+        def fake_command(argv, timeout=20):
+            if argv[0] == "loginctl":
+                return subprocess.CompletedProcess(argv, 0, session, "")
+            return subprocess.CompletedProcess(argv, 0, "X11 reachable", "")
+
+        with (
+            patch.object(ADMISSION.os, "geteuid", return_value=0),
+            patch.object(ADMISSION, "command", side_effect=fake_command),
+        ):
+            errors = ADMISSION.session_errors(env)
+        self.assertIn(
+            "root admission requires a non-root SUDO_UID from the desktop user",
+            errors,
+        )
+
+    def test_root_admission_with_root_sudo_uid_fails_closed(self):
+        env = {
+            "XDG_SESSION_ID": "7",
+            "DISPLAY": ":0",
+            "SUDO_UID": "0",
+        }
+        session = (
+            "Active=yes\nRemote=no\nType=x11\nClass=user\nSeat=seat0\n"
+            "User=0\nVTNr=2\nDisplay=:0\n"
+        )
+
+        def fake_command(argv, timeout=20):
+            if argv[0] == "loginctl":
+                return subprocess.CompletedProcess(argv, 0, session, "")
+            return subprocess.CompletedProcess(argv, 0, "X11 reachable", "")
+
+        with (
+            patch.object(ADMISSION.os, "geteuid", return_value=0),
+            patch.object(ADMISSION, "command", side_effect=fake_command),
+        ):
+            errors = ADMISSION.session_errors(env)
+
+        self.assertIn(
+            "root admission requires a non-root SUDO_UID from the desktop user",
+            errors,
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

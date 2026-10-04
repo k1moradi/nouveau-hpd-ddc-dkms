@@ -78,6 +78,16 @@ def verify_execution_identity(
 def session_errors(env: dict[str, str] | None = None) -> list[str]:
     env = os.environ if env is None else env
     errors: list[str] = []
+    expected_uid = os.getuid()
+    if os.geteuid() == 0:
+        sudo_uid = env.get("SUDO_UID", "")
+        if not sudo_uid.isdecimal() or int(sudo_uid) == 0:
+            errors.append(
+                "root admission requires a non-root SUDO_UID from the desktop user"
+            )
+            expected_uid = None
+        else:
+            expected_uid = int(sudo_uid)
     session_id = env.get("XDG_SESSION_ID")
     display = env.get("DISPLAY")
     if not session_id:
@@ -107,7 +117,7 @@ def session_errors(env: dict[str, str] | None = None) -> list[str]:
             for key, value in required.items():
                 if props.get(key) != value:
                     errors.append(f"desktop session {key}={props.get(key)!r}, expected {value!r}")
-            if props.get("User") != str(os.getuid()):
+            if expected_uid is not None and props.get("User") != str(expected_uid):
                 errors.append("desktop session belongs to a different Unix user")
             try:
                 if int(props.get("VTNr", "0")) <= 0:
