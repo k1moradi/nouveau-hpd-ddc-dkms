@@ -100,6 +100,12 @@ path, the command response, and the saved file SHA-256. The two positions
 bracket screenshot creation; they are presentation-time bounds, not
 decoded-frame PTS.
 
+The result record reports decode_run_complete,
+screenshot_evidence_complete, and visible_video_confirmation=USER_REQUIRED
+separately. A missing screenshot does not by itself turn an otherwise valid
+bounded decode run into failure; screenshots are evidence artifacts, and a
+person must confirm visible output.
+
 ## CPU-only validation
 
 From this directory:

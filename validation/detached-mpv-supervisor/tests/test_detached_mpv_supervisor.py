@@ -39,6 +39,7 @@ from detached_mpv_supervisor import (
     final_run_status,
     mpv_screenshot_request,
     mpv_run_exit_code,
+    result_status_fields,
     mapped_driver_status,
     passive_post_stop_snapshot,
     prove_kernel_journal_visibility,
@@ -1024,6 +1025,23 @@ class MpvHardwareDecodeEvidenceTests(unittest.TestCase):
             ),
             9,
         )
+
+    def test_screenshot_evidence_is_separate_from_decode_completion(self) -> None:
+        decode_only = result_status_fields(
+            run_exit_code=0,
+            screenshot_file_successes=0,
+        )
+        self.assertEqual(decode_only["decode_run_complete"], "true")
+        self.assertEqual(decode_only["screenshot_evidence_complete"], "false")
+        self.assertEqual(decode_only["visible_video_confirmation"], "USER_REQUIRED")
+
+        screenshot_only = result_status_fields(
+            run_exit_code=6,
+            screenshot_file_successes=1,
+        )
+        self.assertEqual(screenshot_only["decode_run_complete"], "false")
+        self.assertEqual(screenshot_only["screenshot_evidence_complete"], "true")
+        self.assertEqual(screenshot_only["visible_video_confirmation"], "USER_REQUIRED")
 
 
 class MpvIpcTests(unittest.TestCase):

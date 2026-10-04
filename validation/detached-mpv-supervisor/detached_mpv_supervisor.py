@@ -811,6 +811,17 @@ def mpv_run_exit_code(
     return 0 if hardware_decode_confirmed else 8
 
 
+def result_status_fields(
+    *, run_exit_code: int, screenshot_file_successes: int
+) -> dict[str, str]:
+    """Keep decode completion separate from screenshot and human evidence."""
+    return {
+        "decode_run_complete": str(run_exit_code == 0).lower(),
+        "screenshot_evidence_complete": str(screenshot_file_successes > 0).lower(),
+        "visible_video_confirmation": "USER_REQUIRED",
+    }
+
+
 def passive_post_stop_snapshot(
     *,
     wait_for_cancel: Callable[[float], bool],
@@ -1439,6 +1450,17 @@ def service_run(run_dir: Path) -> int:
         if hardware_evidence.confirmed
         else "NOT_CONFIRMED"
     )
+    run_exit_code = mpv_run_exit_code(
+        reason=reason,
+        child_returncode=child.returncode,
+        final_failed_closed=final_failed_closed,
+        hardware_decode_confirmed=hardware_evidence.confirmed,
+        post_window_complete=post_window_complete,
+    )
+    status_fields = result_status_fields(
+        run_exit_code=run_exit_code,
+        screenshot_file_successes=screenshot_file_successes,
+    )
     write_text(
         run_dir / "result.txt",
         f"run_dir={run_dir}\nmpv_pid={child.pid}\nmpv_returncode={child.returncode}\n"
@@ -1449,7 +1471,9 @@ def service_run(run_dir: Path) -> int:
         f"post_window_complete={str(post_window_complete).lower()}\n"
         f"process_group_stopped={str(stop_error is None).lower()}\n"
         f"video_screenshots={len(screenshot_files)}\n"
-        "visible_video_confirmation=USER_REQUIRED\n"
+        f"decode_run_complete={status_fields['decode_run_complete']}\n"
+        f"screenshot_evidence_complete={status_fields['screenshot_evidence_complete']}\n"
+        f"visible_video_confirmation={status_fields['visible_video_confirmation']}\n"
         + (f"mpv_log_read_error={mpv_log_error}\n" if mpv_log_error else "")
         + (f"trigger_line={trigger_line}\n" if trigger_line else "")
         + (
@@ -1465,13 +1489,7 @@ def service_run(run_dir: Path) -> int:
         write_text(run_dir / "process-group-stop-error.txt", stop_error + "\n")
         final_failed_closed = True
     print(f"MPV_FINISHED returncode={child.returncode} stop_reason={reason}", flush=True)
-    return mpv_run_exit_code(
-        reason=reason,
-        child_returncode=child.returncode,
-        final_failed_closed=final_failed_closed,
-        hardware_decode_confirmed=hardware_evidence.confirmed,
-        post_window_complete=post_window_complete,
-    )
+    return run_exit_code
 
 
 def manager_start(run_dir: Path, deployment_manifest_path: Path) -> int:
