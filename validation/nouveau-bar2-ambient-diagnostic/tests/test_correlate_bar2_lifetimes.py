@@ -28,25 +28,64 @@ def map_message(
     attempt: int = 0,
     va: int = 0,
     length: int = 0,
-    range_state: str = "none",
+    vma_state: str | None = None,
     access: str = "none",
     refs: int = 0,
     rc: int = 0,
     mem_addr: int = 0x10000000,
     mem_len: int = 0x1000,
     comm: str = "kworker_0_1",
+    map_source: str | None = None,
+    map_reset_gen: int | None = None,
+    current_reset_gen: int = 0,
+    cache_state: str | None = None,
 ) -> str:
+    if vma_state is None:
+        vma_state = {
+            "ALLOCATED": "not_established",
+            "MAP_BEGIN": "not_established",
+            "MAP_VMA_RESERVED": "establishing",
+            "MAP_VMM_MAP_OK": "establishing",
+            "MAP_READY": "resident",
+            "KMAP_ACTIVE": "resident" if access == "bar2" else "not_established",
+            "KMAP_LAST_RELEASE": "resident" if length else "not_established",
+            "BOOT_MAP_PINNED": "resident",
+            "VMA_EVICTING": "resident",
+            "VMA_EVICTED": "evicted",
+            "OBJECT_DESTROYING": "resident" if length else "not_established",
+            "OBJECT_DESTROYED": "destroyed" if length else "not_established",
+        }.get(stage, "not_established")
+    if cache_state is None:
+        cache_state = {
+            "KMAP_ACTIVE": "active",
+            "KMAP_LAST_RELEASE": "lru" if vma_state == "resident" else "none",
+            "BOOT_MAP_PINNED": "pinned",
+            "VMA_EVICTING": "lru",
+        }.get(stage, "none")
+    if map_source is None:
+        map_source = (
+            "new" if stage in {"MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_VMM_MAP_OK",
+                               "MAP_READY", "MAP_FAILED", "MAP_DISCARDED",
+                               "MAP_ROLLBACK_BEGIN", "MAP_ROLLBACK_DONE"}
+            else "new" if stage in {"KMAP_ACTIVE", "BOOT_MAP_PINNED"} and access == "bar2"
+            else "none"
+        )
+    if map_reset_gen is None and vma_state in {"resident", "evicted", "destroyed"}:
+        map_reset_gen = current_reset_gen
+    map_generation = "none" if map_reset_gen is None else str(map_reset_gen)
     return (
         "nouveau 0000:01:00.0: instmem: " + TAG
         + f"seq={seq} id={allocation_id} stage={stage} attempt={attempt} vmm=BAR2 "
         + f"mem_addr=0x{mem_addr:x} mem_len=0x{mem_len:x} "
-        + f"bar2_va=0x{va:x} bar2_len=0x{length:x} range={range_state} "
-        + f"access={access} refs={refs} pid=321 comm={comm} rc={rc}"
+        + f"bar2_va=0x{va:x} bar2_len=0x{length:x} vma_state={vma_state} "
+        + f"cache_state={cache_state} access={access} map_source={map_source} "
+        + f"map_reset_gen={map_generation} current_reset_gen={current_reset_gen} "
+        + f"refs={refs} pid=321 comm={comm} rc={rc}"
     )
 
 
 def reset_message(seq: int, reset_id: int, stage: str) -> str:
-    return f"nouveau 0000:01:00.0: bar: {RESET_TAG}seq={seq} reset_id={reset_id} stage={stage}"
+    return f"nouveau 0000:01:00.0: bar: {RESET_TAG}seq={seq} gen={reset_id} stage={stage}"
 
 
 def raw_fault_message(va: int = 0x4000) -> str:
@@ -90,12 +129,12 @@ def active_lifecycle(
     if attempt is None:
         attempt = allocation_id
     stages = [
-        ("ALLOCATED", 0, 0, 0, "none", "none", 0),
-        ("MAP_BEGIN", attempt, 0, 0, "none", "none", 0),
-        ("MAP_VMA_RESERVED", attempt, va, length, "reserved", "none", 0),
-        ("MAP_PTE_READY", attempt, va, length, "reserved", "none", 0),
-        ("MAP_READY", attempt, va, length, "current", "none", 0),
-        ("FIRST_MAP_ACTIVE", 0, va, length, "current", "bar2", 1),
+        ("ALLOCATED", 0, 0, 0, "not_established", "none", 0),
+        ("MAP_BEGIN", attempt, 0, 0, "not_established", "none", 0),
+        ("MAP_VMA_RESERVED", attempt, va, length, "establishing", "none", 0),
+        ("MAP_VMM_MAP_OK", attempt, va, length, "establishing", "none", 0),
+        ("MAP_READY", attempt, va, length, "resident", "none", 0),
+        ("KMAP_ACTIVE", 0, va, length, "resident", "bar2", 1),
     ]
     return [
         row(
@@ -106,13 +145,16 @@ def active_lifecycle(
                 attempt=current_attempt,
                 va=current_va,
                 length=current_len,
-                range_state=range_state,
+                vma_state=stage_state,
                 access=access,
                 refs=refs,
+                map_reset_gen=(
+                    0 if stage == "MAP_VMM_MAP_OK" else None
+                ),
             ),
             time_start + offset,
         )
-        for offset, (stage, current_attempt, current_va, current_len, range_state, access, refs)
+        for offset, (stage, current_attempt, current_va, current_len, stage_state, access, refs)
         in enumerate(stages)
     ]
 
@@ -139,9 +181,13 @@ class AmbientCorrelationTests(unittest.TestCase):
         records += fault_pair(va=0x4000, mono=30)
         with tempfile.TemporaryDirectory() as temporary:
             fault = read_result(records, temporary)["faults"][0]
-        self.assertEqual(fault["outcome"], "ONE_NUMERIC_ACTIVE_BAR2_MAPPING_CANDIDATE")
+        self.assertEqual(fault["outcome"], "ONE_ACTIVE_KMAP_RESIDENT_VMA_CANDIDATE")
         self.assertEqual(fault["active_candidates"][0]["allocation_id"], 1)
         self.assertFalse(fault["active_candidates"][0]["causal_ownership_proven"])
+        candidate = fault["active_candidates"][0]
+        self.assertEqual(candidate["kmap_ref_state_at_fault"], "NONZERO")
+        self.assertIsNone(candidate["exact_kmap_refcount_at_fault"])
+        self.assertEqual(candidate["last_kmap_ref_edge"]["refcount_at_edge"], 1)
 
     def test_fault_at_exclusive_upper_bound_does_not_match(self):
         import tempfile
@@ -154,19 +200,24 @@ class AmbientCorrelationTests(unittest.TestCase):
     def test_zero_to_one_and_one_to_zero_are_the_only_access_edges(self):
         import tempfile
         records = active_lifecycle()
-        records.append(row(map_message(7, 1, "LAST_MAP_RELEASE", va=0x4000,
-                                       length=0x1000, range_state="cached"), 40))
+        records.append(row(map_message(7, 1, "KMAP_LAST_RELEASE", va=0x4000,
+                                       length=0x1000, vma_state="resident", cache_state="lru"), 40))
         records += fault_pair(va=0x4001, mono=50)
         with tempfile.TemporaryDirectory() as temporary:
             parsed = parse_journal(write_journal(records, temporary))
         transitions = [event for event in parsed.maps if event.stage in {
-            "FIRST_MAP_ACTIVE", "LAST_MAP_RELEASE"
+            "KMAP_ACTIVE", "KMAP_LAST_RELEASE"
         }]
         self.assertEqual([(event.stage, event.refs) for event in transitions], [
-            ("FIRST_MAP_ACTIVE", 1), ("LAST_MAP_RELEASE", 0)
+            ("KMAP_ACTIVE", 1), ("KMAP_LAST_RELEASE", 0)
         ])
         result = correlate(parsed)["faults"][0]
-        self.assertEqual(result["outcome"], "RECENTLY_RELEASED_BAR2_RANGE")
+        self.assertEqual(result["outcome"], "ONE_ZERO_REF_CACHED_VMA_CANDIDATE")
+        candidate = result["zero_ref_candidates"][0]
+        self.assertEqual(candidate["kmap_ref_state_at_fault"], "ZERO")
+        self.assertEqual(candidate["exact_kmap_refcount_at_fault"], 0)
+        self.assertEqual(candidate["vma_state"], "resident")
+        self.assertEqual(candidate["cache_state"], "lru")
 
     def test_fault_at_active_transition_timestamp_is_inconclusive(self):
         import tempfile
@@ -174,90 +225,93 @@ class AmbientCorrelationTests(unittest.TestCase):
         records += fault_pair(va=0x4000, mono=15)
         with tempfile.TemporaryDirectory() as temporary:
             fault = read_result(records, temporary)["faults"][0]
-        self.assertEqual(fault["outcome"], "INCONCLUSIVE_MAPPING_TRANSITION")
+        self.assertEqual(fault["outcome"], "INCONCLUSIVE_VMA_TRANSITION")
 
-    def test_release_inside_raw_to_decoded_observation_window_is_not_recently_released(self):
+    def test_release_after_raw_fault_does_not_retroactively_change_fault_state(self):
         import tempfile
         records = active_lifecycle()
-        records.append(row(map_message(7, 1, "LAST_MAP_RELEASE", va=0x4000,
-                                       length=0x1000, range_state="cached"), 31))
+        records.append(row(map_message(7, 1, "KMAP_LAST_RELEASE", va=0x4000,
+                                       length=0x1000, vma_state="resident", cache_state="lru"), 31))
         records.extend([
             row(raw_fault_message(0x4000), 30),
             row(decoded_fault_message(0x4000), 31),
         ])
         with tempfile.TemporaryDirectory() as temporary:
             result = read_result(records, temporary)["faults"][0]
-        self.assertEqual(result["outcome"], "INCONCLUSIVE_MAPPING_TRANSITION")
-        self.assertEqual(result["recently_released_ranges"], [])
-        self.assertFalse(result["fault_event_time_exact"])
+        self.assertEqual(result["outcome"], "ONE_ACTIVE_KMAP_RESIDENT_VMA_CANDIDATE")
+        self.assertEqual(result["recently_evicted_ranges"], [])
+        self.assertTrue(result["fault"]["fault_monotonic_usec"] > 0)
 
     def test_destroy_after_release_preserves_released_range(self):
         import tempfile
         records = active_lifecycle()
         records.extend([
-            row(map_message(7, 1, "LAST_MAP_RELEASE", va=0x4000, length=0x1000,
-                            range_state="cached"), 20),
-            row(map_message(8, 1, "DESTROYING", va=0x4000, length=0x1000,
-                            range_state="current"), 40),
-            row(map_message(9, 1, "DESTROYED", va=0x4000, length=0x1000,
-                            range_state="released"), 41),
+            row(map_message(7, 1, "KMAP_LAST_RELEASE", va=0x4000, length=0x1000,
+                            vma_state="resident", cache_state="lru"), 20),
+            row(map_message(8, 1, "OBJECT_DESTROYING", va=0x4000, length=0x1000,
+                            vma_state="resident"), 40),
+            row(map_message(9, 1, "OBJECT_DESTROYED", va=0x4000, length=0x1000,
+                            vma_state="destroyed"), 41),
         ])
         records += fault_pair(va=0x4000, mono=50)
         with tempfile.TemporaryDirectory() as temporary:
             result = read_result(records, temporary)["faults"][0]
-        self.assertEqual(result["outcome"], "RECENTLY_RELEASED_BAR2_RANGE")
-        released = result["recently_released_ranges"][0]
-        self.assertEqual(released["release_stage"], "DESTROYED")
-        self.assertTrue(released["vma_teardown_confirmed"])
-        self.assertEqual(released["bar2_vma_state_at_record"], "released")
+        self.assertEqual(result["outcome"], "RECENTLY_EVICTED_VMA_RANGE")
+        released = result["recently_evicted_ranges"][0]
+        self.assertEqual(released["terminal_stage"], "OBJECT_DESTROYED")
+        self.assertFalse(released["active_at_fault"])
 
-    def test_destroy_with_active_refs_is_rejected(self):
+    def test_destroy_with_active_refs_is_reported_as_incomplete(self):
         import tempfile
         records = active_lifecycle()
         records.extend([
-            row(map_message(7, 1, "DESTROYING", va=0x4000, length=0x1000,
-                            range_state="current", refs=1, rc=-16), 40),
-            row(map_message(8, 1, "DESTROYED", va=0x4000, length=0x1000,
-                            range_state="released", refs=1, rc=-16), 41),
+            row(map_message(7, 1, "OBJECT_DESTROYING", va=0x4000, length=0x1000,
+                            vma_state="resident", refs=1, rc=-16), 40),
+            row(map_message(8, 1, "OBJECT_DESTROYED", va=0x4000, length=0x1000,
+                            vma_state="destroyed", refs=1, rc=-16), 41),
         ])
         records += fault_pair(va=0x4000, mono=50)
         with tempfile.TemporaryDirectory() as temporary:
-            with self.assertRaises(CorrelationInputError):
-                parse_journal(write_journal(records, temporary))
+            result = read_result(records, temporary)["faults"][0]
+        self.assertEqual(result["outcome"], "INCOMPLETE_MAPPING_LIFECYCLE")
+        self.assertEqual(
+            result["incomplete_lifecycles"][0]["reason"],
+            "object was destroyed with active kmap refs",
+        )
 
     def test_destroyed_unknown_range_remains_lifecycle_inconclusive(self):
         import tempfile
         records = active_lifecycle()
         records.extend([
-            row(map_message(7, 1, "LAST_MAP_RELEASE", va=0x4000, length=0x1000,
-                            range_state="cached"), 20),
-            row(map_message(8, 1, "DESTROYING", va=0x4000, length=0x1000,
-                            range_state="current"), 40),
-            row(map_message(9, 1, "DESTROYED", va=0x4000, length=0x1000,
-                            range_state="unknown", rc=-19), 41),
+            row(map_message(7, 1, "KMAP_LAST_RELEASE", va=0x4000, length=0x1000,
+                            vma_state="resident", cache_state="lru"), 20),
+            row(map_message(8, 1, "OBJECT_DESTROYING", va=0x4000, length=0x1000,
+                            vma_state="resident"), 40),
+            row(map_message(9, 1, "OBJECT_DESTROYED", va=0x4000, length=0x1000,
+                            vma_state="unknown", rc=-19), 41),
         ])
         records += fault_pair(va=0x4000, mono=50)
         with tempfile.TemporaryDirectory() as temporary:
             result = read_result(records, temporary)["faults"][0]
-        self.assertEqual(result["outcome"], "INCONCLUSIVE_MAPPING_LIFECYCLE")
+        self.assertEqual(result["outcome"], "INCOMPLETE_MAPPING_LIFECYCLE")
 
     def test_second_first_map_without_final_release_is_rejected(self):
         import tempfile
         records = active_lifecycle()
-        records.append(row(map_message(7, 1, "FIRST_MAP_ACTIVE", va=0x4000,
-                                       length=0x1000, range_state="current",
+        records.append(row(map_message(7, 1, "KMAP_ACTIVE", va=0x4000,
+                                       length=0x1000, vma_state="resident",
                                        access="bar2", refs=1), 20))
         records += fault_pair(va=0x4000, mono=30)
         with tempfile.TemporaryDirectory() as temporary:
-            with self.assertRaisesRegex(CorrelationInputError, "0-to-1 map transition"):
+            with self.assertRaisesRegex(CorrelationInputError, "zero-to-nonzero kmap edge"):
                 parse_journal(write_journal(records, temporary))
 
     def test_map_after_destroy_is_rejected(self):
         import tempfile
         records = [
             row(map_message(1, 1, "ALLOCATED"), 1),
-            row(map_message(2, 1, "DESTROYING"), 2),
-            row(map_message(3, 1, "DESTROYED"), 3),
+            row(map_message(2, 1, "OBJECT_DESTROYING"), 2),
+            row(map_message(3, 1, "OBJECT_DESTROYED"), 3),
             row(map_message(4, 1, "MAP_BEGIN", attempt=9), 4),
             row(map_message(5, 1, "MAP_FAILED", attempt=9), 5),
         ]
@@ -281,7 +335,7 @@ class AmbientCorrelationTests(unittest.TestCase):
                    row(map_message(2, 1, "MAP_BEGIN", attempt=1), 2),
                    row(map_message(3, 1, "MAP_VMA_RESERVED", attempt=1,
                                    va=(1 << 64) - 1, length=1,
-                                   range_state="reserved"), 3)]
+                                   vma_state="establishing"), 3)]
         records += fault_pair(mono=10)
         with tempfile.TemporaryDirectory() as temporary:
             with self.assertRaises(CorrelationInputError):
@@ -295,40 +349,39 @@ class AmbientCorrelationTests(unittest.TestCase):
         records += fault_pair(va=0x4000, mono=40)
         with tempfile.TemporaryDirectory() as temporary:
             result = read_result(records, temporary)["faults"][0]
-        self.assertEqual(result["outcome"], "MULTIPLE_NUMERIC_ACTIVE_BAR2_MAPPING_CANDIDATES")
+        self.assertEqual(result["outcome"], "MULTIPLE_RESIDENT_VMA_CANDIDATES")
         self.assertEqual({item["allocation_id"] for item in result["active_candidates"]}, {1, 2})
 
-    def test_released_mapping_is_not_an_active_candidate(self):
+    def test_last_kmap_release_leaves_zero_ref_cached_vma_resident(self):
         import tempfile
         records = active_lifecycle()
-        records.append(row(map_message(7, 1, "LAST_MAP_RELEASE", va=0x4000,
-                                       length=0x1000, range_state="cached"), 20))
+        records.append(row(map_message(7, 1, "KMAP_LAST_RELEASE", va=0x4000,
+                                       length=0x1000, vma_state="resident", cache_state="lru"), 20))
         records += fault_pair(va=0x4000, mono=30)
         with tempfile.TemporaryDirectory() as temporary:
             result = read_result(records, temporary)["faults"][0]
-        self.assertEqual(result["outcome"], "RECENTLY_RELEASED_BAR2_RANGE")
+        self.assertEqual(result["outcome"], "ONE_ZERO_REF_CACHED_VMA_CANDIDATE")
         self.assertEqual(result["active_candidates"], [])
-        released = result["recently_released_ranges"][0]
-        self.assertFalse(released["map_ref_active_at_fault"])
-        self.assertFalse(released["vma_teardown_confirmed"])
-        self.assertEqual(released["bar2_vma_state_at_record"], "cached_in_lru")
+        candidate = result["zero_ref_candidates"][0]
+        self.assertEqual(candidate["vma_state"], "resident")
+        self.assertEqual(candidate["cache_state"], "lru")
 
     def test_reused_va_selects_only_new_active_allocation(self):
         import tempfile
         old = active_lifecycle(1, seq_start=1, time_start=1, va=0x4000)
         old.extend([
-            row(map_message(7, 1, "LAST_MAP_RELEASE", va=0x4000, length=0x1000,
-                            range_state="cached"), 10),
-            row(map_message(8, 1, "EVICTING", va=0x4000, length=0x1000,
-                            range_state="current"), 11),
-            row(map_message(9, 1, "EVICTED", va=0x4000, length=0x1000,
-                            range_state="released"), 12),
+            row(map_message(7, 1, "KMAP_LAST_RELEASE", va=0x4000, length=0x1000,
+                            vma_state="resident", cache_state="lru"), 10),
+                            row(map_message(8, 1, "VMA_EVICTING", va=0x4000, length=0x1000,
+                                            vma_state="resident"), 11),
+            row(map_message(9, 1, "VMA_EVICTED", va=0x4000, length=0x1000,
+                            vma_state="evicted"), 12),
         ])
         new = active_lifecycle(2, seq_start=10, time_start=20, va=0x4000)
         records = old + new + fault_pair(va=0x4000, mono=40)
         with tempfile.TemporaryDirectory() as temporary:
             result = read_result(records, temporary)["faults"][0]
-        self.assertEqual(result["outcome"], "ONE_NUMERIC_ACTIVE_BAR2_MAPPING_CANDIDATE")
+        self.assertEqual(result["outcome"], "ONE_ACTIVE_KMAP_RESIDENT_VMA_CANDIDATE")
         self.assertEqual([item["allocation_id"] for item in result["active_candidates"]], [2])
 
     def test_mixed_boot_input_is_rejected(self):
@@ -397,8 +450,9 @@ class AmbientCorrelationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             result = read_result(records, temporary)["faults"][0]
         candidate = result["active_candidates"][0]
-        self.assertEqual(result["outcome"], "ONE_NUMERIC_ACTIVE_BAR2_MAPPING_CANDIDATE")
-        self.assertEqual(candidate["active_mapping_spanned_completed_bar2_reset_ids"], [1])
+        self.assertEqual(result["outcome"], "ONE_ACTIVE_KMAP_RESIDENT_VMA_CANDIDATE")
+        self.assertTrue(candidate["mapping_spans_reset"])
+        self.assertEqual(candidate["current_reset_gen_at_fault"], 1)
         self.assertFalse(candidate["causal_ownership_proven"])
 
     def test_fault_during_reset_is_inconclusive(self):
@@ -411,7 +465,7 @@ class AmbientCorrelationTests(unittest.TestCase):
         records += fault_pair(va=0x4000, mono=30)
         with tempfile.TemporaryDirectory() as temporary:
             result = read_result(records, temporary)["faults"][0]
-        self.assertEqual(result["outcome"], "INCONCLUSIVE_MAPPING_TRANSITION")
+        self.assertEqual(result["outcome"], "INCONCLUSIVE_VMA_TRANSITION")
 
     def test_map_setup_window_is_inconclusive(self):
         import tempfile
@@ -421,7 +475,7 @@ class AmbientCorrelationTests(unittest.TestCase):
         ] + fault_pair(va=0x4000, mono=3)
         with tempfile.TemporaryDirectory() as temporary:
             result = read_result(records, temporary)["faults"][0]
-        self.assertEqual(result["outcome"], "INCONCLUSIVE_MAPPING_TRANSITION")
+        self.assertEqual(result["outcome"], "INCONCLUSIVE_VMA_TRANSITION")
 
     def test_map_attempt_id_reuse_across_objects_is_rejected(self):
         import tempfile
@@ -432,7 +486,7 @@ class AmbientCorrelationTests(unittest.TestCase):
             row(map_message(4, 2, "MAP_BEGIN", attempt=7), 4),
         ] + fault_pair(mono=10)
         with tempfile.TemporaryDirectory() as temporary:
-            with self.assertRaisesRegex(CorrelationInputError, "reused across allocations"):
+            with self.assertRaisesRegex(CorrelationInputError, "reused by another allocation"):
                 parse_journal(write_journal(records, temporary))
 
     def test_no_mapping_records_is_only_no_observed_match(self):
@@ -447,16 +501,334 @@ class AmbientCorrelationTests(unittest.TestCase):
         import tempfile
         old = active_lifecycle(1, seq_start=1, time_start=1, va=0x4000)
         old.extend([
-            row(map_message(7, 1, "LAST_MAP_RELEASE", va=0x4000, length=0x1000,
-                            range_state="cached"), 10),
-            row(map_message(8, 1, "EVICTING", va=0x4000, length=0x1000,
-                            range_state="current"), 11),
-            row(map_message(9, 1, "EVICTED", va=0x4000, length=0x1000,
-                            range_state="released"), 12),
+            row(map_message(7, 1, "KMAP_LAST_RELEASE", va=0x4000, length=0x1000,
+                            vma_state="resident", cache_state="lru"), 10),
+            row(map_message(8, 1, "VMA_EVICTING", va=0x4000, length=0x1000,
+                            vma_state="resident"), 11),
+            row(map_message(9, 1, "VMA_EVICTED", va=0x4000, length=0x1000,
+                            vma_state="evicted"), 12),
         ])
         current = active_lifecycle(2, seq_start=10, time_start=20, va=0x4000)
         records = old + current + fault_pair(va=0x4000, mono=40)
         with tempfile.TemporaryDirectory() as temporary:
             result = read_result(records, temporary)["faults"][0]
         self.assertEqual([c["allocation_id"] for c in result["active_candidates"]], [2])
-        self.assertTrue(result["recently_released_ranges"])
+        self.assertTrue(result["recently_evicted_ranges"])
+
+    def test_reset_spanning_cached_mapping_records_cache_reuse(self):
+        import tempfile
+        records = active_lifecycle()
+        records.append(row(map_message(
+            7, 1, "KMAP_LAST_RELEASE", va=0x4000, length=0x1000,
+            vma_state="resident", cache_state="lru", map_reset_gen=0,
+            current_reset_gen=0,
+        ), 20))
+        records.extend([
+            row(reset_message(8, 1, "BEGIN"), 25),
+            row(reset_message(9, 1, "END"), 26),
+            row(map_message(
+                10, 1, "KMAP_ACTIVE", va=0x4000, length=0x1000,
+                vma_state="resident", cache_state="active", access="bar2",
+                map_source="cached", map_reset_gen=0, current_reset_gen=1, refs=1,
+            ), 27),
+            row(map_message(
+                11, 1, "KMAP_LAST_RELEASE", va=0x4000, length=0x1000,
+                vma_state="resident", cache_state="lru", map_reset_gen=0,
+                current_reset_gen=1,
+            ), 28),
+        ])
+        records += fault_pair(va=0x4000, mono=40)
+        with tempfile.TemporaryDirectory() as temporary:
+            result = read_result(records, temporary)["faults"][0]
+        candidate = result["zero_ref_candidates"][0]
+        self.assertEqual(result["outcome"], "ONE_RESET_SPANNING_CACHED_VMA_CANDIDATE")
+        self.assertTrue(candidate["mapping_spans_reset"])
+        self.assertTrue(candidate["reused_from_cache_after_reset"])
+        self.assertEqual(candidate["map_reset_gen"], 0)
+        self.assertEqual(candidate["current_reset_gen_at_fault"], 1)
+
+    def test_zero_ref_cached_mapping_spanning_reset_without_reuse_is_distinguished(self):
+        import tempfile
+        records = active_lifecycle()
+        records.append(row(map_message(
+            7, 1, "KMAP_LAST_RELEASE", va=0x4000, length=0x1000,
+            vma_state="resident", cache_state="lru", map_reset_gen=0,
+            current_reset_gen=0,
+        ), 20))
+        records.extend([
+            row(reset_message(8, 1, "BEGIN"), 25),
+            row(reset_message(9, 1, "END"), 26),
+        ])
+        records += fault_pair(va=0x4000, mono=40)
+        with tempfile.TemporaryDirectory() as temporary:
+            result = read_result(records, temporary)["faults"][0]
+        candidate = result["zero_ref_candidates"][0]
+        self.assertEqual(result["outcome"], "ONE_RESET_SPANNING_CACHED_VMA_CANDIDATE")
+        self.assertTrue(candidate["mapping_spans_reset"])
+        self.assertFalse(candidate["reused_from_cache_after_reset"])
+
+    def test_evicted_mapping_is_not_active_candidate(self):
+        import tempfile
+        records = active_lifecycle()
+        records.extend([
+            row(map_message(
+                7, 1, "KMAP_LAST_RELEASE", va=0x4000, length=0x1000,
+                vma_state="resident", cache_state="lru", map_reset_gen=0,
+            ), 20),
+            row(map_message(
+                8, 1, "VMA_EVICTING", va=0x4000, length=0x1000,
+                vma_state="resident", cache_state="lru", map_reset_gen=0,
+            ), 21),
+            row(map_message(
+                9, 1, "VMA_EVICTED", va=0x4000, length=0x1000,
+                vma_state="evicted", cache_state="none", map_reset_gen=0,
+            ), 22),
+        ])
+        records += fault_pair(va=0x4001, mono=30)
+        with tempfile.TemporaryDirectory() as temporary:
+            result = read_result(records, temporary)["faults"][0]
+        self.assertEqual(result["outcome"], "RECENTLY_EVICTED_VMA_RANGE")
+        self.assertEqual(result["active_candidates"], [])
+        self.assertEqual(result["zero_ref_candidates"], [])
+        self.assertEqual(result["recently_evicted_ranges"][0]["allocation_id"], 1)
+
+    def test_same_va_reused_after_reset_gets_new_mapping_generation(self):
+        import tempfile
+        records = active_lifecycle()
+        records.extend([
+            row(map_message(
+                7, 1, "KMAP_LAST_RELEASE", va=0x4000, length=0x1000,
+                vma_state="resident", cache_state="lru", map_reset_gen=0,
+            ), 20),
+            row(map_message(
+                8, 1, "VMA_EVICTING", va=0x4000, length=0x1000,
+                vma_state="resident", cache_state="lru", map_reset_gen=0,
+            ), 21),
+            row(map_message(
+                9, 1, "VMA_EVICTED", va=0x4000, length=0x1000,
+                vma_state="evicted", cache_state="none", map_reset_gen=0,
+            ), 22),
+            row(reset_message(10, 1, "BEGIN"), 23),
+            row(reset_message(11, 1, "END"), 24),
+            row(map_message(12, 1, "MAP_BEGIN", attempt=2,
+                            current_reset_gen=1), 25),
+            row(map_message(13, 1, "MAP_VMA_RESERVED", attempt=2,
+                            va=0x4000, length=0x1000,
+                            vma_state="establishing", map_source="new",
+                            current_reset_gen=1), 26),
+            row(map_message(14, 1, "MAP_VMM_MAP_OK", attempt=2,
+                            va=0x4000, length=0x1000,
+                            vma_state="establishing", map_source="new",
+                            map_reset_gen=1,
+                            current_reset_gen=1), 27),
+            row(map_message(15, 1, "MAP_READY", attempt=2,
+                            va=0x4000, length=0x1000,
+                            vma_state="resident", map_source="new",
+                            map_reset_gen=1, current_reset_gen=1), 28),
+            row(map_message(16, 1, "KMAP_ACTIVE", va=0x4000, length=0x1000,
+                            vma_state="resident", cache_state="active",
+                            map_source="new", map_reset_gen=1,
+                            current_reset_gen=1, access="bar2", refs=1), 29),
+        ])
+        records += fault_pair(va=0x4001, mono=40)
+        with tempfile.TemporaryDirectory() as temporary:
+            result = read_result(records, temporary)["faults"][0]
+        candidate = result["active_candidates"][0]
+        self.assertEqual(result["outcome"], "ONE_ACTIVE_KMAP_RESIDENT_VMA_CANDIDATE")
+        self.assertEqual(candidate["allocation_id"], 1)
+        self.assertEqual(candidate["map_reset_gen"], 1)
+        self.assertEqual(candidate["current_reset_gen_at_fault"], 1)
+        self.assertFalse(candidate["mapping_spans_reset"])
+
+    def test_thirty_faults_same_inst_are_counted_not_merged(self):
+        import tempfile
+        records = []
+        for index in range(30):
+            va = 0x46F000 if index < 25 else 0x41F000
+            mono = 100 + index * 100
+            records.extend([
+                row(raw_fault_message(va), mono),
+                row(decoded_fault_message(va), mono + 1),
+            ])
+        with tempfile.TemporaryDirectory() as temporary:
+            result = read_result(records, temporary)
+        self.assertEqual(result["fault_count"], 30)
+        self.assertEqual([item["fault_ordinal"] for item in result["faults"]], list(range(1, 31)))
+        self.assertEqual(
+            [item["fault"]["fault_va"] for item in result["faults"][:25]],
+            ["0x46f000"] * 25,
+        )
+        self.assertEqual(
+            [item["fault"]["fault_va"] for item in result["faults"][25:]],
+            ["0x41f000"] * 5,
+        )
+        self.assertEqual(len({item["fault"]["inst"] for item in result["faults"]}), 1)
+        self.assertTrue(all(
+            item["outcome"] == "NO_OBSERVED_BAR2_MAPPING_MATCH"
+            for item in result["faults"]
+        ))
+
+    def test_first_fault_and_recurrence_separate_recovery_reset(self):
+        import tempfile
+        records = []
+        records.extend([
+            row(raw_fault_message(0x46F000), 100),
+            row(decoded_fault_message(0x46F000), 104),
+            row(reset_message(1, 1, "BEGIN"), 102),
+            row(reset_message(2, 1, "END"), 103),
+            row(raw_fault_message(0x46F000), 200),
+            row(decoded_fault_message(0x46F000), 201),
+        ])
+        with tempfile.TemporaryDirectory() as temporary:
+            result = read_result(records, temporary)["faults"]
+        self.assertEqual(result[0]["fault_ordinal"], 1)
+        self.assertEqual(result[0]["bar2_reset_generation_at_fault"], 0)
+        self.assertEqual(result[0]["post_fault_recovery_reset_generations"], [1])
+        self.assertEqual(result[1]["fault_ordinal"], 2)
+        self.assertEqual(result[1]["bar2_reset_generation_at_fault"], 1)
+        self.assertEqual(result[1]["bar2_resets_since_previous_fault"], 1)
+        self.assertEqual(result[1]["time_since_previous_fault_usec"], 100)
+
+    def test_cached_reuse_without_previously_resident_vma_is_rejected(self):
+        import tempfile
+        records = [
+            row(map_message(1, 1, "ALLOCATED"), 1),
+            row(map_message(
+                2, 1, "KMAP_ACTIVE", va=0x4000, length=0x1000,
+                vma_state="resident", cache_state="active", access="bar2",
+                map_source="cached", map_reset_gen=0, refs=1,
+            ), 2),
+        ] + fault_pair(mono=10)
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(CorrelationInputError, "previously established resident VMA"):
+                parse_journal(write_journal(records, temporary))
+
+    def test_map_reset_generation_cannot_exceed_current_generation(self):
+        import tempfile
+        records = [
+            row(map_message(1, 1, "ALLOCATED"), 1),
+            row(map_message(2, 1, "MAP_BEGIN", attempt=1), 2),
+            row(map_message(3, 1, "MAP_VMA_RESERVED", attempt=1, va=0x4000,
+                            length=0x1000, vma_state="establishing"), 3),
+            row(map_message(4, 1, "MAP_VMM_MAP_OK", attempt=1, va=0x4000,
+                            length=0x1000, vma_state="establishing"), 4),
+            row(map_message(5, 1, "MAP_READY", attempt=1, va=0x4000,
+                            length=0x1000, vma_state="resident", map_reset_gen=1,
+                            current_reset_gen=0), 5),
+        ] + fault_pair(mono=10)
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(CorrelationInputError, "newer than current"):
+                parse_journal(write_journal(records, temporary))
+
+    def test_vmm_success_generation_is_preserved_across_later_reset(self):
+        import tempfile
+        records = [
+            row(map_message(1, 1, "ALLOCATED"), 1),
+            row(map_message(2, 1, "MAP_BEGIN", attempt=1), 2),
+            row(map_message(3, 1, "MAP_VMA_RESERVED", attempt=1,
+                            va=0x4000, length=0x1000), 3),
+            row(map_message(4, 1, "MAP_VMM_MAP_OK", attempt=1,
+                            va=0x4000, length=0x1000,
+                            map_reset_gen=0, current_reset_gen=0), 4),
+            row(reset_message(5, 1, "BEGIN"), 5),
+            row(reset_message(6, 1, "END"), 6),
+            row(map_message(7, 1, "MAP_READY", attempt=1,
+                            va=0x4000, length=0x1000,
+                            map_reset_gen=0, current_reset_gen=1), 7),
+            row(map_message(8, 1, "KMAP_ACTIVE", va=0x4000,
+                            length=0x1000, access="bar2", refs=1,
+                            map_source="new", map_reset_gen=0,
+                            current_reset_gen=1), 8),
+        ] + fault_pair(mono=20)
+        with tempfile.TemporaryDirectory() as temporary:
+            item = read_result(records, temporary)["faults"][0]
+        candidate = item["resident_candidates"][0]
+        self.assertEqual(item["outcome"], "ONE_ACTIVE_KMAP_RESIDENT_VMA_CANDIDATE")
+        self.assertEqual(candidate["map_reset_gen"], 0)
+        self.assertEqual(candidate["current_reset_gen_at_fault"], 1)
+        self.assertTrue(candidate["mapping_spans_reset"])
+        self.assertFalse(candidate["reused_from_cache_after_reset"])
+
+    def test_map_attempt_generation_must_match_ready_vma(self):
+        import tempfile
+        records = [
+            row(map_message(1, 1, "ALLOCATED"), 1),
+            row(map_message(2, 1, "MAP_BEGIN", attempt=1), 2),
+            row(map_message(3, 1, "MAP_VMA_RESERVED", attempt=1,
+                            va=0x4000, length=0x1000), 3),
+            row(map_message(4, 1, "MAP_VMM_MAP_OK", attempt=1,
+                            va=0x4000, length=0x1000,
+                            map_reset_gen=0, current_reset_gen=0), 4),
+            row(map_message(5, 1, "MAP_READY", attempt=1,
+                            va=0x4000, length=0x1000,
+                            map_reset_gen=1, current_reset_gen=1), 5),
+        ] + fault_pair(mono=20)
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(CorrelationInputError, "changed its VMM establishment generation"):
+                parse_journal(write_journal(records, temporary))
+
+    def test_one_mapping_range_can_contain_multiple_fault_addresses(self):
+        import tempfile
+        records = active_lifecycle(va=0x4000, length=0x3000)
+        records.extend([
+            row(raw_fault_message(0x4001), 30),
+            row(decoded_fault_message(0x4001), 31),
+            row(raw_fault_message(0x6FFF), 40),
+            row(decoded_fault_message(0x6FFF), 41),
+        ])
+        with tempfile.TemporaryDirectory() as temporary:
+            result = read_result(records, temporary)["faults"]
+        self.assertEqual(len(result), 2)
+        self.assertTrue(all(
+            item["outcome"] == "ONE_ACTIVE_KMAP_RESIDENT_VMA_CANDIDATE"
+            for item in result
+        ))
+        self.assertEqual(
+            [item["active_candidates"][0]["allocation_id"] for item in result],
+            [1, 1],
+        )
+
+    def test_negative_kmap_reference_count_is_rejected(self):
+        import tempfile
+        message = map_message(1, 1, "ALLOCATED").replace("refs=0", "refs=-1")
+        records = [row(message, 1)] + fault_pair(mono=10)
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(CorrelationInputError, "out of range"):
+                parse_journal(write_journal(records, temporary))
+
+    def test_vma_eviction_without_resident_mapping_is_rejected(self):
+        import tempfile
+        records = [
+            row(map_message(1, 1, "ALLOCATED"), 1),
+            row(map_message(
+                2, 1, "VMA_EVICTING", va=0x4000, length=0x1000,
+                vma_state="resident", cache_state="lru", map_reset_gen=0,
+            ), 2),
+        ] + fault_pair(mono=10)
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(CorrelationInputError, "does not match resident VMA"):
+                parse_journal(write_journal(records, temporary))
+
+    def test_double_destroy_is_rejected(self):
+        import tempfile
+        records = [
+            row(map_message(1, 1, "ALLOCATED"), 1),
+            row(map_message(2, 1, "OBJECT_DESTROYING"), 2),
+            row(map_message(3, 1, "OBJECT_DESTROYED"), 3),
+            row(map_message(4, 1, "OBJECT_DESTROYING"), 4),
+        ] + fault_pair(mono=10)
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(CorrelationInputError, "continues after OBJECT_DESTROYED"):
+                parse_journal(write_journal(records, temporary))
+
+    def test_reset_generation_decrease_is_rejected(self):
+        import tempfile
+        records = [
+            row(reset_message(1, 1, "BEGIN"), 1),
+            row(reset_message(2, 1, "END"), 2),
+            row(reset_message(3, 1, "BEGIN"), 3),
+            row(reset_message(4, 1, "END"), 4),
+        ] + fault_pair(mono=10)
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(CorrelationInputError, "generation is not monotonic"):
+                parse_journal(write_journal(records, temporary))

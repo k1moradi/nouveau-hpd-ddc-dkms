@@ -17,17 +17,24 @@ RESET_TAG = "NOUVEAU_DIAG_BAR2_RESET "
 FAULT_TAG = "NOUVEAU_DIAG_BAR2_FAULT "
 MAP_FIELDS = {
     "seq", "id", "stage", "attempt", "vmm", "mem_addr", "mem_len",
-    "bar2_va", "bar2_len", "range", "access", "refs", "pid", "comm", "rc",
+    "bar2_va", "bar2_len", "vma_state", "cache_state", "access",
+    "map_source", "map_reset_gen", "current_reset_gen", "refs", "pid",
+    "comm", "rc",
 }
-RESET_FIELDS = {"seq", "reset_id", "stage"}
+RESET_FIELDS = {"seq", "gen", "stage"}
 MAP_STAGES = {
-    "ALLOCATED", "MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_PTE_READY",
+    "ALLOCATED", "MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_VMM_MAP_OK",
     "MAP_READY", "MAP_FAILED", "MAP_DISCARDED", "MAP_ROLLBACK_BEGIN",
-    "MAP_ROLLBACK_DONE", "FIRST_MAP_ACTIVE", "LAST_MAP_RELEASE",
-    "BOOT_MAP_PINNED", "EVICTING", "EVICTED", "DESTROYING", "DESTROYED",
+    "MAP_ROLLBACK_DONE", "KMAP_ACTIVE", "KMAP_LAST_RELEASE",
+    "BOOT_MAP_PINNED", "VMA_EVICTING", "VMA_EVICTED",
+    "OBJECT_DESTROYING", "OBJECT_DESTROYED",
 }
-RANGE_STATES = {"none", "reserved", "current", "cached", "released", "unknown"}
+VMA_STATES = {
+    "not_established", "establishing", "resident", "evicted", "destroyed", "unknown",
+}
+CACHE_STATES = {"none", "active", "lru", "pinned"}
 ACCESS_STATES = {"none", "bar0", "bar2", "unknown"}
+MAP_SOURCES = {"none", "new", "cached", "unknown"}
 
 RAW_FAULT_FIELDS = {"unit", "inst", "valo", "vahi", "type"}
 DECODED_FAULT_RE = re.compile(
@@ -108,20 +115,15 @@ def _fields(text: str, expected: set[str], line: int, kind: str) -> dict[str, st
 def _range(values: dict[str, str], line: int) -> tuple[int, int, str]:
     start = _uint(values["bar2_va"], "bar2_va", line, base=0)
     length = _uint(values["bar2_len"], "bar2_len", line, base=0)
-    state = values["range"]
-    if state not in RANGE_STATES:
-        raise CorrelationInputError(f"line {line}: unknown range state {state}")
-    if state == "none":
-        if start or length:
-            raise CorrelationInputError(f"line {line}: range=none requires zero va and length")
-    elif state == "unknown":
-        if length and start > U64_MAX - length:
-            raise CorrelationInputError(f"line {line}: unknown BAR2 range overflows")
-    else:
-        if length == 0:
-            raise CorrelationInputError(f"line {line}: BAR2 range length must be nonzero")
-        if start > U64_MAX - length:
-            raise CorrelationInputError(f"line {line}: BAR2 range overflows")
+    state = values["vma_state"]
+    if state not in VMA_STATES:
+        raise CorrelationInputError(f"line {line}: unknown VMA state {state}")
+    if length and start > U64_MAX - length:
+        raise CorrelationInputError(f"line {line}: BAR2 range overflows")
+    if not length and start:
+        raise CorrelationInputError(f"line {line}: zero-length BAR2 range has nonzero start")
+    if state in {"resident", "evicted", "destroyed"} and not length:
+        raise CorrelationInputError(f"line {line}: {state} VMA requires a nonzero range")
     return start, length, state
 
 
@@ -148,8 +150,12 @@ class MapEvent:
     mem_len: int
     bar2_va: int
     bar2_len: int
-    range_state: str
+    vma_state: str
+    cache_state: str
     access: str
+    map_source: str
+    map_reset_gen: int | None
+    current_reset_gen: int
     refs: int
     pid: int
     comm: str
@@ -165,7 +171,7 @@ class ResetEvent:
     boot_id: str
     mono_usec: int
     seq: int
-    reset_id: int
+    generation: int
     stage: str
 
 
@@ -289,6 +295,8 @@ def parse_journal(path: Path) -> ParsedInput:
             rows.append(row)
 
             if MAP_TAG in message:
+                if record.get("_TRANSPORT") != "kernel":
+                    raise CorrelationInputError(f"line {line_number}: BAR2 map record is not kernel transport")
                 if message.count(MAP_TAG) != 1:
                     raise CorrelationInputError(f"line {line_number}: repeated BAR2 map tag")
                 fields = _fields(message.split(MAP_TAG, 1)[1], MAP_FIELDS, line_number, "BAR2 map")
@@ -297,7 +305,16 @@ def parse_journal(path: Path) -> ParsedInput:
                 attempt = _uint(fields["attempt"], "attempt id", line_number)
                 mem_addr = _uint(fields["mem_addr"], "memory address", line_number, base=0)
                 mem_len = _uint(fields["mem_len"], "memory length", line_number, base=0)
-                bar2_va, bar2_len, range_state = _range(fields, line_number)
+                bar2_va, bar2_len, vma_state = _range(fields, line_number)
+                cache_state = fields["cache_state"]
+                map_source = fields["map_source"]
+                map_reset_gen = (
+                    None if fields["map_reset_gen"] == "none" else
+                    _uint(fields["map_reset_gen"], "mapping reset generation", line_number)
+                )
+                current_reset_gen = _uint(
+                    fields["current_reset_gen"], "current reset generation", line_number
+                )
                 refs = _uint(fields["refs"], "map refs", line_number, maximum=2**31 - 1)
                 pid = _uint(fields["pid"], "pid", line_number, maximum=2**31 - 1)
                 rc = _signed(fields["rc"], "lookup/map result", line_number, -4095, 4095)
@@ -313,6 +330,14 @@ def parse_journal(path: Path) -> ParsedInput:
                     raise CorrelationInputError(f"line {line_number}: unknown BAR2 map stage")
                 if fields["access"] not in ACCESS_STATES:
                     raise CorrelationInputError(f"line {line_number}: invalid access mode")
+                if cache_state not in CACHE_STATES:
+                    raise CorrelationInputError(f"line {line_number}: invalid cache state")
+                if map_source not in MAP_SOURCES:
+                    raise CorrelationInputError(f"line {line_number}: invalid map source")
+                if map_reset_gen is not None and map_reset_gen > current_reset_gen:
+                    raise CorrelationInputError(
+                        f"line {line_number}: mapping reset generation is newer than current generation"
+                    )
                 if not re.fullmatch(r"[A-Za-z0-9_.-]{1,15}", fields["comm"]):
                     raise CorrelationInputError(f"line {line_number}: malformed comm field")
                 if seq in diagnostic_sequences:
@@ -320,24 +345,29 @@ def parse_journal(path: Path) -> ParsedInput:
                 diagnostic_sequences.add(seq)
                 map_events.append(MapEvent(
                     line_number, boot, mono, seq, allocation_id, fields["stage"], attempt,
-                    mem_addr, mem_len, bar2_va, bar2_len, range_state, fields["access"],
+                    mem_addr, mem_len, bar2_va, bar2_len, vma_state, cache_state,
+                    fields["access"], map_source, map_reset_gen, current_reset_gen,
                     refs, pid, fields["comm"], rc,
                 ))
 
             if RESET_TAG in message:
+                if record.get("_TRANSPORT") != "kernel":
+                    raise CorrelationInputError(f"line {line_number}: BAR2 reset record is not kernel transport")
                 if message.count(RESET_TAG) != 1:
                     raise CorrelationInputError(f"line {line_number}: repeated BAR2 reset tag")
                 fields = _fields(message.split(RESET_TAG, 1)[1], RESET_FIELDS, line_number, "BAR2 reset")
                 seq = _uint(fields["seq"], "sequence", line_number)
-                reset_id = _uint(fields["reset_id"], "reset ID", line_number)
-                if seq == 0 or reset_id == 0 or fields["stage"] not in {"BEGIN", "END"}:
+                generation = _uint(fields["gen"], "reset generation", line_number)
+                if seq == 0 or generation == 0 or fields["stage"] not in {"BEGIN", "END"}:
                     raise CorrelationInputError(f"line {line_number}: invalid BAR2 reset record")
                 if seq in diagnostic_sequences:
                     raise CorrelationInputError(f"line {line_number}: duplicate diagnostic sequence")
                 diagnostic_sequences.add(seq)
-                reset_events.append(ResetEvent(line_number, boot, mono, seq, reset_id, fields["stage"]))
+                reset_events.append(ResetEvent(line_number, boot, mono, seq, generation, fields["stage"]))
 
             if FAULT_TAG in message:
+                if record.get("_TRANSPORT") != "kernel":
+                    raise CorrelationInputError(f"line {line_number}: raw BAR2 fault is not kernel transport")
                 if message.count(FAULT_TAG) != 1:
                     raise CorrelationInputError(f"line {line_number}: repeated BAR2 fault tag")
                 fields = _fields(
@@ -410,58 +440,121 @@ def parse_journal(path: Path) -> ParsedInput:
     return ParsedInput(next(iter(boots)), rows, map_events, reset_events, faults)
 
 
+
 def _validate_global_sequences(maps: list[MapEvent], resets: list[ResetEvent]) -> None:
-    records = sorted([*maps, *resets], key=lambda item: item.seq)
-    for previous, current in zip(records, records[1:]):
-        if current.seq <= previous.seq:
-            raise CorrelationInputError("diagnostic event sequence is not strictly increasing")
-        if current.mono_usec < previous.mono_usec:
-            raise CorrelationInputError(
-                "diagnostic sequence order conflicts with journal monotonic time"
-            )
+    sequences = sorted([event.seq for event in [*maps, *resets]])
+    if len(set(sequences)) != len(sequences):
+        raise CorrelationInputError("duplicate ambient diagnostic sequence")
+    if sequences and sequences != list(range(1, sequences[-1] + 1)):
+        raise CorrelationInputError("ambient diagnostic sequence gap; lifecycle log is incomplete")
 
 
 def _validate_attempts(events: list[MapEvent]) -> None:
+    attempt_stages = {
+        "MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_VMM_MAP_OK", "MAP_READY",
+        "MAP_FAILED", "MAP_DISCARDED", "MAP_ROLLBACK_BEGIN", "MAP_ROLLBACK_DONE",
+    }
+    paths = (
+        ("MAP_BEGIN", "MAP_FAILED"),
+        ("MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_FAILED",
+         "MAP_ROLLBACK_BEGIN", "MAP_ROLLBACK_DONE"),
+        ("MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_VMM_MAP_OK", "MAP_FAILED",
+         "MAP_ROLLBACK_BEGIN", "MAP_ROLLBACK_DONE"),
+        ("MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_VMM_MAP_OK", "MAP_DISCARDED",
+         "MAP_ROLLBACK_BEGIN", "MAP_ROLLBACK_DONE"),
+        ("MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_VMM_MAP_OK", "MAP_READY"),
+    )
     by_attempt: dict[int, list[MapEvent]] = {}
-    attempt_owner: dict[int, int] = {}
-    for event in events:
-        if event.stage not in {
-            "MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_PTE_READY", "MAP_READY",
-            "MAP_FAILED", "MAP_DISCARDED", "MAP_ROLLBACK_BEGIN", "MAP_ROLLBACK_DONE",
-        }:
-            if event.attempt != 0:
-                raise CorrelationInputError(f"line {event.line}: lifecycle event has a map attempt ID")
+    owners: dict[int, int] = {}
+    for event in sorted(events, key=lambda item: (item.mono_usec, item.line)):
+        if event.stage not in attempt_stages:
+            if event.attempt:
+                raise CorrelationInputError(
+                    f"line {event.line}: non-attempt event has an attempt ID"
+                )
             continue
-        if event.attempt == 0:
-            raise CorrelationInputError(f"line {event.line}: map attempt ID must be nonzero")
-        owner = attempt_owner.setdefault(event.attempt, event.allocation_id)
+        if not event.attempt:
+            raise CorrelationInputError(
+                f"line {event.line}: mapping attempt has a zero attempt ID"
+            )
+        owner = owners.setdefault(event.attempt, event.allocation_id)
         if owner != event.allocation_id:
             raise CorrelationInputError(
-                f"line {event.line}: map attempt ID {event.attempt} reused across allocations"
+                f"line {event.line}: mapping attempt ID reused by another allocation"
             )
         by_attempt.setdefault(event.attempt, []).append(event)
-    for attempt, sequence in by_attempt.items():
-        sequence.sort(key=lambda item: item.seq)
-        if sequence[0].stage != "MAP_BEGIN":
-            raise CorrelationInputError(f"line {sequence[0].line}: map attempt {attempt} has no MAP_BEGIN")
-        stages = [event.stage for event in sequence]
-        if len({event.allocation_id for event in sequence}) != 1:
-            raise CorrelationInputError(f"map attempt {attempt} spans allocations")
-        known_ranges = {(event.bar2_va, event.bar2_len) for event in sequence if event.bar2_len}
-        if len(known_ranges) > 1:
-            raise CorrelationInputError(f"map attempt {attempt} changes its BAR2 range")
-        legal = {
-            ("MAP_BEGIN", "MAP_FAILED"),
-            ("MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_FAILED", "MAP_ROLLBACK_BEGIN", "MAP_ROLLBACK_DONE"),
-            ("MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_PTE_READY", "MAP_FAILED", "MAP_ROLLBACK_BEGIN", "MAP_ROLLBACK_DONE"),
-            ("MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_PTE_READY", "MAP_DISCARDED", "MAP_ROLLBACK_BEGIN", "MAP_ROLLBACK_DONE"),
-            ("MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_PTE_READY", "MAP_READY"),
-        }
-        if tuple(stages) not in legal:
-            # A still-open attempt is valid only when the supplied journal ends mid-transition.
-            prefixes = [candidate[:len(stages)] for candidate in legal]
-            if not any(tuple(stages) == prefix for prefix in prefixes):
-                raise CorrelationInputError(f"line {sequence[-1].line}: impossible map-attempt stages {stages}")
+
+    for attempt, records in by_attempt.items():
+        records.sort(key=lambda event: (event.mono_usec, event.line))
+        stages = tuple(event.stage for event in records)
+        if not any(stages == path[:len(stages)] for path in paths):
+            raise CorrelationInputError(
+                f"line {records[-1].line}: invalid map attempt {attempt} sequence {stages}"
+            )
+        if len(records) > 1 and len({event.allocation_id for event in records}) != 1:
+            raise CorrelationInputError(f"mapping attempt {attempt} spans allocations")
+
+        established_gen: int | None = None
+        for event in records:
+            if event.stage in {"MAP_BEGIN", "MAP_VMA_RESERVED"}:
+                if event.map_reset_gen is not None:
+                    raise CorrelationInputError(
+                        f"line {event.line}: mapping generation logged before VMM map success"
+                    )
+            elif event.stage == "MAP_VMM_MAP_OK":
+                if event.map_reset_gen is None:
+                    raise CorrelationInputError(
+                        f"line {event.line}: successful VMM map lacks its reset generation"
+                    )
+                established_gen = event.map_reset_gen
+            elif event.stage == "MAP_READY":
+                if established_gen is None or event.map_reset_gen != established_gen:
+                    raise CorrelationInputError(
+                        f"line {event.line}: ready VMA changed its VMM establishment generation"
+                    )
+            elif event.stage in {"MAP_FAILED", "MAP_DISCARDED", "MAP_ROLLBACK_BEGIN"}:
+                if event.map_reset_gen != established_gen:
+                    raise CorrelationInputError(
+                        f"line {event.line}: failed/rolled-back map changed its attempt generation"
+                    )
+            elif event.stage == "MAP_ROLLBACK_DONE" and event.map_reset_gen is not None:
+                raise CorrelationInputError(
+                    f"line {event.line}: rolled-back VMA still reports a resident generation"
+                )
+
+
+@dataclass
+class MappingState:
+    allocation_id: int
+    allocated: bool = False
+    destroyed: bool = False
+    destroying: bool = False
+    kmap_refs_nonzero: bool = False
+    kmap_transition_refs: int = 0
+    last_kmap_ref_stage: str | None = None
+    last_kmap_ref_count: int | None = None
+    last_kmap_ref_mono_usec: int | None = None
+    vma_state: str = "not_established"
+    cache_state: str = "none"
+    bar2_va: int | None = None
+    bar2_len: int | None = None
+    map_reset_gen: int | None = None
+    current_reset_gen: int = 0
+    last_map_source: str = "none"
+    last_access: str = "none"
+    reused_from_cache_after_reset: bool = False
+    pending_evict: bool = False
+    pending_destroy: bool = False
+    last_inactive: dict[str, Any] | None = None
+    incomplete_reason: str | None = None
+
+
+def _same_range(state: MappingState, event: MapEvent) -> bool:
+    return (
+        state.bar2_va == event.bar2_va
+        and state.bar2_len == event.bar2_len
+        and state.bar2_len is not None
+    )
 
 
 def _validate_map_records(events: list[MapEvent]) -> None:
@@ -470,440 +563,819 @@ def _validate_map_records(events: list[MapEvent]) -> None:
         by_id.setdefault(event.allocation_id, []).append(event)
 
     for allocation_id, records in by_id.items():
-        records.sort(key=lambda item: item.seq)
+        records.sort(key=lambda event: (event.mono_usec, event.line))
         if records[0].stage != "ALLOCATED":
             raise CorrelationInputError(
-                f"line {records[0].line}: allocation {allocation_id} does not begin with ALLOCATED"
+                f"line {records[0].line}: allocation {allocation_id} lacks its first ALLOCATED record"
             )
         if sum(event.stage == "ALLOCATED" for event in records) != 1:
-            raise CorrelationInputError(f"allocation {allocation_id} has duplicate allocation records")
-        if sum(event.stage == "DESTROYED" for event in records) > 1:
-            raise CorrelationInputError(f"allocation {allocation_id} has duplicate DESTROYED records")
+            raise CorrelationInputError(f"allocation ID {allocation_id} is reused")
+        identities = {(event.mem_addr, event.mem_len) for event in records}
+        if len(identities) != 1:
+            raise CorrelationInputError(f"allocation ID {allocation_id} changes backing metadata")
 
-        allocated = records[0]
-        if allocated.attempt or allocated.range_state != "none" or allocated.refs != 0:
-            raise CorrelationInputError(f"line {allocated.line}: invalid ALLOCATED state")
-        current_range: tuple[int, int] | None = None
-        active = False
-        destroying = False
-        destroyed = False
-        previous_time = allocated.mono_usec
-        for event in records[1:]:
-            if event.mono_usec < previous_time:
+        state = MappingState(allocation_id)
+        previous_current_gen = 0
+        pending_eviction: MapEvent | None = None
+        pending_destroy: MapEvent | None = None
+        for event in records:
+            if event.current_reset_gen < previous_current_gen:
                 raise CorrelationInputError(
-                    f"line {event.line}: per-allocation sequence conflicts with monotonic timestamps"
+                    f"line {event.line}: current BAR2 reset generation decreased"
                 )
-            previous_time = event.mono_usec
-            if destroyed:
-                raise CorrelationInputError(f"line {event.line}: map event occurs after DESTROYED")
+            previous_current_gen = event.current_reset_gen
+            if state.destroyed:
+                raise CorrelationInputError(
+                    f"line {event.line}: lifecycle continues after OBJECT_DESTROYED"
+                )
+            if event.map_reset_gen is not None and event.map_reset_gen > event.current_reset_gen:
+                raise CorrelationInputError(
+                    f"line {event.line}: mapping reset generation exceeds current generation"
+                )
             if event.stage == "ALLOCATED":
-                raise CorrelationInputError(f"line {event.line}: duplicate ALLOCATED")
-            if event.stage == "MAP_BEGIN":
-                if destroying or event.refs != 0 or event.range_state != "none":
-                    raise CorrelationInputError(f"line {event.line}: invalid MAP_BEGIN state")
-            elif event.stage == "MAP_VMA_RESERVED":
-                if event.range_state != "reserved" or event.refs != 0:
-                    raise CorrelationInputError(f"line {event.line}: invalid VMA reservation state")
-            elif event.stage == "MAP_PTE_READY":
-                if event.range_state != "reserved" or event.refs != 0:
-                    raise CorrelationInputError(f"line {event.line}: invalid PTE-ready state")
-            elif event.stage == "MAP_READY":
-                if event.range_state != "current" or event.refs != 0 or current_range is not None:
-                    raise CorrelationInputError(f"line {event.line}: invalid MAP_READY lifecycle")
-                current_range = (event.bar2_va, event.bar2_len)
-            elif event.stage == "MAP_FAILED":
-                if event.range_state not in {"none", "reserved"} or event.refs != 0:
-                    raise CorrelationInputError(f"line {event.line}: invalid MAP_FAILED state")
-            elif event.stage == "MAP_DISCARDED":
-                if event.range_state != "reserved" or event.refs != 0:
-                    raise CorrelationInputError(f"line {event.line}: invalid discarded-map state")
-            elif event.stage in {"MAP_ROLLBACK_BEGIN", "MAP_ROLLBACK_DONE"}:
-                if event.refs != 0 or event.range_state not in {"reserved", "released"}:
-                    raise CorrelationInputError(f"line {event.line}: invalid map rollback state")
-            elif event.stage == "FIRST_MAP_ACTIVE":
-                if active or event.refs != 1 or event.access not in {"bar0", "bar2"}:
-                    raise CorrelationInputError(f"line {event.line}: impossible 0-to-1 map transition")
+                if state.allocated or event is not records[0]:
+                    raise CorrelationInputError(f"line {event.line}: duplicate or misplaced ALLOCATED")
+                if (
+                    event.vma_state != "not_established"
+                    or event.cache_state != "none"
+                    or event.access != "none"
+                    or event.map_source != "none"
+                    or event.map_reset_gen is not None
+                    or event.refs != 0
+                    or event.bar2_len != 0
+                ):
+                    raise CorrelationInputError(f"line {event.line}: invalid ALLOCATED state")
+                state.allocated = True
+                continue
+
+            if event.stage in {"MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_VMM_MAP_OK",
+                               "MAP_READY", "MAP_FAILED", "MAP_DISCARDED",
+                               "MAP_ROLLBACK_BEGIN", "MAP_ROLLBACK_DONE"}:
+                if state.destroying:
+                    raise CorrelationInputError(
+                        f"line {event.line}: mapping setup during object destruction"
+                    )
+                if event.cache_state != "none" or event.access != "none" or event.refs != 0:
+                    raise CorrelationInputError(f"line {event.line}: invalid map-attempt reference state")
+                if event.stage == "MAP_BEGIN" and state.kmap_refs_nonzero:
+                    raise CorrelationInputError(
+                        f"line {event.line}: new map attempt began while kmap refs were active"
+                    )
+                if event.stage == "MAP_READY":
+                    if (
+                        state.kmap_refs_nonzero
+                        or state.vma_state == "resident"
+                        or event.vma_state != "resident"
+                        or not event.bar2_len
+                        or event.map_reset_gen is None
+                        or event.map_source != "new"
+                    ):
+                        raise CorrelationInputError(f"line {event.line}: invalid new VMA establishment")
+                    state.vma_state = "resident"
+                    state.bar2_va = event.bar2_va
+                    state.bar2_len = event.bar2_len
+                    state.map_reset_gen = event.map_reset_gen
+                    state.cache_state = "none"
+                    state.last_map_source = "new"
+                    state.last_access = "none"
+                    state.reused_from_cache_after_reset = False
+                    state.incomplete_reason = None
+                elif event.stage == "MAP_VMA_RESERVED":
+                    if event.vma_state not in {"establishing", "not_established"}:
+                        raise CorrelationInputError(
+                            f"line {event.line}: invalid VMA setup transition state"
+                        )
+                    if event.map_reset_gen is not None:
+                        raise CorrelationInputError(
+                            f"line {event.line}: VMA reservation precedes the mapped generation"
+                        )
+                elif event.stage == "MAP_VMM_MAP_OK":
+                    if event.vma_state != "establishing" or event.map_reset_gen is None:
+                        raise CorrelationInputError(
+                            f"line {event.line}: successful VMM mapping lacks its generation"
+                        )
+                elif event.stage in {"MAP_FAILED", "MAP_DISCARDED", "MAP_ROLLBACK_BEGIN"}:
+                    if event.vma_state not in {"establishing", "not_established"}:
+                        raise CorrelationInputError(
+                            f"line {event.line}: invalid failed map transition state"
+                        )
+                elif event.stage in {"MAP_BEGIN", "MAP_ROLLBACK_DONE"}:
+                    if event.vma_state != "not_established" or event.map_reset_gen is not None:
+                        raise CorrelationInputError(
+                            f"line {event.line}: invalid map begin/rollback completion state"
+                        )
+                continue
+
+            if event.stage == "KMAP_ACTIVE":
+                if state.kmap_refs_nonzero or event.refs != 1 or event.cache_state != "active":
+                    raise CorrelationInputError(f"line {event.line}: invalid zero-to-nonzero kmap edge")
                 if event.access == "bar2":
-                    if event.range_state != "current" or current_range != (event.bar2_va, event.bar2_len):
-                        raise CorrelationInputError(f"line {event.line}: active BAR2 range is not the current VMA")
-                elif event.range_state not in {"none", "cached", "current", "unknown"}:
-                    raise CorrelationInputError(f"line {event.line}: BAR0 access has invalid range state")
-                active = True
-            elif event.stage == "LAST_MAP_RELEASE":
-                if not active or event.refs != 0:
-                    raise CorrelationInputError(f"line {event.line}: impossible 1-to-0 map transition")
-                if event.range_state == "cached":
-                    if current_range != (event.bar2_va, event.bar2_len):
-                        raise CorrelationInputError(f"line {event.line}: cached range differs from current VMA")
-                elif event.range_state not in {"none", "unknown"}:
-                    raise CorrelationInputError(f"line {event.line}: invalid last-release range state")
-                active = False
-            elif event.stage == "BOOT_MAP_PINNED":
-                if active or event.refs != 0 or event.range_state != "current":
-                    raise CorrelationInputError(f"line {event.line}: invalid boot-pinned map state")
-                if current_range != (event.bar2_va, event.bar2_len):
-                    raise CorrelationInputError(f"line {event.line}: boot-pinned range differs from current VMA")
-            elif event.stage == "EVICTING":
-                if active or event.refs != 0 or event.range_state != "current":
-                    raise CorrelationInputError(f"line {event.line}: eviction with active refs or no current range")
-                if current_range != (event.bar2_va, event.bar2_len):
-                    raise CorrelationInputError(f"line {event.line}: evicted range differs from current VMA")
-            elif event.stage == "EVICTED":
-                if active or event.refs != 0 or event.range_state != "released":
-                    raise CorrelationInputError(f"line {event.line}: invalid EVICTED state")
-                if current_range != (event.bar2_va, event.bar2_len):
-                    raise CorrelationInputError(f"line {event.line}: EVICTED range differs from current VMA")
-                current_range = None
-            elif event.stage == "DESTROYING":
-                if event.refs != 0 or active:
-                    raise CorrelationInputError(f"line {event.line}: destroy with active map refs")
-                if event.range_state == "current":
-                    if current_range != (event.bar2_va, event.bar2_len):
-                        raise CorrelationInputError(f"line {event.line}: destroy range differs from current VMA")
-                elif event.range_state != "none":
-                    raise CorrelationInputError(f"line {event.line}: invalid DESTROYING range state")
-                destroying = True
-            elif event.stage == "DESTROYED":
-                if not destroying:
-                    raise CorrelationInputError(f"line {event.line}: DESTROYED without DESTROYING")
-                if event.refs != 0:
-                    raise CorrelationInputError(f"line {event.line}: destroyed with active map refs")
-                if event.range_state == "released":
-                    if current_range != (event.bar2_va, event.bar2_len):
-                        raise CorrelationInputError(f"line {event.line}: DESTROYED range differs from current VMA")
-                    current_range = None
-                elif event.range_state == "unknown":
-                    pass
-                elif event.range_state == "none":
-                    if current_range is not None:
-                        raise CorrelationInputError(f"line {event.line}: live VMA missing from DESTROYED record")
+                    if (
+                        event.vma_state != "resident"
+                        or not event.bar2_len
+                        or event.map_reset_gen is None
+                        or event.map_source not in {"new", "cached"}
+                    ):
+                        raise CorrelationInputError(
+                            f"line {event.line}: BAR2 kmap edge lacks a resident VMA snapshot"
+                        )
+                    if state.vma_state == "resident" and not _same_range(state, event):
+                        raise CorrelationInputError(
+                            f"line {event.line}: kmap range differs from resident allocation VMA"
+                        )
+                    if state.vma_state != "resident" or not _same_range(state, event):
+                        raise CorrelationInputError(
+                            f"line {event.line}: kmap reuse has no previously established resident VMA"
+                        )
+                    if event.map_source == "new" and (
+                        state.last_map_source != "new" or state.cache_state != "none"
+                    ):
+                        raise CorrelationInputError(
+                            f"line {event.line}: new kmap edge has no preceding MAP_READY event"
+                        )
+                    if event.map_source == "cached" and state.cache_state not in {"lru", "pinned"}:
+                        raise CorrelationInputError(
+                            f"line {event.line}: cached kmap reuse did not start from a cached resident VMA"
+                        )
+                    state.vma_state = "resident"
+                    state.bar2_va = event.bar2_va
+                    state.bar2_len = event.bar2_len
+                    if state.map_reset_gen is None:
+                        state.map_reset_gen = event.map_reset_gen
+                    elif state.map_reset_gen != event.map_reset_gen:
+                        raise CorrelationInputError(
+                            f"line {event.line}: cached kmap changed VMA establishment generation"
+                        )
+                elif event.access == "bar0":
+                    if event.map_source not in {"none", "unknown"}:
+                        raise CorrelationInputError(
+                            f"line {event.line}: BAR0 access claims a BAR2 map source"
+                        )
                 else:
-                    raise CorrelationInputError(f"line {event.line}: invalid DESTROYED range state")
-                destroyed = True
+                    raise CorrelationInputError(f"line {event.line}: kmap edge has no access mode")
+                if event.vma_state == "unknown":
+                    state.incomplete_reason = "kmap edge has inconsistent VMA/ioremap state"
+                state.kmap_refs_nonzero = True
+                state.kmap_transition_refs = event.refs
+                state.last_kmap_ref_stage = event.stage
+                state.last_kmap_ref_count = event.refs
+                state.last_kmap_ref_mono_usec = event.mono_usec
+                state.cache_state = event.cache_state
+                state.last_map_source = event.map_source
+                state.last_access = event.access
+                state.current_reset_gen = event.current_reset_gen
+                if (
+                    event.map_source == "cached"
+                    and event.map_reset_gen is not None
+                    and event.current_reset_gen > event.map_reset_gen
+                ):
+                    state.reused_from_cache_after_reset = True
+                continue
+
+            if event.stage == "KMAP_LAST_RELEASE":
+                if not state.kmap_refs_nonzero or event.refs != 0:
+                    raise CorrelationInputError(f"line {event.line}: invalid nonzero-to-zero kmap edge")
+                if event.vma_state == "resident":
+                    if not _same_range(state, event) or event.map_reset_gen != state.map_reset_gen:
+                        raise CorrelationInputError(
+                            f"line {event.line}: last kmap release changed resident VMA identity"
+                        )
+                    if event.cache_state not in {"lru", "pinned"}:
+                        raise CorrelationInputError(
+                            f"line {event.line}: zero-ref resident VMA is not classified as cached/pinned"
+                        )
+                elif event.vma_state not in {"not_established", "unknown"}:
+                    raise CorrelationInputError(f"line {event.line}: invalid last kmap release VMA state")
+                state.kmap_refs_nonzero = False
+                state.last_kmap_ref_stage = event.stage
+                state.last_kmap_ref_count = event.refs
+                state.last_kmap_ref_mono_usec = event.mono_usec
+                state.cache_state = event.cache_state
+                state.vma_state = event.vma_state
+                if event.bar2_len:
+                    state.bar2_va = event.bar2_va
+                    state.bar2_len = event.bar2_len
+                state.current_reset_gen = event.current_reset_gen
+                continue
+
+            if event.stage == "BOOT_MAP_PINNED":
+                if (
+                    state.kmap_refs_nonzero
+                    or event.refs != 0
+                    or event.vma_state != "resident"
+                    or event.cache_state != "pinned"
+                    or event.map_source not in {"new", "cached"}
+                    or event.map_reset_gen is None
+                    or not event.bar2_len
+                ):
+                    raise CorrelationInputError(f"line {event.line}: invalid boot-pinned VMA record")
+                if state.vma_state == "resident" and not _same_range(state, event):
+                    raise CorrelationInputError(f"line {event.line}: pinned VMA changed range")
+                state.vma_state = "resident"
+                state.cache_state = "pinned"
+                state.bar2_va = event.bar2_va
+                state.bar2_len = event.bar2_len
+                state.map_reset_gen = event.map_reset_gen
+                state.last_map_source = event.map_source
+                state.current_reset_gen = event.current_reset_gen
+                continue
+
+            if event.stage == "VMA_EVICTING":
+                if (
+                    state.kmap_refs_nonzero
+                    or event.refs != 0
+                    or event.vma_state != "resident"
+                    or event.cache_state != "lru"
+                    or not event.bar2_len
+                ):
+                    raise CorrelationInputError(f"line {event.line}: invalid VMA eviction start")
+                if state.vma_state != "resident" or not _same_range(state, event):
+                    raise CorrelationInputError(f"line {event.line}: eviction does not match resident VMA")
+                if event.map_reset_gen != state.map_reset_gen:
+                    raise CorrelationInputError(f"line {event.line}: eviction changed map reset generation")
+                pending_eviction = event
+                state.pending_evict = True
+                state.current_reset_gen = event.current_reset_gen
+                continue
+
+            if event.stage == "VMA_EVICTED":
+                if (
+                    pending_eviction is None
+                    or event.refs != 0
+                    or event.vma_state != "evicted"
+                    or event.cache_state != "none"
+                    or not _same_range(state, event)
+                    or event.map_reset_gen != state.map_reset_gen
+                ):
+                    raise CorrelationInputError(f"line {event.line}: VMA eviction completion lacks matching start")
+                state.last_inactive = {
+                    "allocation_id": allocation_id,
+                    "terminal_stage": "VMA_EVICTED",
+                    "bar2_va": event.bar2_va,
+                    "bar2_len": event.bar2_len,
+                    "map_reset_gen": event.map_reset_gen,
+                    "mono_usec": event.mono_usec,
+                    "line": event.line,
+                }
+                state.vma_state = "evicted"
+                state.cache_state = "none"
+                state.last_map_source = "none"
+                state.bar2_va = event.bar2_va
+                state.bar2_len = event.bar2_len
+                state.map_reset_gen = event.map_reset_gen
+                state.pending_evict = False
+                pending_eviction = None
+                state.current_reset_gen = event.current_reset_gen
+                continue
+
+            if event.stage == "OBJECT_DESTROYING":
+                if state.destroying:
+                    raise CorrelationInputError(f"line {event.line}: invalid object destruction start")
+                if event.refs > 0:
+                    state.incomplete_reason = "object destruction began with active kmap refs"
+                elif state.kmap_refs_nonzero:
+                    raise CorrelationInputError(
+                        f"line {event.line}: destruction refcount contradicts the active kmap edge"
+                    )
+                if event.vma_state == "resident":
+                    if state.vma_state != "resident" or not _same_range(state, event):
+                        raise CorrelationInputError(
+                            f"line {event.line}: destruction range differs from resident VMA"
+                        )
+                elif event.vma_state == "not_established":
+                    if state.vma_state == "resident":
+                        raise CorrelationInputError(
+                            f"line {event.line}: object destruction omitted its resident VMA"
+                        )
+                elif event.vma_state != "unknown":
+                    raise CorrelationInputError(f"line {event.line}: invalid destruction VMA state")
+                state.destroying = True
+                state.pending_destroy = True
+                state.current_reset_gen = event.current_reset_gen
+                pending_destroy = event
+                continue
+
+            if event.stage == "OBJECT_DESTROYED":
+                if not state.destroying or pending_destroy is None:
+                    raise CorrelationInputError(f"line {event.line}: object destroyed without valid start")
+                if event.refs != pending_destroy.refs:
+                    raise CorrelationInputError(
+                        f"line {event.line}: object destruction refcount changed without a kmap edge"
+                    )
+                if event.vma_state == "destroyed":
+                    if (
+                        pending_destroy.vma_state != "resident"
+                        or not _same_range(state, event)
+                        or event.map_reset_gen != state.map_reset_gen
+                    ):
+                        raise CorrelationInputError(
+                            f"line {event.line}: destroyed VMA lacks a matching resident range"
+                        )
+                    state.last_inactive = {
+                        "allocation_id": allocation_id,
+                        "terminal_stage": "OBJECT_DESTROYED",
+                        "bar2_va": event.bar2_va,
+                        "bar2_len": event.bar2_len,
+                        "map_reset_gen": event.map_reset_gen,
+                        "mono_usec": event.mono_usec,
+                        "line": event.line,
+                    }
+                elif event.vma_state == "not_established":
+                    if pending_destroy.vma_state == "resident":
+                        raise CorrelationInputError(
+                            f"line {event.line}: destroyed record lost a resident VMA range"
+                        )
+                elif event.vma_state == "unknown":
+                    state.incomplete_reason = "object destruction could not confirm VMA release"
+                else:
+                    raise CorrelationInputError(f"line {event.line}: invalid destroyed VMA state")
+                state.vma_state = event.vma_state
+                state.cache_state = "none"
+                if event.bar2_len:
+                    state.bar2_va = event.bar2_va
+                    state.bar2_len = event.bar2_len
+                state.map_reset_gen = event.map_reset_gen
+                state.destroyed = True
+                state.destroying = False
+                state.pending_destroy = False
+                state.current_reset_gen = event.current_reset_gen
+                if event.refs:
+                    state.incomplete_reason = "object was destroyed with active kmap refs"
+                continue
+
+            raise CorrelationInputError(f"line {event.line}: unhandled mapping stage {event.stage}")
+
+        if pending_eviction or pending_destroy or any(
+            attempt_event.allocation_id == allocation_id
+            and attempt_event.stage in {"MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_VMM_MAP_OK",
+                                        "MAP_FAILED", "MAP_DISCARDED", "MAP_ROLLBACK_BEGIN"}
+            for attempt_event in events
+        ):
+            # Open-at-EOF transitions are preserved and classified as incomplete by
+            # the per-fault state reconstruction if they intersect a fault.
+            pass
 
 
 def _validate_reset_records(events: list[ResetEvent]) -> None:
-    by_id: dict[int, list[ResetEvent]] = {}
-    for event in events:
-        by_id.setdefault(event.reset_id, []).append(event)
-    for reset_id, records in by_id.items():
-        records.sort(key=lambda item: item.seq)
-        stages = [item.stage for item in records]
-        if stages not in (["BEGIN", "END"], ["BEGIN"]):
-            raise CorrelationInputError(f"BAR2 reset {reset_id} has invalid sequence {stages}")
-        if len(records) == 2 and records[1].mono_usec < records[0].mono_usec:
-            raise CorrelationInputError(f"BAR2 reset {reset_id} has reversed timestamps")
-
-
-def _map_transition_windows(parsed: ParsedInput) -> list[dict[str, Any]]:
-    by_attempt: dict[tuple[int, int], list[MapEvent]] = {}
-    by_id: dict[int, list[MapEvent]] = {}
-    for event in parsed.maps:
-        by_id.setdefault(event.allocation_id, []).append(event)
-        if event.attempt:
-            by_attempt.setdefault((event.allocation_id, event.attempt), []).append(event)
-    windows: list[dict[str, Any]] = []
-    for (allocation_id, attempt), events in by_attempt.items():
-        events.sort(key=lambda item: item.seq)
-        start = events[0]
-        terminal = None
-        for event in events[1:]:
-            if event.stage in {"MAP_READY", "MAP_ROLLBACK_DONE"}:
-                terminal = event
-                break
-            if event.stage == "MAP_FAILED" and event.bar2_len == 0:
-                terminal = event
-                break
-        end = terminal
-        start_range = next((event for event in events if event.bar2_len), None)
-        windows.append({
-            "kind": "map_setup",
-            "allocation_id": allocation_id,
-            "attempt": attempt,
-            "start_usec": start.mono_usec,
-            "end_usec": end.mono_usec if end else None,
-            "start_line": start.line,
-            "end_line": end.line if end else None,
-            "va": start_range.bar2_va if start_range else None,
-            "length": start_range.bar2_len if start_range else None,
-            "open": end is None,
-        })
-    for allocation_id, events in by_id.items():
-        events.sort(key=lambda item: item.seq)
-        active_bar2: MapEvent | None = None
-        ready: MapEvent | None = None
-        for index, event in enumerate(events):
-            if event.stage == "MAP_READY":
-                ready = event
-            elif event.stage == "FIRST_MAP_ACTIVE":
-                if ready is not None and ready.bar2_va == event.bar2_va and ready.bar2_len == event.bar2_len:
-                    windows.append({
-                        "kind": "activation",
-                        "allocation_id": allocation_id,
-                        "attempt": 0,
-                        "start_usec": ready.mono_usec,
-                        "end_usec": event.mono_usec,
-                        "start_line": ready.line,
-                        "end_line": event.line,
-                        "va": event.bar2_va,
-                        "length": event.bar2_len,
-                        "open": False,
-                    })
-                ready = None
-                if event.access == "bar2" and event.range_state == "current" and event.bar2_len:
-                    active_bar2 = event
-                else:
-                    active_bar2 = None
-                windows.append({
-                    "kind": "map_ref_activation_edge",
-                    "allocation_id": allocation_id,
-                    "attempt": 0,
-                    "start_usec": event.mono_usec,
-                    "end_usec": event.mono_usec,
-                    "start_line": event.line,
-                    "end_line": event.line,
-                    "va": event.bar2_va if active_bar2 else None,
-                    "length": event.bar2_len if active_bar2 else None,
-                    "open": False,
-                })
-            elif event.stage == "LAST_MAP_RELEASE":
-                if active_bar2 is not None and event.bar2_len:
-                    windows.append({
-                        "kind": "map_ref_release_edge",
-                        "allocation_id": allocation_id,
-                        "attempt": 0,
-                        "start_usec": event.mono_usec,
-                        "end_usec": event.mono_usec,
-                        "start_line": event.line,
-                        "end_line": event.line,
-                        "va": event.bar2_va,
-                        "length": event.bar2_len,
-                        "open": False,
-                    })
-                active_bar2 = None
-            elif event.stage in {"EVICTED", "DESTROYED"}:
-                active_bar2 = None
-            if event.stage not in {"EVICTING", "DESTROYING"}:
-                continue
-            closing_stage = "EVICTED" if event.stage == "EVICTING" else "DESTROYED"
-            closing = next((item for item in events[index + 1:] if item.stage == closing_stage), None)
-            windows.append({
-                "kind": "eviction" if event.stage == "EVICTING" else "destruction",
-                "allocation_id": allocation_id,
-                "attempt": 0,
-                "start_usec": event.mono_usec,
-                "end_usec": closing.mono_usec if closing else None,
-                "start_line": event.line,
-                "end_line": closing.line if closing else None,
-                "va": event.bar2_va if event.bar2_len else None,
-                "length": event.bar2_len if event.bar2_len else None,
-                "open": closing is None,
-            })
-    for reset_id, records in _reset_groups(parsed.resets).items():
-        begin = next(item for item in records if item.stage == "BEGIN")
-        end = next((item for item in records if item.stage == "END"), None)
-        windows.append({
-            "kind": "bar2_reset",
-            "reset_id": reset_id,
-            "allocation_id": None,
-            "attempt": 0,
-            "start_usec": begin.mono_usec,
-            "end_usec": end.mono_usec if end else None,
-            "start_line": begin.line,
-            "end_line": end.line if end else None,
-            "va": None,
-            "length": None,
-            "open": end is None,
-        })
-    return windows
+    ordered = sorted(events, key=lambda event: (event.mono_usec, event.line))
+    generation = 0
+    pending: int | None = None
+    for event in ordered:
+        if event.stage == "BEGIN":
+            if pending is not None:
+                raise CorrelationInputError(
+                    f"line {event.line}: overlapping BAR2 reset intervals are unsupported"
+                )
+            if event.generation != generation + 1:
+                raise CorrelationInputError(
+                    f"line {event.line}: BAR2 reset generation is not monotonic"
+                )
+            generation = event.generation
+            pending = generation
+        elif event.stage == "END":
+            if event.generation != pending:
+                raise CorrelationInputError(
+                    f"line {event.line}: BAR2 reset end has no matching begin"
+                )
+            pending = None
 
 
 def _reset_groups(events: list[ResetEvent]) -> dict[int, list[ResetEvent]]:
-    result: dict[int, list[ResetEvent]] = {}
+    grouped: dict[int, list[ResetEvent]] = {}
     for event in events:
-        result.setdefault(event.reset_id, []).append(event)
-    for records in result.values():
-        records.sort(key=lambda item: item.seq)
-    return result
+        grouped.setdefault(event.generation, []).append(event)
+    for records in grouped.values():
+        records.sort(key=lambda event: event.seq)
+    return grouped
+
+
+def _before_fault(event: MapEvent | ResetEvent, fault: FaultEvent) -> bool:
+    if event.mono_usec != fault.raw_mono_usec:
+        return event.mono_usec < fault.raw_mono_usec
+    return event.line < fault.raw_line
+
+
+def _state_at_fault(events: list[MapEvent], fault: FaultEvent) -> MappingState:
+    state = MappingState(events[0].allocation_id)
+    for event in sorted(events, key=lambda item: (item.mono_usec, item.line)):
+        if not _before_fault(event, fault):
+            break
+        state.current_reset_gen = max(state.current_reset_gen, event.current_reset_gen)
+        if event.stage == "ALLOCATED":
+            state.allocated = True
+        elif event.stage == "MAP_READY":
+            state.vma_state = "resident"
+            state.cache_state = "none"
+            state.bar2_va = event.bar2_va
+            state.bar2_len = event.bar2_len
+            state.map_reset_gen = event.map_reset_gen
+            state.last_map_source = "new"
+            state.last_access = "none"
+            state.reused_from_cache_after_reset = False
+            state.incomplete_reason = "VMA established before first kmap reference edge"
+        elif event.stage in {"MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_VMM_MAP_OK",
+                             "MAP_FAILED", "MAP_DISCARDED", "MAP_ROLLBACK_BEGIN"}:
+            # Attempt state is reconstructed independently. A concurrent losing
+            # attempt must not overwrite an already resident VMA snapshot.
+            pass
+        elif event.stage == "MAP_ROLLBACK_DONE":
+            state.incomplete_reason = None
+        elif event.stage == "KMAP_ACTIVE":
+            state.kmap_refs_nonzero = True
+            state.kmap_transition_refs = event.refs
+            state.last_kmap_ref_stage = event.stage
+            state.last_kmap_ref_count = event.refs
+            state.last_kmap_ref_mono_usec = event.mono_usec
+            state.vma_state = event.vma_state
+            state.cache_state = event.cache_state
+            if event.bar2_len:
+                state.bar2_va = event.bar2_va
+                state.bar2_len = event.bar2_len
+            state.map_reset_gen = event.map_reset_gen
+            state.last_map_source = event.map_source
+            state.last_access = event.access
+            state.incomplete_reason = None
+            if (
+                event.map_source == "cached"
+                and event.map_reset_gen is not None
+                and event.current_reset_gen > event.map_reset_gen
+            ):
+                state.reused_from_cache_after_reset = True
+        elif event.stage == "KMAP_LAST_RELEASE":
+            state.kmap_refs_nonzero = False
+            state.kmap_transition_refs = 0
+            state.last_kmap_ref_stage = event.stage
+            state.last_kmap_ref_count = event.refs
+            state.last_kmap_ref_mono_usec = event.mono_usec
+            state.vma_state = event.vma_state
+            state.cache_state = event.cache_state
+            if event.bar2_len:
+                state.bar2_va = event.bar2_va
+                state.bar2_len = event.bar2_len
+            state.map_reset_gen = event.map_reset_gen
+        elif event.stage == "BOOT_MAP_PINNED":
+            state.kmap_refs_nonzero = False
+            state.vma_state = event.vma_state
+            state.cache_state = event.cache_state
+            state.bar2_va = event.bar2_va
+            state.bar2_len = event.bar2_len
+            state.map_reset_gen = event.map_reset_gen
+            state.last_map_source = event.map_source
+            state.incomplete_reason = None
+            if (
+                event.map_source == "cached"
+                and event.map_reset_gen is not None
+                and event.current_reset_gen > event.map_reset_gen
+            ):
+                state.reused_from_cache_after_reset = True
+        elif event.stage == "VMA_EVICTING":
+            state.pending_evict = True
+            state.incomplete_reason = "VMA eviction is in progress"
+            state.bar2_va = event.bar2_va
+            state.bar2_len = event.bar2_len
+        elif event.stage == "VMA_EVICTED":
+            state.pending_evict = False
+            state.vma_state = "evicted"
+            state.cache_state = "none"
+            state.bar2_va = event.bar2_va
+            state.bar2_len = event.bar2_len
+            state.map_reset_gen = event.map_reset_gen
+            state.last_inactive = {
+                "allocation_id": event.allocation_id,
+                "terminal_stage": "VMA_EVICTED",
+                "bar2_va": event.bar2_va,
+                "bar2_len": event.bar2_len,
+                "map_reset_gen": event.map_reset_gen,
+                "mono_usec": event.mono_usec,
+                "line": event.line,
+            }
+            state.incomplete_reason = None
+        elif event.stage == "OBJECT_DESTROYING":
+            state.destroying = True
+            state.pending_destroy = True
+            state.incomplete_reason = "object destruction is in progress"
+            if event.bar2_len:
+                state.bar2_va = event.bar2_va
+                state.bar2_len = event.bar2_len
+        elif event.stage == "OBJECT_DESTROYED":
+            state.destroying = False
+            state.pending_destroy = False
+            state.destroyed = True
+            state.vma_state = event.vma_state
+            state.cache_state = "none"
+            if event.bar2_len:
+                state.bar2_va = event.bar2_va
+                state.bar2_len = event.bar2_len
+            state.map_reset_gen = event.map_reset_gen
+            if event.vma_state == "destroyed":
+                state.last_inactive = {
+                    "allocation_id": event.allocation_id,
+                    "terminal_stage": "OBJECT_DESTROYED",
+                    "bar2_va": event.bar2_va,
+                    "bar2_len": event.bar2_len,
+                    "map_reset_gen": event.map_reset_gen,
+                    "mono_usec": event.mono_usec,
+                    "line": event.line,
+                }
+                state.incomplete_reason = (
+                    "object was destroyed with active kmap refs"
+                    if event.refs else None
+                )
+            elif event.vma_state == "not_established":
+                state.incomplete_reason = None
+            else:
+                state.incomplete_reason = "object destruction did not confirm VMA release"
+    return state
+
+
+def _reset_state_at_fault(resets: list[ResetEvent], fault: FaultEvent) -> tuple[int, bool]:
+    generation = 0
+    begun: set[int] = set()
+    ended: set[int] = set()
+    for event in sorted(resets, key=lambda item: (item.mono_usec, item.line)):
+        if not _before_fault(event, fault):
+            continue
+        if event.stage == "BEGIN":
+            generation = max(generation, event.generation)
+            begun.add(event.generation)
+        else:
+            ended.add(event.generation)
+    return generation, bool(begun - ended)
+
+
+def _transition_records(parsed: ParsedInput, fault: FaultEvent) -> list[dict[str, Any]]:
+    transitions: list[dict[str, Any]] = []
+    before = [event for event in parsed.maps if _before_fault(event, fault)]
+    attempts: dict[tuple[int, int], list[MapEvent]] = {}
+    by_id: dict[int, list[MapEvent]] = {}
+    attempt_stages = {
+        "MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_VMM_MAP_OK", "MAP_READY",
+        "MAP_FAILED", "MAP_DISCARDED", "MAP_ROLLBACK_BEGIN", "MAP_ROLLBACK_DONE",
+    }
+    for event in before:
+        by_id.setdefault(event.allocation_id, []).append(event)
+        if event.attempt and event.stage in attempt_stages:
+            attempts.setdefault((event.allocation_id, event.attempt), []).append(event)
+    for (allocation_id, attempt), records in attempts.items():
+        records.sort(key=lambda event: (event.mono_usec, event.line))
+        terminal = records[-1].stage in {"MAP_READY", "MAP_ROLLBACK_DONE"}
+        terminal = terminal or (
+            records[-1].stage == "MAP_FAILED" and records[-1].bar2_len == 0
+        )
+        if terminal:
+            continue
+        ranged = next((event for event in reversed(records) if event.bar2_len), None)
+        if ranged and ranged.bar2_va <= fault.va < ranged.bar2_va + ranged.bar2_len:
+            transitions.append({
+                "kind": "map_setup",
+                "allocation_id": allocation_id,
+                "attempt": attempt,
+                "start_usec": records[0].mono_usec,
+                "va": f"0x{ranged.bar2_va:x}",
+                "length": f"0x{ranged.bar2_len:x}",
+                "event_line": records[0].line,
+            })
+        elif not ranged:
+            transitions.append({
+                "kind": "map_setup_address_not_yet_known",
+                "allocation_id": allocation_id,
+                "attempt": attempt,
+                "start_usec": records[0].mono_usec,
+                "va": None,
+                "length": None,
+                "event_line": records[0].line,
+            })
+    for allocation_id, records in by_id.items():
+        records.sort(key=lambda event: (event.mono_usec, event.line))
+        if not records:
+            continue
+        last = records[-1]
+        if last.stage in {"VMA_EVICTING", "OBJECT_DESTROYING"} and last.bar2_len:
+            if last.bar2_va <= fault.va < last.bar2_va + last.bar2_len:
+                transitions.append({
+                    "kind": "vma_eviction" if last.stage == "VMA_EVICTING" else "object_destruction",
+                    "allocation_id": allocation_id,
+                    "attempt": 0,
+                    "start_usec": last.mono_usec,
+                    "va": f"0x{last.bar2_va:x}",
+                    "length": f"0x{last.bar2_len:x}",
+                    "event_line": last.line,
+                })
+    return transitions
 
 
 def correlate(parsed: ParsedInput) -> dict[str, Any]:
-    windows = _map_transition_windows(parsed)
     maps_by_id: dict[int, list[MapEvent]] = {}
     for event in parsed.maps:
         maps_by_id.setdefault(event.allocation_id, []).append(event)
-    for events in maps_by_id.values():
-        events.sort(key=lambda item: item.seq)
+    for records in maps_by_id.values():
+        records.sort(key=lambda event: (event.mono_usec, event.line))
 
-    reset_groups = _reset_groups(parsed.resets)
-    fault_results = []
-    for fault in parsed.faults:
-        interval_start = fault.raw_mono_usec
-        interval_end = fault.mono_usec
+    faults = sorted(parsed.faults, key=lambda event: (event.raw_mono_usec, event.raw_line))
+    fault_results: list[dict[str, Any]] = []
+    reset_begins = [event for event in parsed.resets if event.stage == "BEGIN"]
+    previous_fault: FaultEvent | None = None
+    for ordinal, fault in enumerate(faults, 1):
+        current_gen, reset_in_progress = _reset_state_at_fault(parsed.resets, fault)
         active_candidates: list[dict[str, Any]] = []
-        released_ranges: list[dict[str, Any]] = []
-        lifecycle_unknown: list[dict[str, Any]] = []
-        for allocation_id, events in maps_by_id.items():
-            active_event: MapEvent | None = None
-            last_release: MapEvent | None = None
-            terminal_state: MapEvent | None = None
-            destroying_event: MapEvent | None = None
-            for event in events:
-                if event.mono_usec > interval_end:
-                    break
-                if event.stage == "FIRST_MAP_ACTIVE":
-                    active_event = event
-                    last_release = None
-                    terminal_state = event
-                elif event.stage == "LAST_MAP_RELEASE":
-                    active_event = None
-                    last_release = event
-                    terminal_state = event
-                elif event.stage in {"EVICTED", "DESTROYED"}:
-                    active_event = None
-                    last_release = event
-                    terminal_state = event
-                elif event.stage == "BOOT_MAP_PINNED":
-                    terminal_state = event
-                elif event.stage == "MAP_READY":
-                    terminal_state = event
-                elif event.stage == "DESTROYING":
-                    destroying_event = event
-                    terminal_state = event
+        zero_ref_candidates: list[dict[str, Any]] = []
+        resident_candidates: list[dict[str, Any]] = []
+        incomplete: list[dict[str, Any]] = []
+        recently_evicted: list[dict[str, Any]] = []
+        transitions = _transition_records(parsed, fault)
 
-            if active_event and active_event.access == "bar2" and active_event.range_state == "current" and active_event.contains(fault.va):
-                release = next((event for event in events if event.stage == "LAST_MAP_RELEASE" and event.seq > active_event.seq), None)
-                if release is None or interval_end < release.mono_usec:
-                    if (interval_start <= active_event.mono_usec <= interval_end or
-                            (release and interval_start <= release.mono_usec <= interval_end)):
-                        lifecycle_unknown.append({"allocation_id": allocation_id, "reason": "fault shares transition timestamp"})
-                    else:
-                        spanning_resets = []
-                        for reset_id, reset_events in reset_groups.items():
-                            begin = next(item for item in reset_events if item.stage == "BEGIN")
-                            end = next((item for item in reset_events if item.stage == "END"), None)
-                            if (active_event.mono_usec < begin.mono_usec < interval_start and
-                                    end is not None and end.mono_usec < interval_start and
-                                    (release is None or end.mono_usec < release.mono_usec)):
-                                spanning_resets.append(reset_id)
-                        active_candidates.append({
-                            "allocation_id": allocation_id,
-                            "stage": active_event.stage,
-                            "bar2_va": f"0x{active_event.bar2_va:x}",
-                            "bar2_len": f"0x{active_event.bar2_len:x}",
-                            "active_since_monotonic_usec": active_event.mono_usec,
-                            "last_release_monotonic_usec": release.mono_usec if release else None,
-                            "map_refs_at_transition": active_event.refs,
-                            "pid": active_event.pid,
-                            "comm": active_event.comm,
-                            "numeric_address_correlation_only": True,
-                            "causal_ownership_proven": False,
-                            "active_mapping_spanned_completed_bar2_reset_ids": spanning_resets,
-                        })
-
-            if terminal_state and terminal_state.bar2_len and terminal_state.contains(fault.va):
-                if terminal_state.stage == "DESTROYING":
-                    lifecycle_unknown.append({
+        for allocation_id, records in maps_by_id.items():
+            state = _state_at_fault(records, fault)
+            if state.current_reset_gen > current_gen and state.bar2_len and state.bar2_va is not None:
+                if state.bar2_va <= fault.va < state.bar2_va + state.bar2_len:
+                    incomplete.append({
                         "allocation_id": allocation_id,
-                        "stage": terminal_state.stage,
-                        "bar2_va": f"0x{terminal_state.bar2_va:x}",
-                        "bar2_len": f"0x{terminal_state.bar2_len:x}",
+                        "reason": "mapping observed a reset generation before its BEGIN record",
+                        "vma_state": state.vma_state,
+                        "bar2_va": f"0x{state.bar2_va:x}",
+                        "bar2_len": f"0x{state.bar2_len:x}",
                     })
-                elif terminal_state.stage == "DESTROYED" and terminal_state.range_state == "unknown":
-                    lifecycle_unknown.append({
+            if state.incomplete_reason and state.bar2_len and state.bar2_va is not None:
+                if state.bar2_va <= fault.va < state.bar2_va + state.bar2_len:
+                    incomplete.append({
                         "allocation_id": allocation_id,
-                        "stage": terminal_state.stage,
-                        "reason": "destroyed range could not be verified",
-                        "bar2_va": f"0x{terminal_state.bar2_va:x}",
-                        "bar2_len": f"0x{terminal_state.bar2_len:x}",
+                        "reason": state.incomplete_reason,
+                        "vma_state": state.vma_state,
+                        "bar2_va": f"0x{state.bar2_va:x}",
+                        "bar2_len": f"0x{state.bar2_len:x}",
                     })
-                elif (active_event is None and last_release and
-                      last_release.seq == terminal_state.seq and
-                      last_release.mono_usec < interval_start):
-                    vma_teardown_confirmed = last_release.stage in {"EVICTED", "DESTROYED"}
-                    released_ranges.append({
+            if state.pending_evict or state.pending_destroy:
+                if state.bar2_len and state.bar2_va is not None and state.bar2_va <= fault.va < state.bar2_va + state.bar2_len:
+                    incomplete.append({
                         "allocation_id": allocation_id,
-                        "release_stage": last_release.stage,
-                        "release_monotonic_usec": last_release.mono_usec,
-                        "release_to_fault_usec": interval_start - last_release.mono_usec,
-                        "last_observed_range_state": last_release.range_state,
-                        "bar2_va": f"0x{last_release.bar2_va:x}",
-                        "bar2_len": f"0x{last_release.bar2_len:x}",
-                        "map_ref_active_at_fault": False,
-                        "vma_teardown_confirmed": vma_teardown_confirmed,
-                        "bar2_vma_state_at_record": (
-                            "cached_in_lru" if last_release.stage == "LAST_MAP_RELEASE" else
-                            "released" if vma_teardown_confirmed else "unknown"
-                        ),
-                    })
-                elif terminal_state.stage in {"MAP_READY", "BOOT_MAP_PINNED"}:
-                    lifecycle_unknown.append({
-                        "allocation_id": allocation_id,
-                        "stage": terminal_state.stage,
-                        "reason": "range exists without a logged active access reference",
-                        "bar2_va": f"0x{terminal_state.bar2_va:x}",
-                        "bar2_len": f"0x{terminal_state.bar2_len:x}",
+                        "reason": state.incomplete_reason or "mapping transition in progress",
+                        "vma_state": state.vma_state,
+                        "bar2_va": f"0x{state.bar2_va:x}",
+                        "bar2_len": f"0x{state.bar2_len:x}",
                     })
 
-        relevant_windows = []
-        for window in windows:
-            start = window["start_usec"]
-            end = window["end_usec"]
-            in_time = start <= interval_end and (end is None or interval_start <= end)
-            if not in_time:
-                continue
-            if window["kind"] == "bar2_reset":
-                relevant_windows.append(window)
-            elif window["va"] is None or (
-                window["length"] and window["va"] <= fault.va < window["va"] + window["length"]
+            if (
+                state.vma_state == "resident"
+                and state.bar2_va is not None
+                and state.bar2_len
+                and state.bar2_va <= fault.va < state.bar2_va + state.bar2_len
             ):
-                relevant_windows.append(window)
+                if state.incomplete_reason:
+                    continue
+                if state.kmap_refs_nonzero:
+                    outcome = "ONE_ACTIVE_KMAP_RESIDENT_VMA_CANDIDATE"
+                elif state.cache_state == "lru":
+                    outcome = (
+                        "ONE_RESET_SPANNING_CACHED_VMA_CANDIDATE"
+                        if state.map_reset_gen is not None
+                        and current_gen > state.map_reset_gen
+                        else "ONE_ZERO_REF_CACHED_VMA_CANDIDATE"
+                    )
+                elif state.cache_state == "pinned":
+                    outcome = "ONE_ZERO_REF_RESIDENT_VMA_CANDIDATE"
+                else:
+                    incomplete.append({
+                        "allocation_id": allocation_id,
+                        "reason": "resident VMA has no logged kmap/cache state",
+                        "vma_state": state.vma_state,
+                        "bar2_va": f"0x{state.bar2_va:x}",
+                        "bar2_len": f"0x{state.bar2_len:x}",
+                    })
+                    continue
+                candidate = {
+                    "allocation_id": allocation_id,
+                    "outcome": outcome,
+                    "kmap_ref_state_at_fault": (
+                        "NONZERO" if state.kmap_refs_nonzero else "ZERO"
+                    ),
+                    "exact_kmap_refcount_at_fault": (
+                        None if state.kmap_refs_nonzero else 0
+                    ),
+                    "last_kmap_ref_edge": (
+                        {
+                            "stage": state.last_kmap_ref_stage,
+                            "refcount_at_edge": state.last_kmap_ref_count,
+                            "monotonic_usec": state.last_kmap_ref_mono_usec,
+                        }
+                        if state.last_kmap_ref_stage is not None else None
+                    ),
+                    "vma_state": state.vma_state,
+                    "cache_state": state.cache_state,
+                    "bar2_va": f"0x{state.bar2_va:x}",
+                    "bar2_len": f"0x{state.bar2_len:x}",
+                    "map_reset_gen": state.map_reset_gen,
+                    "current_reset_gen_at_fault": current_gen,
+                    "last_map_source": state.last_map_source,
+                    "last_access": state.last_access,
+                    "mapping_spans_reset": (
+                        state.map_reset_gen is not None
+                        and current_gen > state.map_reset_gen
+                    ),
+                    "reused_from_cache_after_reset": state.reused_from_cache_after_reset,
+                    "numeric_address_correlation_only": True,
+                    "causal_ownership_proven": False,
+                }
+                resident_candidates.append(candidate)
+                if state.kmap_refs_nonzero:
+                    active_candidates.append(candidate)
+                else:
+                    zero_ref_candidates.append(candidate)
 
-        if relevant_windows:
-            outcome = "INCONCLUSIVE_MAPPING_TRANSITION"
-        elif lifecycle_unknown:
-            outcome = "INCONCLUSIVE_MAPPING_LIFECYCLE"
-        elif len(active_candidates) == 1:
-            outcome = "ONE_NUMERIC_ACTIVE_BAR2_MAPPING_CANDIDATE"
-        elif len(active_candidates) > 1:
-            outcome = "MULTIPLE_NUMERIC_ACTIVE_BAR2_MAPPING_CANDIDATES"
-        elif released_ranges:
-            outcome = "RECENTLY_RELEASED_BAR2_RANGE"
+            if (
+                state.last_inactive
+                and not (
+                    state.vma_state == "resident"
+                    and state.bar2_va is not None
+                    and state.bar2_len is not None
+                    and state.bar2_va <= fault.va < state.bar2_va + state.bar2_len
+                )
+                and state.last_inactive["bar2_va"] <= fault.va
+                < state.last_inactive["bar2_va"] + state.last_inactive["bar2_len"]
+            ):
+                recently_evicted.append({
+                    **state.last_inactive,
+                    "release_to_fault_usec": fault.raw_mono_usec - state.last_inactive["mono_usec"],
+                    "active_at_fault": False,
+                    "causal_ownership_proven": False,
+                })
+
+        resets_before = [
+            event for event in reset_begins if _before_fault(event, fault)
+        ]
+        post_fault_resets = [
+            event for event in reset_begins
+            if fault.raw_mono_usec < event.mono_usec <= fault.mono_usec
+        ]
+        resets_since_previous = 0
+        delta_previous = None
+        if previous_fault is not None:
+            delta_previous = fault.raw_mono_usec - previous_fault.raw_mono_usec
+            resets_since_previous = sum(
+                event.generation > 0
+                and (event.mono_usec, event.line) > (previous_fault.raw_mono_usec, previous_fault.raw_line)
+                and _before_fault(event, fault)
+                for event in reset_begins
+            )
+
+        transition_reasons = {
+            "VMA established before first kmap reference edge",
+            "mapping establishment transition overlaps fault time",
+            "VMA eviction is in progress",
+            "object destruction is in progress",
+            "mapping observed a reset generation before its BEGIN record",
+        }
+        has_transition_incomplete = any(
+            item["reason"] in transition_reasons for item in incomplete
+        )
+        if reset_in_progress or transitions or has_transition_incomplete:
+            outcome = "INCONCLUSIVE_VMA_TRANSITION"
+        elif incomplete:
+            outcome = "INCOMPLETE_MAPPING_LIFECYCLE"
+        elif len(resident_candidates) > 1:
+            outcome = "MULTIPLE_RESIDENT_VMA_CANDIDATES"
+        elif len(resident_candidates) == 1:
+            outcome = resident_candidates[0]["outcome"]
+        elif recently_evicted:
+            outcome = "RECENTLY_EVICTED_VMA_RANGE"
         else:
             outcome = "NO_OBSERVED_BAR2_MAPPING_MATCH"
 
         fault_results.append({
+            "fault_ordinal": ordinal,
+            "time_since_previous_fault_usec": delta_previous,
+            "bar2_resets_before_fault": len(resets_before),
+            "bar2_reset_generation_at_fault": current_gen,
+            "bar2_resets_since_previous_fault": resets_since_previous,
+            "reset_in_progress_at_fault": reset_in_progress,
+            "post_fault_recovery_reset_generations": [event.generation for event in post_fault_resets],
             "fault": fault.as_json(),
-            "correlation_observation_window_usec": [interval_start, interval_end],
-            "fault_event_time_exact": False,
             "outcome": outcome,
             "numeric_address_correlation_only": True,
             "causal_ownership_proven": False,
             "active_candidates": active_candidates,
-            "recently_released_ranges": released_ranges,
-            "incomplete_or_unreferenced_ranges": lifecycle_unknown,
-            "transition_windows": relevant_windows,
+            "zero_ref_candidates": zero_ref_candidates,
+            "resident_candidates": resident_candidates,
+            "recently_evicted_ranges": recently_evicted,
+            "incomplete_lifecycles": incomplete,
+            "transition_records": transitions,
         })
+        previous_fault = fault
 
+    outcomes = sorted({item["outcome"] for item in fault_results})
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "result_kind": "AMBIENT_BAR2_LIFETIME_CORRELATION_ONLY",
         "boot_id": parsed.boot_id,
         "input_completeness_proven": False,
+        "diagnostic_sequence_gaps_rejected": True,
         "pointer_identity_used": False,
         "memory_address_used_for_fault_matching": False,
         "fault_count": len(parsed.faults),
         "mapping_event_count": len(parsed.maps),
         "reset_event_count": len(parsed.resets),
         "allocation_id_count": len({event.allocation_id for event in parsed.maps}),
-        "outcomes": {name: sum(item["outcome"] == name for item in fault_results) for name in (
-            "ONE_NUMERIC_ACTIVE_BAR2_MAPPING_CANDIDATE",
-            "MULTIPLE_NUMERIC_ACTIVE_BAR2_MAPPING_CANDIDATES",
-            "INCONCLUSIVE_MAPPING_TRANSITION",
-            "RECENTLY_RELEASED_BAR2_RANGE",
-            "INCONCLUSIVE_MAPPING_LIFECYCLE",
-            "NO_OBSERVED_BAR2_MAPPING_MATCH",
-        )},
+        "outcomes": {name: sum(item["outcome"] == name for item in fault_results)
+                     for name in outcomes},
         "faults": fault_results,
     }
 
