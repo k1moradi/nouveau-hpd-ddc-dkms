@@ -162,11 +162,13 @@ def _fields(message: str, marker: str, line_no: int) -> dict[str, str]:
 
 def _validate_vma_source_contract(events: list[VmaEvent]) -> None:
     """Validate src/rc against the logger's refresh and cache semantics."""
-    by_test: dict[int, list[VmaEvent]] = {}
+    # Test IDs are monotonic only within one kernel boot. Never carry a
+    # cached VMA snapshot across boot IDs when parsing arbitrary JSONL input.
+    by_test: dict[tuple[str, int], list[VmaEvent]] = {}
     for event in events:
-        by_test.setdefault(event.test_id, []).append(event)
+        by_test.setdefault((event.boot_id, event.test_id), []).append(event)
 
-    for test_id, test_events in by_test.items():
+    for (boot_id, test_id), test_events in by_test.items():
         test_events.sort(key=lambda event: (event.monotonic_usec, event.sequence))
         # A last_observed source must be justified by a prior current snapshot
         # in this test's supplied journal records. Missing history is not
@@ -177,7 +179,8 @@ def _validate_vma_source_contract(events: list[VmaEvent]) -> None:
             if event.stage == "allocated":
                 if event.source != "unavailable" or event.lookup_rc != 0:
                     raise CorrelationInputError(
-                        f"test {test_id}: allocated requires src=unavailable and rc=0"
+                        f"boot {boot_id} test {test_id}: allocated requires "
+                        "src=unavailable and rc=0"
                     )
                 cached_snapshot = False
                 continue
@@ -190,28 +193,33 @@ def _validate_vma_source_contract(events: list[VmaEvent]) -> None:
                 elif event.source == "last_observed":
                     if event.lookup_rc == 0:
                         raise CorrelationInputError(
-                            f"test {test_id}: last_observed active lookup requires nonzero rc"
+                            f"boot {boot_id} test {test_id}: last_observed active "
+                            "lookup requires nonzero rc"
                         )
                     if not cached_snapshot:
                         raise CorrelationInputError(
-                            f"test {test_id}: last_observed has no prior current snapshot"
+                            f"boot {boot_id} test {test_id}: last_observed has "
+                            "no prior current snapshot"
                         )
                     cached_snapshot = True
                 else:  # unavailable
                     if event.lookup_rc == 0:
                         raise CorrelationInputError(
-                            f"test {test_id}: unavailable active lookup requires nonzero rc"
+                            f"boot {boot_id} test {test_id}: unavailable active "
+                            "lookup requires nonzero rc"
                         )
                     if cached_snapshot:
                         raise CorrelationInputError(
-                            f"test {test_id}: unavailable follows a cached current snapshot"
+                            f"boot {boot_id} test {test_id}: unavailable follows "
+                            "a cached current snapshot"
                         )
                     cached_snapshot = False
                 continue
 
             if event.lookup_rc != 0:
                 raise CorrelationInputError(
-                    f"test {test_id}: non-refresh stage {event.stage} requires rc=0"
+                    f"boot {boot_id} test {test_id}: non-refresh stage "
+                    f"{event.stage} requires rc=0"
                 )
 
             expected_source = (
@@ -219,7 +227,7 @@ def _validate_vma_source_contract(events: list[VmaEvent]) -> None:
             )
             if event.source != expected_source:
                 raise CorrelationInputError(
-                    f"test {test_id}: {event.stage} source should be "
+                    f"boot {boot_id} test {test_id}: {event.stage} source should be "
                     f"{expected_source}, got {event.source}"
                 )
 

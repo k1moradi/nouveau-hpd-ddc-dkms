@@ -32,13 +32,22 @@ def journal_line(message: str, usec: int, boot: str = BOOT) -> str:
     )
 
 
-def vma(test_id: int, stage: str, source: str, usec: int,
-        start: int = 0x5E9000, size: int = 0x2000, rc: int = 0) -> str:
+def vma(
+    test_id: int,
+    stage: str,
+    source: str,
+    usec: int,
+    start: int = 0x5E9000,
+    size: int = 0x2000,
+    rc: int = 0,
+    boot: str = BOOT,
+) -> str:
     return journal_line(
         "nouveau 0000:01:00.0: NOUVEAU_DIAG_V3_VMA "
         f"vmm=BAR2 id={test_id} stage={stage} obj=0xffff888000000000 "
         f"src={source} va={start:#x} len={size:#x} rc={rc}",
         usec,
+        boot,
     )
 
 
@@ -57,21 +66,68 @@ def complete_test(
     start: int = 0x5E9000,
     size: int = 0x2000,
     time_offset: int = 0,
+    boot: str = BOOT,
 ) -> list[str]:
+    def record(stage: str, source: str, offset: int) -> str:
+        return vma(
+            test_id,
+            stage,
+            source,
+            time_offset + offset,
+            start,
+            size,
+            boot=boot,
+        )
+
     return [
-        vma(test_id, "allocated", "unavailable", time_offset + 5, start, size),
-        vma(test_id, "kmap_acquired", "current", time_offset + 10, start, size),
-        vma(test_id, "nested_acquired", "current", time_offset + 20, start, size),
-        vma(test_id, "nested_ref_remaining", "current", time_offset + 30, start, size),
-        vma(test_id, "released", "last_observed", time_offset + 40, start, size),
-        vma(test_id, "reacquired", "current", time_offset + 50, start, size),
-        vma(test_id, "verified", "current", time_offset + 60, start, size),
-        vma(test_id, "destroying", "last_observed", time_offset + 70, start, size),
-        vma(test_id, "destroyed", "last_observed", time_offset + 80, start, size),
+        record("allocated", "unavailable", 5),
+        record("kmap_acquired", "current", 10),
+        record("nested_acquired", "current", 20),
+        record("nested_ref_remaining", "current", 30),
+        record("released", "last_observed", 40),
+        record("reacquired", "current", 50),
+        record("verified", "current", 60),
+        record("destroying", "last_observed", 70),
+        record("destroyed", "last_observed", 80),
     ]
 
 
 class CorrelateV3Tests(unittest.TestCase):
+    def test_mixed_boot_same_test_id_has_independent_snapshot_state(self) -> None:
+        other_boot = "ffeeddccbbaa99887766554433221100"
+        records = [
+            # Boot A establishes a cached current VMA for test ID 1.
+            vma(1, "allocated", "unavailable", 5, boot=BOOT),
+            vma(1, "kmap_acquired", "current", 10, boot=BOOT),
+            # Boot B reuses ID 1 and has no current VMA to cache.
+            vma(1, "allocated", "unavailable", 5, boot=other_boot),
+            vma(
+                1,
+                "kmap_acquired",
+                "unavailable",
+                10,
+                rc=-95,
+                boot=other_boot,
+            ),
+        ]
+
+        result = correlate_module.correlate(records)
+
+        self.assertEqual(result["outcome"], "INCONCLUSIVE_MIXED_BOOT_IDS")
+        self.assertEqual(set(result["boot_ids"]), {BOOT, other_boot})
+
+    def test_mixed_boots_with_complete_same_id_lifecycles_are_separate(self) -> None:
+        other_boot = "ffeeddccbbaa99887766554433221100"
+        records = [
+            *complete_test(test_id=1, boot=BOOT),
+            *complete_test(test_id=1, boot=other_boot),
+        ]
+
+        result = correlate_module.correlate(records)
+
+        self.assertEqual(result["outcome"], "INCONCLUSIVE_MIXED_BOOT_IDS")
+        self.assertEqual(set(result["boot_ids"]), {BOOT, other_boot})
+
     def test_fault_between_two_pinned_current_snapshots_is_numeric_candidate(self) -> None:
         records = complete_test()
         records.append(fault(15))
