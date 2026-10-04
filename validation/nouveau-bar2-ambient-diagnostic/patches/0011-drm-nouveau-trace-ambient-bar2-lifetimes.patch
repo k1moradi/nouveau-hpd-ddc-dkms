@@ -1,133 +1,155 @@
-From: Nouveau VA-API investigation <diagnostic@example.invalid>
+From: Keivan Moradi <18602635+k1moradi@users.noreply.github.com>
 Subject: [PATCH] drm/nouveau: trace ambient BAR2 instmem lifetimes
 
-Diagnostic-only. This records normal NV50 instmem BAR2 map transitions and
-BAR2 reset brackets without adding IRQ-time register reads, locking, VMM
-walks, allocation, or process-context object access to the fault path.
+Add opt-in process-context records for normal NV50 instmem BAR2 mapping
+lifetimes and atomic BAR2 reset generations. The IRQ path adds no VMM
+walk, allocation, sleeping lock, or MMIO read; reset markers remain a
+diagnostic timing perturbation.
+
+Signed-off-by: Keivan Moradi <18602635+k1moradi@users.noreply.github.com>
 
 diff --git a/drivers/gpu/drm/nouveau/include/nvkm/subdev/bar.h b/drivers/gpu/drm/nouveau/include/nvkm/subdev/bar.h
+index 874a508..7b9c7b9 100644
 --- a/drivers/gpu/drm/nouveau/include/nvkm/subdev/bar.h
 +++ b/drivers/gpu/drm/nouveau/include/nvkm/subdev/bar.h
-@@ -24,6 +24,9 @@
+@@ -22,10 +22,16 @@ struct nvkm_bar {
+ struct nvkm_vmm *nvkm_bar_bar1_vmm(struct nvkm_device *);
+ void nvkm_bar_bar1_reset(struct nvkm_device *);
  void nvkm_bar_bar2_init(struct nvkm_device *);
  void nvkm_bar_bar2_fini(struct nvkm_device *);
  void nvkm_bar_bar2_reset(struct nvkm_device *);
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++bool nvkm_bar2_diag_enabled(void);
 +u64 nvkm_bar2_diag_sequence(void);
++u64 nvkm_bar2_diag_reset_generation(void);
++u64 nvkm_bar2_diag_reset_begin(void);
 +#endif
  struct nvkm_vmm *nvkm_bar_bar2_vmm(struct nvkm_device *);
  void nvkm_bar_flush(struct nvkm_bar *);
- 
+-
++
+ int nv50_bar_new(struct nvkm_device *, enum nvkm_subdev_type, int inst, struct nvkm_bar **);
+ int g84_bar_new(struct nvkm_device *, enum nvkm_subdev_type, int inst, struct nvkm_bar **);
 diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/bar/base.c b/drivers/gpu/drm/nouveau/nvkm/subdev/bar/base.c
+index 7dee55b..4e83069 100644
 --- a/drivers/gpu/drm/nouveau/nvkm/subdev/bar/base.c
 +++ b/drivers/gpu/drm/nouveau/nvkm/subdev/bar/base.c
-@@ -22,6 +22,18 @@
+@@ -21,10 +21,46 @@
+  *
   * Authors: Ben Skeggs
   */
  #include "priv.h"
+-
 +
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
 +#include <linux/atomic.h>
++#include <linux/moduleparam.h>
++
++static bool nvkm_diag_bar2_map;
++module_param_named(diag_bar2_map, nvkm_diag_bar2_map, bool, 0400);
++MODULE_PARM_DESC(diag_bar2_map, "Log ambient BAR2 instmem mappings");
 +
 +static atomic64_t nvkm_bar2_diag_seq = ATOMIC64_INIT(0);
++static atomic64_t nvkm_bar2_diag_gen = ATOMIC64_INIT(0);
++
++bool
++nvkm_bar2_diag_enabled(void)
++{
++	return READ_ONCE(nvkm_diag_bar2_map);
++}
 +
 +u64
 +nvkm_bar2_diag_sequence(void)
 +{
 +	return atomic64_inc_return(&nvkm_bar2_diag_seq);
 +}
++
++u64
++nvkm_bar2_diag_reset_generation(void)
++{
++	return atomic64_read(&nvkm_bar2_diag_gen);
++}
++
++u64
++nvkm_bar2_diag_reset_begin(void)
++{
++	return atomic64_inc_return(&nvkm_bar2_diag_gen);
++}
 +#endif
- 
++
  void
  nvkm_bar_flush(struct nvkm_bar *bar)
-@@ -63,8 +75,22 @@
+ {
+ 	if (bar && bar->func->flush)
+ 		bar->func->flush(bar);
+@@ -61,12 +97,31 @@ nvkm_bar_bar2_vmm(struct nvkm_device *device)
+ void
+ nvkm_bar_bar2_reset(struct nvkm_device *device)
  {
  	struct nvkm_bar *bar = device->bar;
  	if (bar && bar->bar2) {
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+		u64 reset_id = nvkm_bar2_diag_sequence();
++		const bool diag = nvkm_bar2_diag_enabled();
++		u64 generation = 0;
 +
-+		nvkm_info(&bar->subdev,
-+			  "NOUVEAU_DIAG_BAR2_RESET seq=%llu reset_id=%llu stage=BEGIN\n",
-+			  (unsigned long long)reset_id,
-+			  (unsigned long long)reset_id);
++		if (diag) {
++			generation = nvkm_bar2_diag_reset_begin();
++			nvkm_info(&bar->subdev,
++				  "NOUVEAU_DIAG_BAR2_RESET seq=%llu gen=%llu stage=BEGIN\n",
++				  (unsigned long long)nvkm_bar2_diag_sequence(),
++				  (unsigned long long)generation);
++		}
 +#endif
  		bar->func->bar2.init(bar);
  		bar->func->bar2.wait(bar);
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+		nvkm_info(&bar->subdev,
-+			  "NOUVEAU_DIAG_BAR2_RESET seq=%llu reset_id=%llu stage=END\n",
-+			  (unsigned long long)nvkm_bar2_diag_sequence(),
-+			  (unsigned long long)reset_id);
++		if (diag)
++			nvkm_info(&bar->subdev,
++				  "NOUVEAU_DIAG_BAR2_RESET seq=%llu gen=%llu stage=END\n",
++				  (unsigned long long)nvkm_bar2_diag_sequence(),
++				  (unsigned long long)generation);
 +#endif
  	}
  }
- 
+-
++
+ void
+ nvkm_bar_bar2_fini(struct nvkm_device *device)
 diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
+index b9993cf..032cee6 100644
 --- a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
 +++ b/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
-@@ -7,68 +7,142 @@
-  * the rights to use, copy, modify, merge, publish, distribute, sublicense,
-  * and/or sell copies of the Software, and to permit persons to whom the
-  * Software is furnished to do so, subject to the following conditions:
-  *
-  * The above copyright notice and this permission notice shall be included in
-  * all copies or substantial portions of the Software.
-  *
-  * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
-  * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
-  * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
-  * THE COPYRIGHT HOLDER(S) OR AUTHOR(S) BE LIABLE FOR ANY CLAIM, DAMAGES OR
-  * OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE,
-  * ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR
-  * OTHER DEALINGS IN THE SOFTWARE.
-  *
+@@ -22,10 +22,15 @@
   * Authors: Ben Skeggs
   */
  #define nv50_instmem(p) container_of((p), struct nv50_instmem, base)
  #include "priv.h"
- 
+-
++
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
 +#include <linux/atomic.h>
-+#include <linux/moduleparam.h>
 +#include <linux/sched.h>
++#endif
++
  #include <core/memory.h>
  #include <subdev/bar.h>
  #include <subdev/fb.h>
  #include <subdev/gsp.h>
  #include <subdev/mmu.h>
- 
- struct nv50_instmem {
- 	struct nvkm_instmem base;
- 	u64 addr;
- 
- 	/* Mappings that can be evicted when BAR2 space has been exhausted. */
- 	struct list_head lru;
- };
- 
- /******************************************************************************
-  * instmem object implementation
-  *****************************************************************************/
- #define nv50_instobj(p) container_of((p), struct nv50_instobj, base.memory)
- 
- struct nv50_instobj {
- 	struct nvkm_instobj base;
- 	struct nv50_instmem *imem;
+@@ -49,12 +54,117 @@ struct nv50_instobj {
  	struct nvkm_memory *ram;
  	struct nvkm_vma *bar;
  	refcount_t maps;
--	void *map;
-+	void *map;			/* cached CPU map into the BAR2 resource */
+ 	void *map;
  	struct list_head lru;
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
 +	u64 diag_id;
++	u64 diag_map_reset_gen;
++	bool diag_map_reset_valid;
 +#endif
- };
++};
 +
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+static bool nouveau_diag_bar2_map;
-+module_param_named(diag_bar2_map, nouveau_diag_bar2_map, bool, 0600);
-+MODULE_PARM_DESC(diag_bar2_map, "Log normal instmem BAR2 map lifetimes");
-+
 +static atomic64_t nv50_instobj_diag_id = ATOMIC64_INIT(0);
 +static atomic64_t nv50_instobj_diag_attempt = ATOMIC64_INIT(0);
 +
@@ -135,7 +157,10 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/dr
 +	u64 id;
 +	u64 mem_addr;
 +	u64 mem_len;
-+};
++	u64 map_reset_gen;
++	bool map_reset_valid;
+ };
+-
 +
 +static void
 +nv50_instobj_diag_identity(struct nv50_instobj *iobj,
@@ -144,20 +169,23 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/dr
 +	identity->id = iobj->diag_id;
 +	identity->mem_addr = nvkm_memory_addr(iobj->ram);
 +	identity->mem_len = nvkm_memory_size(iobj->ram);
++	identity->map_reset_gen = iobj->diag_map_reset_gen;
++	identity->map_reset_valid = iobj->diag_map_reset_valid;
 +}
 +
 +static void
 +nv50_instobj_diag_log(struct nvkm_subdev *subdev,
 +		      const struct nv50_instobj_diag_identity *identity,
 +		      const char *stage, u64 attempt, u64 bar2_va, u64 bar2_len,
-+		      const char *range, const char *access, int refs, int rc)
++		      const char *vma_state, const char *cache_state,
++		      const char *access, const char *map_source, int refs, int rc)
 +{
-+	char message[384];
++	char message[512];
 +	char comm[TASK_COMM_LEN];
 +	size_t used = 0;
 +	int i;
 +
-+	if (!READ_ONCE(nouveau_diag_bar2_map))
++	if (!nvkm_bar2_diag_enabled())
 +		return;
 +
 +	get_task_comm(comm, current);
@@ -168,58 +196,74 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/dr
 +		      (c >= '0' && c <= '9') || c == '_' || c == '.' || c == '-'))
 +			comm[i] = '_';
 +	}
++	if (!comm[0])
++		strscpy(comm, "unknown", sizeof(comm));
 +
 +	used += scnprintf(message + used, sizeof(message) - used,
 +			  "NOUVEAU_DIAG_BAR2_MAP seq=%llu id=%llu stage=%s ",
 +			  (unsigned long long)nvkm_bar2_diag_sequence(),
 +			  (unsigned long long)identity->id, stage);
 +	used += scnprintf(message + used, sizeof(message) - used,
-+			  "attempt=%llu vmm=BAR2 mem_addr=%#llx ",
++			  "attempt=%llu vmm=BAR2 mem_addr=%#llx mem_len=%#llx ",
 +			  (unsigned long long)attempt,
-+			  (unsigned long long)identity->mem_addr);
++			  (unsigned long long)identity->mem_addr,
++			  (unsigned long long)identity->mem_len);
 +	used += scnprintf(message + used, sizeof(message) - used,
-+			  "mem_len=%#llx bar2_va=%#llx ",
-+			  (unsigned long long)identity->mem_len,
-+			  (unsigned long long)bar2_va);
++			  "bar2_va=%#llx bar2_len=%#llx vma_state=%s ",
++			  (unsigned long long)bar2_va,
++			  (unsigned long long)bar2_len, vma_state);
 +	used += scnprintf(message + used, sizeof(message) - used,
-+			  "bar2_len=%#llx range=%s access=%s ",
-+			  (unsigned long long)bar2_len, range, access);
++			  "cache_state=%s access=%s map_source=%s ",
++			  cache_state, access, map_source);
++	if (identity->map_reset_valid)
++		used += scnprintf(message + used, sizeof(message) - used,
++				  "map_reset_gen=%llu ",
++				  (unsigned long long)identity->map_reset_gen);
++	else
++		used += scnprintf(message + used, sizeof(message) - used,
++				  "map_reset_gen=none ");
 +	used += scnprintf(message + used, sizeof(message) - used,
-+			  "refs=%d pid=%d comm=%s rc=%d", refs,
-+			  task_pid_nr(current), comm, rc);
++			  "current_reset_gen=%llu refs=%d pid=%d comm=%s rc=%d",
++			  (unsigned long long)nvkm_bar2_diag_reset_generation(),
++			  refs, task_pid_nr(current), comm, rc);
 +	nvkm_info(subdev, "%s\n", message);
 +}
++
++static const char *
++nv50_instobj_diag_vma_state(struct nv50_instobj *iobj)
++{
++	if (iobj->bar && iobj->map)
++		return "resident";
++	if (!iobj->bar && !iobj->map)
++		return "not_established";
++	return "unknown";
++}
++
++static const char *
++nv50_instobj_diag_cache_state(struct nv50_instobj *iobj)
++{
++	if (!iobj->bar || !iobj->map)
++		return "none";
++	if (!refcount_read(&iobj->maps))
++		return iobj->lru.next ? "lru" : "pinned";
++	return "active";
++}
 +#endif
- 
++
  static void
  nv50_instobj_wr32_slow(struct nvkm_memory *memory, u64 offset, u32 data)
  {
  	struct nv50_instobj *iobj = nv50_instobj(memory);
  	struct nv50_instmem *imem = iobj->imem;
- 	struct nvkm_device *device = imem->base.subdev.device;
- 	u64 base = (nvkm_memory_addr(iobj->ram) + offset) & 0xffffff00000ULL;
- 	u64 addr = (nvkm_memory_addr(iobj->ram) + offset) & 0x000000fffffULL;
- 	unsigned long flags;
- 
- 	spin_lock_irqsave(&imem->base.lock, flags);
- 	if (unlikely(imem->addr != base)) {
- 		imem->base.func->set_bar0_window_addr(device, base);
- 		imem->addr = base;
- 	}
- 	nvkm_wr32(device, 0x700000 + addr, data);
- 	spin_unlock_irqrestore(&imem->base.lock, flags);
- }
- 
-@@ -112,110 +186,207 @@
- }
- 
- static const struct nvkm_memory_ptrs
+@@ -115,22 +225,38 @@ static const struct nvkm_memory_ptrs
  nv50_instobj_fast = {
  	.rd32 = nv50_instobj_rd32,
  	.wr32 = nv50_instobj_wr32,
  };
- 
- static void
+-
++
+-static void
++static bool
  nv50_instobj_kmap(struct nv50_instobj *iobj, struct nvkm_vmm *vmm)
  {
  	struct nv50_instmem *imem = iobj->imem;
@@ -230,74 +274,89 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/dr
  	struct nvkm_vma *bar = NULL, *ebar;
  	u64 size = nvkm_memory_size(memory);
  	void *emap;
++	bool mapped = false;
  	int ret;
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+	struct nv50_instobj_diag_identity diag, ediag;
++	struct nv50_instobj_diag_identity diag = {}, ediag = {};
 +	u64 attempt = 0;
++	u64 map_reset_gen = 0;
 +	u64 evict_va, evict_len;
++	bool map_reset_valid = false;
 +
-+	nv50_instobj_diag_identity(iobj, &diag);
-+	if (READ_ONCE(nouveau_diag_bar2_map)) {
++	if (nvkm_bar2_diag_enabled()) {
++		nv50_instobj_diag_identity(iobj, &diag);
 +		attempt = atomic64_inc_return(&nv50_instobj_diag_attempt);
 +		nv50_instobj_diag_log(subdev, &diag, "MAP_BEGIN", attempt, 0, 0,
-+				      "none", "none", refcount_read(&iobj->maps), 0);
++				      "not_established", "none", "none", "new",
++				      refcount_read(&iobj->maps), 0);
 +	}
 +#endif
- 
+-
++
  	/* Attempt to allocate BAR2 address-space and map the object
  	 * into it.  The lock has to be dropped while doing this due
  	 * to the possibility of recursion for page table allocation.
  	 */
- 	mutex_unlock(&imem->base.mutex);
- 	while ((ret = nvkm_vmm_get(vmm, 12, size, &bar))) {
- 		/* Evict unused mappings, and keep retrying until we either
- 		 * succeed,or there's no more objects left on the LRU.
- 		 */
- 		mutex_lock(&imem->base.mutex);
- 		eobj = list_first_entry_or_null(&imem->lru, typeof(*eobj), lru);
+@@ -144,42 +270,141 @@ nv50_instobj_kmap(struct nv50_instobj *iobj, struct nvkm_vmm *vmm)
  		if (eobj) {
  			nvkm_debug(subdev, "evict %016llx %016llx @ %016llx\n",
  				   nvkm_memory_addr(&eobj->base.memory),
  				   nvkm_memory_size(&eobj->base.memory),
  				   eobj->bar->addr);
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+			nv50_instobj_diag_identity(eobj, &ediag);
-+			evict_va = eobj->bar->addr;
-+			evict_len = eobj->bar->size;
-+			nv50_instobj_diag_log(subdev, &ediag, "EVICTING", 0,
-+					      evict_va, evict_len, "current", "none",
-+					      refcount_read(&eobj->maps), 0);
++			if (nvkm_bar2_diag_enabled()) {
++				nv50_instobj_diag_identity(eobj, &ediag);
++				evict_va = eobj->bar->addr;
++				evict_len = eobj->bar->size;
++				nv50_instobj_diag_log(subdev, &ediag,
++						      "VMA_EVICTING", 0,
++						      evict_va, evict_len, "resident", "lru",
++						      "none", "none",
++						      refcount_read(&eobj->maps), 0);
++			}
 +#endif
  			list_del_init(&eobj->lru);
  			ebar = eobj->bar;
  			eobj->bar = NULL;
  			emap = eobj->map;
  			eobj->map = NULL;
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++			if (nvkm_bar2_diag_enabled())
++				eobj->diag_map_reset_valid = false;
++#endif
  		}
  		mutex_unlock(&imem->base.mutex);
  		if (!eobj)
  			break;
  		iounmap(emap);
  		nvkm_vmm_put(vmm, &ebar);
--	}
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++		if (nvkm_bar2_diag_enabled())
++			nv50_instobj_diag_log(subdev, &ediag, "VMA_EVICTED", 0,
++					      evict_va, evict_len, "evicted", "none",
++					      "none", "none", 0, 0);
++#endif
+ 	}
 -
-+#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+		nv50_instobj_diag_log(subdev, &ediag, "EVICTED", 0,
-+				      evict_va, evict_len, "released", "none", 0, 0);
-+#endif
-+	}
 +
-+#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
- 	if (ret == 0)
-+		nv50_instobj_diag_log(subdev, &diag, "MAP_VMA_RESERVED", attempt,
-+				      bar->addr, bar->size, "reserved", "none", 0, 0);
-+#endif
+-	if (ret == 0)
 +	if (ret == 0) {
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++		nv50_instobj_diag_log(subdev, &diag, "MAP_VMA_RESERVED", attempt,
++				      bar->addr, bar->size, "establishing", "none",
++				      "none", "new", 0, 0);
++#endif
  		ret = nvkm_memory_map(memory, 0, vmm, bar, NULL, 0);
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+		if (!ret)
-+			nv50_instobj_diag_log(subdev, &diag, "MAP_PTE_READY", attempt,
-+					      bar->addr, bar->size, "reserved", "none", 0, 0);
++		if (!ret && nvkm_bar2_diag_enabled()) {
++			map_reset_gen = nvkm_bar2_diag_reset_generation();
++			map_reset_valid = true;
++			diag.map_reset_gen = map_reset_gen;
++			diag.map_reset_valid = true;
++			nv50_instobj_diag_log(subdev, &diag, "MAP_VMM_MAP_OK", attempt,
++					      bar->addr, bar->size, "establishing", "none",
++					      "none", "new", 0, 0);
++		}
 +#endif
 +	}
  	mutex_lock(&imem->base.mutex);
@@ -311,14 +370,15 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/dr
 +			const char *stage = ret ? "MAP_FAILED" : "MAP_DISCARDED";
 +
 +			nv50_instobj_diag_log(subdev, &diag, stage, attempt,
-+					      bar->addr, bar->size, "reserved",
-+					      "none", 0, ret);
++					      rollback_va, rollback_len, "establishing",
++					      "none", "none", "new", 0, ret);
 +			nv50_instobj_diag_log(subdev, &diag, "MAP_ROLLBACK_BEGIN",
-+					      attempt, bar->addr, bar->size,
-+					      "reserved", "none", 0, ret);
++					      attempt, rollback_va, rollback_len,
++					      "establishing", "none", "none", "new", 0, ret);
 +		} else {
 +			nv50_instobj_diag_log(subdev, &diag, "MAP_FAILED", attempt,
-+					      0, 0, "none", "none", 0, ret);
++					      0, 0, "not_established", "none",
++					      "none", "new", 0, ret);
 +		}
 +#endif
  		mutex_unlock(&imem->base.mutex);
@@ -326,15 +386,19 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/dr
 +		if (bar) {
 +			nvkm_vmm_put(vmm, &bar);
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++			diag.map_reset_valid = false;
 +			nv50_instobj_diag_log(subdev, &diag, "MAP_ROLLBACK_DONE",
 +					      attempt, rollback_va, rollback_len,
-+					      "released", "none", 0, ret);
++					      "not_established", "none", "none", "new",
++					      0, ret);
 +#endif
 +		}
  		mutex_lock(&imem->base.mutex);
- 		return;
+-		return;
++		return false;
  	}
- 
+-
++
  	/* Make the mapping visible to the host. */
  	iobj->bar = bar;
  	iobj->map = ioremap_wc(device->func->resource_addr(device, NVKM_BAR2_INST) +
@@ -342,101 +406,110 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/dr
  	if (!iobj->map) {
  		nvkm_warn(subdev, "PRAMIN ioremap failed\n");
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+		bar = iobj->bar;
-+		evict_va = bar->addr;
-+		evict_len = bar->size;
++		evict_va = iobj->bar->addr;
++		evict_len = iobj->bar->size;
 +		nv50_instobj_diag_log(subdev, &diag, "MAP_FAILED", attempt,
-+				      evict_va, evict_len, "reserved", "none", 0, -ENOMEM);
++				      evict_va, evict_len, "establishing", "none",
++				      "none", "new", 0, -ENOMEM);
 +		nv50_instobj_diag_log(subdev, &diag, "MAP_ROLLBACK_BEGIN",
-+				      attempt, evict_va, evict_len,
-+				      "reserved", "none", 0, -ENOMEM);
++				      attempt, evict_va, evict_len, "establishing",
++				      "none", "none", "new", 0, -ENOMEM);
 +#endif
  		nvkm_vmm_put(vmm, &iobj->bar);
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++		diag.map_reset_valid = false;
 +		nv50_instobj_diag_log(subdev, &diag, "MAP_ROLLBACK_DONE",
 +				      attempt, evict_va, evict_len,
-+				      "released", "none", 0, -ENOMEM);
++				      "not_established", "none", "none", "new", 0,
++				      -ENOMEM);
 +#endif
 +	} else {
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+		nv50_instobj_diag_log(subdev, &diag, "MAP_READY", attempt,
-+				      iobj->bar->addr, iobj->bar->size,
-+				      "current", "none", 0, 0);
++		if (nvkm_bar2_diag_enabled()) {
++			iobj->diag_map_reset_gen = map_reset_gen;
++			iobj->diag_map_reset_valid = map_reset_valid;
++			nv50_instobj_diag_identity(iobj, &diag);
++			nv50_instobj_diag_log(subdev, &diag, "MAP_READY", attempt,
++					      iobj->bar->addr, iobj->bar->size, "resident",
++					      "none", "none", "new", 0, 0);
++		}
++		mapped = true;
++#else
++		mapped = true;
 +#endif
  	}
++	return mapped;
  }
- 
+-
++
  static int
  nv50_instobj_map(struct nvkm_memory *memory, u64 offset, struct nvkm_vmm *vmm,
  		 struct nvkm_vma *vma, void *argv, u32 argc)
- {
- 	memory = nv50_instobj(memory)->ram;
- 	return nvkm_memory_map(memory, offset, vmm, vma, argv, argc);
- }
- 
- static void
- nv50_instobj_release(struct nvkm_memory *memory)
- {
- 	struct nv50_instobj *iobj = nv50_instobj(memory);
- 	struct nv50_instmem *imem = iobj->imem;
- 	struct nvkm_subdev *subdev = &imem->base.subdev;
- 
- 	wmb();
- 	nvkm_bar_flush(subdev->device->bar);
- 
- 	if (refcount_dec_and_mutex_lock(&iobj->maps, &imem->base.mutex)) {
-+#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+		{
-+			struct nv50_instobj_diag_identity diag;
-+			const bool has_bar = !!iobj->bar;
-+			const bool has_map = !!iobj->map;
-+			const char *range = has_bar ? "cached" :
-+				(has_map ? "unknown" : "none");
-+
-+			nv50_instobj_diag_identity(iobj, &diag);
-+			nv50_instobj_diag_log(&imem->base.subdev, &diag,
-+					      "LAST_MAP_RELEASE", 0,
-+					      has_bar ? iobj->bar->addr : 0,
-+					      has_bar ? iobj->bar->size : 0, range,
-+					      "none", 0, 0);
-+		}
-+#endif
- 		/* Add the now-unused mapping to the LRU instead of directly
- 		 * unmapping it here, in case we need to map it again later.
+@@ -204,10 +429,26 @@ nv50_instobj_release(struct nvkm_memory *memory)
  		 */
  		if (likely(iobj->lru.next) && iobj->map) {
  			BUG_ON(!list_empty(&iobj->lru));
  			list_add_tail(&iobj->lru, &imem->lru);
  		}
- 
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++		{
++			struct nv50_instobj_diag_identity diag;
++
++			if (nvkm_bar2_diag_enabled()) {
++				nv50_instobj_diag_identity(iobj, &diag);
++				nv50_instobj_diag_log(&imem->base.subdev, &diag,
++						      "KMAP_LAST_RELEASE", 0,
++						      iobj->bar ? iobj->bar->addr : 0,
++						      iobj->bar ? iobj->bar->size : 0,
++						      nv50_instobj_diag_vma_state(iobj),
++						      nv50_instobj_diag_cache_state(iobj),
++						      "none", "none", 0, 0);
++			}
++		}
++#endif
+-
++
  		/* Switch back to NULL accessors when last map is gone. */
  		iobj->base.memory.ptrs = NULL;
  		mutex_unlock(&imem->base.mutex);
  	}
- }
- 
- static void __iomem *
- nv50_instobj_acquire(struct nvkm_memory *memory)
+@@ -218,10 +459,13 @@ nv50_instobj_acquire(struct nvkm_memory *memory)
  {
  	struct nv50_instobj *iobj = nv50_instobj(memory);
  	struct nvkm_instmem *imem = &iobj->imem->base;
  	struct nvkm_vmm *vmm;
-@@ -239,62 +410,88 @@
- 
+ 	void __iomem *map = NULL;
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	bool new_mapping = false;
++#endif
+-
++
+ 	/* Already mapped? */
+ 	if (refcount_inc_not_zero(&iobj->maps)) {
+ 		/* read barrier match the wmb on refcount set */
+ 		smp_rmb();
+@@ -237,12 +481,17 @@ nv50_instobj_acquire(struct nvkm_memory *memory)
+ 		return iobj->map;
+ 	}
+-
++
  	/* Attempt to get a direct CPU mapping of the object. */
  	if ((vmm = nvkm_bar_bar2_vmm(imem->subdev.device))) {
- 		if (!iobj->map)
+-		if (!iobj->map)
++		if (!iobj->map) {
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++			new_mapping = nv50_instobj_kmap(iobj, vmm);
++#else
  			nv50_instobj_kmap(iobj, vmm);
++#endif
++		}
  		map = iobj->map;
  	}
- 
+-
++
  	if (!refcount_inc_not_zero(&iobj->maps)) {
  		/* Exclude object from eviction while it's being accessed. */
- 		if (likely(iobj->lru.next))
- 			list_del_init(&iobj->lru);
- 
- 		if (map)
- 			iobj->base.memory.ptrs = &nv50_instobj_fast;
+@@ -254,10 +503,28 @@ nv50_instobj_acquire(struct nvkm_memory *memory)
  		else
  			iobj->base.memory.ptrs = &nv50_instobj_slow;
  		/* barrier to ensure the ptrs are written before refcount is set */
@@ -445,87 +518,59 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/dr
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
 +		{
 +			struct nv50_instobj_diag_identity diag;
-+			const bool has_bar = !!iobj->bar;
-+			const bool has_map = !!iobj->map;
-+			const char *range = has_bar && has_map ? "current" :
-+				(has_bar || has_map ? "unknown" : "none");
++			const char *map_source = !map ? "none" :
++				(new_mapping ? "new" : "cached");
 +
-+			nv50_instobj_diag_identity(iobj, &diag);
-+			nv50_instobj_diag_log(&iobj->imem->base.subdev, &diag,
-+					      "FIRST_MAP_ACTIVE", 0,
-+					      has_bar ? iobj->bar->addr : 0,
-+					      has_bar ? iobj->bar->size : 0, range,
-+					      map ? "bar2" : "bar0", 1, 0);
++			if (nvkm_bar2_diag_enabled()) {
++				nv50_instobj_diag_identity(iobj, &diag);
++				nv50_instobj_diag_log(&iobj->imem->base.subdev, &diag,
++						      "KMAP_ACTIVE", 0,
++						      iobj->bar ? iobj->bar->addr : 0,
++						      iobj->bar ? iobj->bar->size : 0,
++						      nv50_instobj_diag_vma_state(iobj),
++						      nv50_instobj_diag_cache_state(iobj),
++						      map ? "bar2" : "bar0", map_source, 1, 0);
++			}
 +		}
 +#endif
  	}
- 
+-
++
  	mutex_unlock(&imem->mutex);
  	return map;
  }
- 
- static void
- nv50_instobj_boot(struct nvkm_memory *memory, struct nvkm_vmm *vmm)
- {
- 	struct nv50_instobj *iobj = nv50_instobj(memory);
- 	struct nvkm_instmem *imem = &iobj->imem->base;
- 
- 	/* Exclude bootstrapped objects (ie. the page tables for the
- 	 * instmem BAR itself) from eviction.
- 	 */
- 	mutex_lock(&imem->mutex);
+@@ -275,11 +542,28 @@ nv50_instobj_boot(struct nvkm_memory *memory, struct nvkm_vmm *vmm)
  	if (likely(iobj->lru.next)) {
  		list_del_init(&iobj->lru);
  		iobj->lru.next = NULL;
  	}
- 
- 	nv50_instobj_kmap(iobj, vmm);
-+#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+	if (iobj->bar && iobj->map) {
-+		struct nv50_instobj_diag_identity diag;
+-
 +
-+		nv50_instobj_diag_identity(iobj, &diag);
-+		nv50_instobj_diag_log(&iobj->imem->base.subdev, &diag,
-+				      "BOOT_MAP_PINNED", 0, iobj->bar->addr,
-+				      iobj->bar->size, "current", "none", 0, 0);
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	{
++		bool new_mapping = nv50_instobj_kmap(iobj, vmm);
++
++		if (nvkm_bar2_diag_enabled() && iobj->bar && iobj->map) {
++			struct nv50_instobj_diag_identity diag;
++
++			nv50_instobj_diag_identity(iobj, &diag);
++			nv50_instobj_diag_log(&iobj->imem->base.subdev, &diag,
++					      "BOOT_MAP_PINNED", 0,
++					      iobj->bar->addr, iobj->bar->size,
++					      "resident", "pinned", "none",
++					      new_mapping ? "new" : "cached", 0, 0);
++		}
 +	}
++#else
+ 	nv50_instobj_kmap(iobj, vmm);
 +#endif
  	nvkm_instmem_boot(imem);
  	mutex_unlock(&imem->mutex);
  }
- 
+-
++
  static u64
- nv50_instobj_size(struct nvkm_memory *memory)
- {
- 	return nvkm_memory_size(nv50_instobj(memory)->ram);
- }
- 
- static u64
- nv50_instobj_addr(struct nvkm_memory *memory)
- {
- 	return nvkm_memory_addr(nv50_instobj(memory)->ram);
- }
- 
- static u64
- nv50_instobj_bar2(struct nvkm_memory *memory)
- {
- 	struct nv50_instobj *iobj = nv50_instobj(memory);
-@@ -327,93 +524,140 @@
- 		ret = 0;
- 	}
- 	mutex_unlock(&imem->mutex);
- 	return ret;
- }
- #endif
- 
- static enum nvkm_memory_target
- nv50_instobj_target(struct nvkm_memory *memory)
- {
- 	return nvkm_memory_target(nv50_instobj(memory)->ram);
- }
- 
- static void *
- nv50_instobj_dtor(struct nvkm_memory *memory)
+@@ -342,27 +626,78 @@ nv50_instobj_dtor(struct nvkm_memory *memory)
  {
  	struct nv50_instobj *iobj = nv50_instobj(memory);
  	struct nvkm_instmem *imem = &iobj->imem->base;
@@ -533,122 +578,105 @@ diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/dr
  	void *map;
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
 +	struct nv50_instobj_diag_identity diag;
++	struct nvkm_subdev *subdev = &imem->subdev;
 +	u64 bar2_va = 0, bar2_len = 0;
-+	const char *destroyed_range = "none";
-+	int refs, destroy_rc = 0;
++	const char *vma_state = "not_established", *cache_state = "none";
++	int refs = 0, destroy_rc = 0;
++	bool vma_destroyed = false, diag_enabled;
 +#endif
- 
+-
++
  	mutex_lock(&imem->mutex);
++	bar = iobj->bar;
++	map = iobj->map;
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	diag_enabled = nvkm_bar2_diag_enabled();
++	if (diag_enabled) {
++		nv50_instobj_diag_identity(iobj, &diag);
++		refs = refcount_read(&iobj->maps);
++		if (bar) {
++			bar2_va = bar->addr;
++			bar2_len = bar->size;
++			vma_state = map ? "resident" : "unknown";
++			if (map)
++				cache_state = refs ? "active" :
++					(!iobj->lru.next ? "pinned" :
++					 (list_empty(&iobj->lru) ? "none" : "lru"));
++			else
++				destroy_rc = -EUCLEAN;
++		} else if (map) {
++			vma_state = "unknown";
++			destroy_rc = -EUCLEAN;
++		} else {
++			vma_state = "not_established";
++		}
++		nv50_instobj_diag_log(subdev, &diag, "OBJECT_DESTROYING", 0,
++				      bar2_va, bar2_len, vma_state, cache_state,
++				      "none", "none", refs, refs ? -EBUSY : 0);
++	}
++#endif
  	if (likely(iobj->lru.next))
  		list_del(&iobj->lru);
- 	map = iobj->map;
- 	bar = iobj->bar;
-+#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+	nv50_instobj_diag_identity(iobj, &diag);
-+	refs = refcount_read(&iobj->maps);
-+	if (bar) {
-+		bar2_va = bar->addr;
-+		bar2_len = bar->size;
-+		if (map) {
-+			destroyed_range = "released";
-+		} else {
-+			destroyed_range = "unknown";
-+			destroy_rc = -EUCLEAN;
-+		}
-+	} else if (map) {
-+		destroyed_range = "unknown";
-+		destroy_rc = -EUCLEAN;
-+	}
-+	nv50_instobj_diag_log(&imem->subdev, &diag, "DESTROYING", 0,
-+			      bar2_va, bar2_len, bar ? "current" : "none",
-+			      "none", refs, refs ? -EBUSY : 0);
-+#endif
+-	map = iobj->map;
+-	bar = iobj->bar;
  	mutex_unlock(&imem->mutex);
- 
+-
++
  	if (map) {
  		struct nvkm_vmm *vmm = nvkm_bar_bar2_vmm(imem->subdev.device);
  		iounmap(map);
 -		if (likely(vmm)) /* Can be NULL during BAR destructor. */
 +		if (likely(vmm)) { /* Can be NULL during BAR destructor. */
  			nvkm_vmm_put(vmm, &bar);
-+		} else {
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+			destroyed_range = "unknown";
++			if (diag_enabled && bar2_len)
++				vma_destroyed = true;
++		} else {
++			vma_state = "unknown";
 +			destroy_rc = -ENODEV;
 +#endif
 +		}
  	}
- 
+-
++
  	nvkm_memory_unref(&iobj->ram);
  	nvkm_instobj_dtor(imem, &iobj->base);
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+	nv50_instobj_diag_log(&imem->subdev, &diag, "DESTROYED", 0,
-+			      bar2_va, bar2_len, destroyed_range, "none", refs,
-+			      destroy_rc);
++	if (diag_enabled) {
++		if (vma_destroyed)
++			vma_state = "destroyed";
++		nv50_instobj_diag_log(subdev, &diag, "OBJECT_DESTROYED", 0,
++				      bar2_va, bar2_len, vma_state, "none", "none",
++				      "none", refs, destroy_rc);
++	}
 +#endif
  	return iobj;
  }
- 
+-
++
  static const struct nvkm_memory_func
  nv50_instobj_func = {
- 	.dtor = nv50_instobj_dtor,
- 	.target = nv50_instobj_target,
- 	.bar2 = nv50_instobj_bar2,
- #if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
- 	.bar2_vma_snapshot = nv50_instobj_bar2_vma_snapshot,
- #endif
- 	.addr = nv50_instobj_addr,
- 	.size = nv50_instobj_size,
- 	.boot = nv50_instobj_boot,
- 	.acquire = nv50_instobj_acquire,
- 	.release = nv50_instobj_release,
- 	.map = nv50_instobj_map,
- };
- 
- int
- nv50_instobj_wrap(struct nvkm_instmem *base,
- 		  struct nvkm_memory *memory, struct nvkm_memory **pmemory)
- {
- 	struct nv50_instmem *imem = nv50_instmem(base);
- 	struct nv50_instobj *iobj;
- 
- 	if (!(iobj = kzalloc_obj(*iobj)))
- 		return -ENOMEM;
- 	*pmemory = &iobj->base.memory;
- 
- 	nvkm_instobj_ctor(&nv50_instobj_func, &imem->base, &iobj->base);
+@@ -395,10 +730,21 @@ nv50_instobj_wrap(struct nvkm_instmem *base,
  	iobj->imem = imem;
  	refcount_set(&iobj->maps, 0);
  	INIT_LIST_HEAD(&iobj->lru);
- 
+-
++
  	iobj->ram = nvkm_memory_ref(memory);
 +#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
-+	iobj->diag_id = atomic64_inc_return(&nv50_instobj_diag_id);
-+	{
++	if (nvkm_bar2_diag_enabled()) {
 +		struct nv50_instobj_diag_identity diag;
 +
++		iobj->diag_id = atomic64_inc_return(&nv50_instobj_diag_id);
 +		nv50_instobj_diag_identity(iobj, &diag);
 +		nv50_instobj_diag_log(&imem->base.subdev, &diag, "ALLOCATED", 0,
-+				      0, 0, "none", "none", 0, 0);
++				      0, 0, "not_established", "none", "none",
++				      "none", 0, 0);
 +	}
 +#endif
  	return 0;
  }
- 
+-
++
  int
  nv50_instobj_new(struct nvkm_instmem *imem, u32 size, u32 align, bool zero,
- 		 struct nvkm_memory **pmemory)
- {
- 	u8 page = max(order_base_2(align), 12);
- 	struct nvkm_memory *ram;
- 	int ret;
- 
- 	ret = nvkm_ram_get(imem->subdev.device, 0, 1, page, size, true, true, &ram);
- 	if (ret)
- 		return ret;
- 
- 	ret = nv50_instobj_wrap(imem, ram, pmemory);
- 	nvkm_memory_unref(&ram);
- 	return ret;
- }
- 

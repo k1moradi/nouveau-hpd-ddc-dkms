@@ -50,10 +50,11 @@ The BAR2 start and exact mapped length are `iobj->bar->addr` and
   object becomes LRU-eligible when it has a fast map. This does **not** unmap
   the VMA, `iounmap()` the CPU address, or clear the VMM PTEs. It clears the
   `memory.ptrs` accessors. Thus map-ref release and VMA teardown are different
-  transitions. In correlator output, a match after `LAST_MAP_RELEASE` means
-  only that no active kmap reference was logged; it explicitly reports the
-  VMA as still cached in the LRU and does not claim teardown. Only a later
-  `EVICTED` or verified `DESTROYED` record marks source-observed VMA teardown.
+  transitions. In correlator output, a match after `KMAP_LAST_RELEASE` means
+  only that the CPU map-reference count reached zero; the VMA remains resident
+  in the LRU. It does not claim teardown. Only a later `VMA_EVICTED` or an
+  `OBJECT_DESTROYED` record with `vma_state=destroyed` records source-observed
+  VMA teardown.
 - LRU eviction: the next `nv50_instobj_kmap()` can remove the first unused
   object from the LRU, `iounmap()` its mapping, and call `nvkm_vmm_put()` to
   remove the VMA/PTE mapping.
@@ -62,7 +63,7 @@ The BAR2 start and exact mapped length are `iobj->bar->addr` and
   unreferences backing RAM, and removes the instobj from the instmem list.
 
 The existing code does not assert in the destructor that `maps == 0`. Patch
-0011 must record `refs` at `DESTROYING` and let the offline parser mark a
+0011 records `refs` at `OBJECT_DESTROYING` and lets the offline parser mark a
 nonzero-ref destruction as an invalid/incomplete lifecycle; it must not repair
 or conceal the condition.
 
@@ -128,20 +129,49 @@ graph or the current journal.
 
 | Hypothesis | Observation needed from ambient mapping log | Current status |
 |---|---|---|
-| H1 active-map PTE failure | Fault VA lies in one `MAP_READY` mapping while the same ID has an active `FIRST_MAP_ACTIVE` interval and no `LAST_MAP_RELEASE`; mapping result is success. | Unresolved; current boot has no ambient lifetime records. |
-| H2 stale access after teardown | Fault VA matches an ID's range after `EVICTED` or verified `DESTROYED`, with release-to-fault delta and no active replacement interval. `LAST_MAP_RELEASE` alone is only the kmap-ref edge; its VMA remains cached. | Unresolved. A numeric range match remains non-causal. |
-| H3 reset coherence | The same successful active ID/range is present before and after a bracketed BAR2 reset, has no release/recreate, and a later fault falls in it. | Unresolved; C source shows software state survives reset but not the hardware cache effect. |
-| H4 initial establishment | Fault time falls inside `MAP_BEGIN` / `MAP_VMA_RESERVED` through `MAP_READY` or `MAP_FAILED`; report whether the VA was known yet. | Unresolved. |
-| H5 untracked BAR2 use | No active, transition, cached/released, or destroyed-range record numerically matches the fault in a complete single-boot log. | Unresolved. Absence of a match would not prove global absence if logging is incomplete or the user is outside this instrumented path. |
+| H1 active-map PTE failure | Fault VA is inside one resident VMA whose ID has `kmap_ref_state_at_fault=NONZERO`; `exact_kmap_refcount_at_fault` remains unknown because nested refs do not emit extra events. | Unresolved; current boot has no ambient lifetime records. |
+| H2 post-eviction access | Fault VA matches an ID's range after `VMA_EVICTED` or `OBJECT_DESTROYED` with `vma_state=destroyed`; report its eviction/destroy-to-fault delta and any active replacement range separately. `KMAP_LAST_RELEASE` is not eviction. | Unresolved. Numeric reuse is not ownership or stale-pointer proof. |
+| H3 reset/cache coherence | A mapping has `map_reset_gen < current_reset_gen`; a later `KMAP_ACTIVE map_source=cached` on the same ID/range records cache reuse after reset. Compare this with later fault ordinals; never use recovery after fault 1 to explain fault 1. | Unresolved; C source shows software state can survive reset, but not the hardware translation effect. |
+| H4 initial establishment | Fault time intersects `MAP_BEGIN`, `MAP_VMA_RESERVED`, `MAP_VMM_MAP_OK`, or `MAP_READY` before `KMAP_ACTIVE`; report when the VA first becomes known. `MAP_VMM_MAP_OK` means the mapping API returned success, not hardware PTE readback. | Unresolved. |
+| H5 untracked BAR2 use | No active, zero-ref resident, transition, or recently evicted/destroyed range in the observed records numerically matches the fault. | Unresolved. Input completeness is not proven, so no match does not prove global absence or identify another user. |
 
-Patch 0011 therefore needs `ALLOCATED`, `MAP_BEGIN`, `MAP_VMA_RESERVED`,
-`MAP_READY`/`MAP_FAILED`, `FIRST_MAP_ACTIVE`, `LAST_MAP_RELEASE`,
-`EVICTING`/`EVICTED`, and `DESTROYING`/`DESTROYED` events. The additional
-reserve/evict edges are required because mapping setup recursively allocates
-page tables and because the final `nvkm_done()` leaves a cached VMA in the
-LRU. BAR2 reset begin/end records are needed to test H3. All allocation and
-mapping records are emitted from process-context paths; the IRQ path remains
-limited to the existing register snapshot and existing recovery behavior.
+Patch 0011 emits the lifecycle and reset events listed below. The reserve/map
+edges expose setup windows because page-table allocation can recurse; the
+eviction and destroy edges distinguish true software VMA removal from a final
+`nvkm_done()` that only leaves a zero-ref VMA cached in the LRU.
+
+## Patch 0011 event contract
+
+`pid` and `comm` identify the task executing a process-context transition.
+They do not identify the owner of a later hardware fault. `mem_addr` is backing
+memory context only; the correlator matches faults only against `bar2_va` and
+`bar2_len`. `KMAP_ACTIVE refs=1` records the 0-to-1 edge. Because nested kmap
+increments are intentionally not logged, an active candidate proves a
+nonzero-reference state, not the exact nested refcount at the fault.
+
+| Event | Source function | Lock/context | State observed / diagnostic state changed | Additional MMIO | Added allocation or sleep risk | Address domain |
+|---|---|---|---|---|---|---|
+| `ALLOCATED` | `nv50_instobj_wrap()` | Process context; after instobj construction and backing-memory ref | Assigns a boot-local atomic ID once; starts with no VMA and zero refs | No | No diagnostic allocation or sleep; existing object allocation is unchanged | `mem_addr`/`mem_len` context; no BAR2 range yet |
+| `MAP_BEGIN` | `nv50_instobj_kmap()` | Process context; instmem mutex held before the existing unlock | Starts a map attempt; no VMA range known; attempt ID assigned atomically | No | No added allocation or sleep | No BAR2 range yet |
+| `MAP_VMA_RESERVED` | `nv50_instobj_kmap()` after `nvkm_vmm_get()` | Process context; instmem mutex is dropped; VMM allocator uses its existing locking | Temporary VMA reserved; establishment in progress | No diagnostic MMIO; the existing VMM call is unchanged | No added allocation or sleep beyond existing mapping path | `bar2_va`/`bar2_len` |
+| `MAP_VMM_MAP_OK` | `nv50_instobj_kmap()` immediately after successful `nvkm_memory_map()` | Process context; instmem mutex is dropped | VMM map API returned success; if diagnostics are enabled, snapshots the reset generation here; this is not hardware PTE readback | No diagnostic MMIO | No added allocation or sleep beyond existing map path | Reserved BAR2 VMA range |
+| `MAP_READY` | `nv50_instobj_kmap()` after successful `ioremap_wc()` | Process context; instmem mutex held | Stores `iobj->bar` and `iobj->map` and carries forward the generation captured at `MAP_VMM_MAP_OK`; later `current_reset_gen` exposes resets during ioremap | No diagnostic MMIO | `ioremap_wc()` is pre-existing; no added diagnostic allocation or sleep | Resident BAR2 VMA range |
+| `MAP_FAILED`, `MAP_DISCARDED`, rollback begin/done | `nv50_instobj_kmap()` | Process context; logging occurs at the existing lock/unlock edges | Reports failed or losing map attempt and whether its reserved VMA is rolled back | No diagnostic MMIO | No added allocation or sleep | Attempt BAR2 range when already reserved |
+| `KMAP_ACTIVE` | `nv50_instobj_acquire()` | Process context; instmem mutex held after accessors and refcount are published | Records 0-to-1 CPU map-ref edge, access mode, and `map_source=new|cached|none` | No | No added allocation or sleep | Current resident BAR2 VMA, if BAR2 access |
+| `KMAP_LAST_RELEASE` | `nv50_instobj_release()` | Process context; after refcount reaches zero with instmem mutex held | Records 1-to-0 CPU ref edge before clearing `memory.ptrs`; the VMA remains resident and may be `cache_state=lru` or `pinned` | No diagnostic MMIO; the existing BAR flush occurs before this log | No added allocation or sleep | Stored BAR2 VMA snapshot; no post-release lookup |
+| `BOOT_MAP_PINNED` | `nv50_instobj_boot()` | Process context; instmem mutex held after map helper returns | Records a resident VMA excluded from LRU; zero active kmap refs | No | No added allocation or sleep | Stored BAR2 VMA range |
+| `VMA_EVICTING` | `nv50_instobj_kmap()` LRU eviction branch | Process context; instmem mutex held before LRU removal and pointer clear | Snapshots ID/range/reset generation before detaching the cached mapping | No | No added allocation or sleep | Stored BAR2 VMA range |
+| `VMA_EVICTED` | `nv50_instobj_kmap()` after `iounmap()` and `nvkm_vmm_put()` | Process context; instmem mutex dropped; VMM put uses its existing sleeping lock | Records successful software VMA removal after the VMM unmap/put path | No diagnostic MMIO | No added allocation or sleep beyond existing teardown | Previously stored BAR2 VMA range |
+| `OBJECT_DESTROYING` | `nv50_instobj_dtor()` | Process context; instmem mutex held while final state is snapshotted | Captures refs, resident/cached state and final range before LRU removal/destruction; nonzero refs remain visible | No | No added allocation or sleep | Stored BAR2 VMA range |
+| `OBJECT_DESTROYED` | `nv50_instobj_dtor()` after iounmap/VMM put/backing unref/list removal | Process context; no instmem mutex held at log site | Reports `destroyed` only when a resident VMA was actually passed to `nvkm_vmm_put()`; otherwise `unknown` or `not_established` | No diagnostic MMIO | No added allocation or sleep beyond existing destruction | Snapshotted BAR2 VMA range |
+| reset `BEGIN` / `END` | `nvkm_bar_bar2_reset()` | Existing FIFO recovery interrupt context | Atomically increments reset generation at `BEGIN`; brackets the existing BAR2 `.init()`/`.wait()` operation | No additional MMIO reads; existing reset writes/flushes are unchanged | No explicit allocation or sleeping lock; two printk records are a diagnostic perturbation | Reset generation only |
+
+The reset-generation increment occurs immediately before the existing reset
+`.init()`/`.wait()` calls. It records reset attempts and ordering; it does not
+claim that a particular internal GPU TLB/PTE cache was invalidated. The global
+diagnostic sequence can reveal dropped/reordered log records; the correlator
+uses journal monotonic timestamp and line order for lifecycle state and treats
+sequence numbers as completeness checks, not as a substitute for time.
 
 ## Fault-path execution context and reset-marker perturbation
 
@@ -194,10 +224,11 @@ mapping lifecycle spans a reset and then recurs at the same numeric VA.
 ## Patch 0011 final-range semantics
 
 The candidate patch is `patches/0011-drm-nouveau-trace-ambient-bar2-lifetimes.patch`
-(SHA-256 `42bd387c82d51a39f1167a69dba210857b3c37bf9458311a57dd09705fe12222`).
-`LAST_MAP_RELEASE` records the stored `bar` VMA range whether or not the
+(SHA-256 `67f0ba18f3e4ce979bc97784f622a33e0eb5f6e0472b7de4cd3d96925004e625`).
+`KMAP_LAST_RELEASE` records the stored `bar` VMA range whether or not the
 `ioremap` pointer is present; this snapshot is captured before `memory.ptrs`
-is cleared and performs no VMM lookup. The record uses `range=cached` when the
-VMA exists. It is deliberately not called a VMA teardown. The parser's recent
-range result distinguishes this 1-to-0 kmap reference edge (VMA retained in
-LRU) from `EVICTED` or verified `DESTROYED` teardown.
+is cleared and performs no VMM lookup. A resident record uses
+`vma_state=resident` and `cache_state=lru|pinned`. It is deliberately not
+called a VMA teardown. The parser distinguishes this 1-to-0 kmap-reference
+edge (VMA retained in the LRU) from `VMA_EVICTED` or an `OBJECT_DESTROYED`
+record that confirms teardown.
