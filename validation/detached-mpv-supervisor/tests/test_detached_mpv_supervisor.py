@@ -961,10 +961,18 @@ class MpvHardwareDecodeEvidenceTests(unittest.TestCase):
 
 
 class MpvIpcTests(unittest.TestCase):
-    def test_screenshot_command_uses_json_ipc_and_reads_reply(self) -> None:
+    def test_mpv_argv_prepares_directory_for_screenshot_ipc(self) -> None:
         with tempfile.TemporaryDirectory(prefix="mpv-ipc-test-") as temporary:
+            run_dir = Path(temporary) / "run"
+            run_dir.mkdir()
+            screenshot_dir = run_dir / "mpv-screenshots"
+            self.assertFalse(screenshot_dir.exists())
+            screenshot_path = screenshot_dir / "capture-0001.png"
             socket_path = Path(temporary) / "mpv.sock"
-            screenshot_path = Path(temporary) / "capture-0001.png"
+            argv = supervisor.mpv_argv(run_dir, socket_path)
+            self.assertTrue(screenshot_dir.is_dir())
+            self.assertEqual(screenshot_dir.stat().st_mode & 0o777, 0o700)
+            self.assertIn(f"--screenshot-directory={screenshot_dir}", argv)
             received: list[dict[str, object]] = []
             server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             server.bind(str(socket_path))
