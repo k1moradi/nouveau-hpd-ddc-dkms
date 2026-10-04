@@ -633,6 +633,72 @@ class DeploymentManifestTests(unittest.TestCase):
                 )
 
 
+class ManifestSnapshotWriteTests(unittest.TestCase):
+    payload = b'{"schema":1,"review":"pinned manifest"}\n'
+
+    def test_manifest_snapshot_completes_a_single_full_write(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="nvmpv-manifest-write-"
+        ) as temporary:
+            target = Path(temporary) / "deployment-manifest.json"
+            real_write = os.write
+            calls: list[bytes] = []
+
+            def full_write(fd: int, view: memoryview) -> int:
+                calls.append(bytes(view))
+                return real_write(fd, view)
+
+            with patch.object(supervisor.os, "write", side_effect=full_write):
+                supervisor.write_manifest_snapshot(target, self.payload)
+
+            self.assertEqual(calls, [self.payload])
+            self.assertEqual(target.read_bytes(), self.payload)
+
+    def test_manifest_snapshot_retries_multiple_short_writes(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="nvmpv-manifest-short-write-"
+        ) as temporary:
+            target = Path(temporary) / "deployment-manifest.json"
+            real_write = os.write
+            calls: list[bytes] = []
+
+            def short_write(fd: int, view: memoryview) -> int:
+                chunk = bytes(view[:7])
+                calls.append(chunk)
+                return real_write(fd, chunk)
+
+            with patch.object(supervisor.os, "write", side_effect=short_write):
+                supervisor.write_manifest_snapshot(target, self.payload)
+
+            self.assertGreater(len(calls), 1)
+            self.assertEqual(b"".join(calls), self.payload)
+            self.assertEqual(target.read_bytes(), self.payload)
+
+    def test_manifest_snapshot_rejects_zero_write_and_removes_partial_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="nvmpv-manifest-zero-write-"
+        ) as temporary:
+            target = Path(temporary) / "deployment-manifest.json"
+            with patch.object(supervisor.os, "write", return_value=0):
+                with self.assertRaisesRegex(OSError, "short or invalid write"):
+                    supervisor.write_manifest_snapshot(target, self.payload)
+            self.assertFalse(target.exists())
+
+    def test_manifest_snapshot_rejects_negative_write_and_removes_partial_file(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="nvmpv-manifest-negative-write-"
+        ) as temporary:
+            target = Path(temporary) / "deployment-manifest.json"
+            with patch.object(supervisor.os, "write", return_value=-1):
+                with self.assertRaisesRegex(OSError, "short or invalid write"):
+                    supervisor.write_manifest_snapshot(target, self.payload)
+            self.assertFalse(target.exists())
+
+
 class ProtectedModuleParameterTests(unittest.TestCase):
     def test_root_only_parameter_uses_noninteractive_read_only_cat(self) -> None:
         parameter = Path("/sys/module/nouveau/parameters/diag_ctxsw")

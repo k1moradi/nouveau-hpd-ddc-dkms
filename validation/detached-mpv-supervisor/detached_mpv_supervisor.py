@@ -851,6 +851,29 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content, encoding="utf-8")
 
 
+def write_all(fd: int, payload: bytes) -> None:
+    view = memoryview(payload)
+    while view:
+        written = os.write(fd, view)
+        if written <= 0 or written > len(view):
+            raise OSError(
+                "short or invalid write while saving deployment manifest"
+            )
+        view = view[written:]
+
+
+def write_manifest_snapshot(path: Path, payload: bytes) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
+    try:
+        write_all(fd, payload)
+        os.fsync(fd)
+    except BaseException:
+        path.unlink(missing_ok=True)
+        raise
+    finally:
+        os.close(fd)
+
+
 def create_arm_token(run_dir: Path) -> str:
     token = secrets.token_hex(32)
     token_path = run_dir / ARM_TOKEN_FILE
@@ -1471,14 +1494,7 @@ def manager_start(run_dir: Path, deployment_manifest_path: Path) -> int:
     run_dir.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
     run_dir.mkdir(mode=0o700, exist_ok=False)
     manifest_snapshot = run_dir / DEPLOYMENT_MANIFEST_NAME
-    manifest_fd = os.open(
-        manifest_snapshot, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600
-    )
-    try:
-        os.write(manifest_fd, manifest_bytes)
-        os.fsync(manifest_fd)
-    finally:
-        os.close(manifest_fd)
+    write_manifest_snapshot(manifest_snapshot, manifest_bytes)
     token = create_arm_token(run_dir)
     unit = "nouveau-mpv-" + run_dir.name[-18:].replace("_", "-") + ".service"
     command = [
