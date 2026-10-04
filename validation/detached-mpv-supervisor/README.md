@@ -93,6 +93,13 @@ VAAPI H.264 decode, and proof that the pinned VA DSO is mapped by MPV. It is not
 full-file playback acceptance; the current command intentionally covers a
 bounded six-minute scene interval.
 
+Screenshot attempts use deterministic `capture-NNNN.png` names and
+`screenshot-to-file`. Each JSONL record contains `time-pos` queried immediately
+before the command and after the output file has become size-stable, the exact
+path, the command response, and the saved file SHA-256. The two positions
+bracket screenshot creation; they are presentation-time bounds, not
+decoded-frame PTS.
+
 ## CPU-only validation
 
 From this directory:

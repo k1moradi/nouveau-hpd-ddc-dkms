@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 import io
 import os
@@ -963,13 +964,14 @@ class MpvIpcTests(unittest.TestCase):
     def test_screenshot_command_uses_json_ipc_and_reads_reply(self) -> None:
         with tempfile.TemporaryDirectory(prefix="mpv-ipc-test-") as temporary:
             socket_path = Path(temporary) / "mpv.sock"
+            screenshot_path = Path(temporary) / "capture-0001.png"
             received: list[dict[str, object]] = []
             server = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
             server.bind(str(socket_path))
-            server.listen(2)
+            server.listen(3)
 
             def respond() -> None:
-                for request_id in (1, 2):
+                for request_id in (1, 2, 3):
                     connection, _ = server.accept()
                     with connection:
                         request = bytearray()
@@ -981,9 +983,12 @@ class MpvIpcTests(unittest.TestCase):
                             response = {
                                 "request_id": request_id,
                                 "error": "success",
-                                "data": 530.083,
+                                "data": 530.083 if request_id == 1 else 530.125,
                             }
                         else:
+                            Path(parsed["command"][1]).write_bytes(
+                                b"synthetic png payload"
+                            )
                             response = {"request_id": request_id, "error": "success"}
                         connection.sendall(
                             json.dumps(response).encode("utf-8") + b"\n"
@@ -992,7 +997,7 @@ class MpvIpcTests(unittest.TestCase):
             thread = threading.Thread(target=respond)
             thread.start()
             try:
-                reply = mpv_screenshot_request(socket_path)
+                reply = mpv_screenshot_request(socket_path, screenshot_path)
             finally:
                 thread.join(timeout=2)
                 server.close()
@@ -1002,14 +1007,122 @@ class MpvIpcTests(unittest.TestCase):
             received,
             [
                 {"command": ["get_property", "time-pos"]},
-                {"command": ["screenshot", "video"]},
+                {
+                    "command": [
+                        "screenshot-to-file",
+                        str(screenshot_path),
+                        "video",
+                    ]
+                },
+                {"command": ["get_property", "time-pos"]},
             ],
         )
-        self.assertEqual(reply["time_pos_seconds"], 530.083)
+        self.assertEqual(reply["media_time_before_seconds"], 530.083)
+        self.assertEqual(reply["media_time_after_seconds"], 530.125)
         self.assertEqual(
             reply["screenshot_response"],
             {"request_id": 2, "error": "success"},
         )
+        self.assertEqual(reply["screenshot_path"], str(screenshot_path))
+        self.assertTrue(reply["screenshot_file_exists"])
+        self.assertEqual(
+            reply["screenshot_sha256"],
+            hashlib.sha256(b"synthetic png payload").hexdigest(),
+        )
+
+    def test_screenshot_capture_survives_failed_after_timestamp_query(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mpv-ipc-after-time-") as temporary:
+            screenshot_path = Path(temporary) / "capture-0001.png"
+            replies = [
+                {"error": "success", "data": 530.0},
+                {"error": "success"},
+                {"error": "property unavailable"},
+            ]
+
+            def fake_ipc(_socket_path: Path, command: list[object]) -> dict[str, object]:
+                if command[0] == "screenshot-to-file":
+                    screenshot_path.write_bytes(b"captured")
+                return replies.pop(0)
+
+            with patch.object(supervisor, "mpv_ipc_request", side_effect=fake_ipc):
+                result = mpv_screenshot_request(Path("/unused"), screenshot_path)
+
+        self.assertEqual(result["media_time_before_seconds"], 530.0)
+        self.assertIsNone(result["media_time_after_seconds"])
+        self.assertIn("time-pos query failed", result["time_pos_after_error"])
+        self.assertTrue(result["screenshot_file_exists"])
+        self.assertEqual(
+            result["screenshot_sha256"], hashlib.sha256(b"captured").hexdigest()
+        )
+
+    def test_after_timestamp_is_queried_after_file_stabilizes(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mpv-ipc-order-") as temporary:
+            screenshot_path = Path(temporary) / "capture-0001.png"
+            events: list[str] = []
+            replies = iter((530.0, 530.125))
+            real_wait = supervisor._wait_for_screenshot_file
+
+            def fake_ipc(_socket_path: Path, command: list[object]) -> dict[str, object]:
+                if command[0] == "get_property":
+                    if not events:
+                        events.append("time-before")
+                    else:
+                        events.append("time-after")
+                    return {"error": "success", "data": next(replies)}
+                events.append("screenshot")
+                screenshot_path.write_bytes(b"captured")
+                return {"error": "success"}
+
+            def wait_for_file(path: Path) -> tuple[bool, str | None, str | None]:
+                result = real_wait(path)
+                events.append("file-stable")
+                return result
+
+            with (
+                patch.object(supervisor, "mpv_ipc_request", side_effect=fake_ipc),
+                patch.object(
+                    supervisor,
+                    "_wait_for_screenshot_file",
+                    side_effect=wait_for_file,
+                ),
+            ):
+                result = mpv_screenshot_request(Path("/unused"), screenshot_path)
+
+        self.assertEqual(
+            events,
+            ["time-before", "screenshot", "file-stable", "time-after"],
+        )
+        self.assertTrue(result["screenshot_file_exists"])
+
+    def test_successful_ipc_without_output_file_is_not_a_saved_capture(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mpv-ipc-missing-file-") as temporary:
+            screenshot_path = Path(temporary) / "capture-0001.png"
+            replies = iter(
+                (
+                    {"error": "success", "data": 530.0},
+                    {"error": "success"},
+                    {"error": "success", "data": 530.125},
+                )
+            )
+            with (
+                patch.object(
+                    supervisor,
+                    "SCREENSHOT_FILE_WAIT_SECONDS",
+                    0.0,
+                ),
+                patch.object(
+                    supervisor,
+                    "mpv_ipc_request",
+                    side_effect=lambda _socket, _command: next(replies),
+                ),
+            ):
+                result = mpv_screenshot_request(Path("/unused"), screenshot_path)
+
+        self.assertEqual(result["screenshot_response"]["error"], "success")
+        self.assertFalse(result["screenshot_file_exists"])
+        self.assertIsNone(result["screenshot_sha256"])
+        self.assertIn("timed out waiting", result["screenshot_file_error"])
+
 
     def test_screenshot_requires_a_valid_media_timestamp(self) -> None:
         with patch.object(
@@ -1018,8 +1131,23 @@ class MpvIpcTests(unittest.TestCase):
             return_value={"error": "success", "data": "not-a-number"},
         ) as ipc:
             with self.assertRaisesRegex(RuntimeError, "invalid time-pos"):
-                mpv_screenshot_request(Path("/unused"))
+                mpv_screenshot_request(
+                    Path("/unused"), Path("/tmp/unused-capture.png")
+                )
         ipc.assert_called_once_with(Path("/unused"), ["get_property", "time-pos"])
+
+    def test_screenshot_path_must_be_absolute_png(self) -> None:
+        with self.assertRaisesRegex(ValueError, "absolute and end in .png"):
+            mpv_screenshot_request(Path("/unused"), Path("relative.jpg"))
+
+    def test_screenshot_refuses_to_overwrite_existing_path(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="mpv-ipc-existing-") as temporary:
+            screenshot_path = Path(temporary) / "capture-0001.png"
+            screenshot_path.write_bytes(b"old capture")
+            with patch.object(supervisor, "mpv_ipc_request") as ipc:
+                with self.assertRaisesRegex(FileExistsError, "already exists"):
+                    mpv_screenshot_request(Path("/unused"), screenshot_path)
+            ipc.assert_not_called()
 
 if __name__ == "__main__":
     unittest.main(verbosity=2)

@@ -24,6 +24,7 @@ import secrets
 import shutil
 import signal
 import socket
+import stat
 import subprocess
 import sys
 import tempfile
@@ -63,6 +64,8 @@ REQUIRED_DIAGNOSTIC_PARAMETERS = {"diag_ctxsw": "N"}
 POST_STOP_OBSERVATION_SECONDS = 30.0
 FIRST_SCREENSHOT_DELAY_SECONDS = 2.0
 SCREENSHOT_INTERVAL_SECONDS = 10.0
+SCREENSHOT_FILE_WAIT_SECONDS = 2.0
+SCREENSHOT_FILE_STABLE_SECONDS = 0.1
 DRIVER_MAP_WAIT_SECONDS = 10.0
 PROCESS_GROUP_SIGINT_GRACE_SECONDS = 5.0
 PROCESS_GROUP_SIGTERM_GRACE_SECONDS = 2.0
@@ -950,7 +953,7 @@ def mpv_ipc_request(
     return parsed
 
 
-def mpv_screenshot_request(socket_path: Path) -> dict[str, object]:
+def _mpv_time_position(socket_path: Path) -> tuple[dict[str, object], float]:
     position = mpv_ipc_request(socket_path, ["get_property", "time-pos"])
     if position.get("error") != "success":
         raise RuntimeError(
@@ -963,11 +966,102 @@ def mpv_screenshot_request(socket_path: Path) -> dict[str, object]:
         or not math.isfinite(float(raw_time))
     ):
         raise RuntimeError(f"mpv returned an invalid time-pos: {raw_time!r}")
-    screenshot = mpv_ipc_request(socket_path, ["screenshot", "video"])
+    return position, float(raw_time)
+
+
+def _wait_for_screenshot_file(path: Path) -> tuple[bool, str | None, str | None]:
+    deadline = time.monotonic() + SCREENSHOT_FILE_WAIT_SECONDS
+    last_signature: tuple[int, int, int] | None = None
+    stable_since: float | None = None
+    while True:
+        now = time.monotonic()
+        try:
+            file_stat = path.lstat()
+        except FileNotFoundError:
+            file_stat = None
+        except OSError as exc:
+            return False, None, str(exc)
+
+        if file_stat is not None and not stat.S_ISREG(file_stat.st_mode):
+            return False, None, f"screenshot output is not a regular file: {path}"
+
+        if file_stat is not None and file_stat.st_size > 0:
+            signature = (
+                file_stat.st_size,
+                file_stat.st_mtime_ns,
+                file_stat.st_ctime_ns,
+            )
+            if signature != last_signature:
+                last_signature = signature
+                stable_since = now
+            elif stable_since is not None and now - stable_since >= SCREENSHOT_FILE_STABLE_SECONDS:
+                try:
+                    digest = sha256(path)
+                    final_stat = path.lstat()
+                except OSError as exc:
+                    return False, None, str(exc)
+
+                if not stat.S_ISREG(final_stat.st_mode):
+                    return False, None, f"screenshot output changed type: {path}"
+                final_signature = (
+                    final_stat.st_size,
+                    final_stat.st_mtime_ns,
+                    final_stat.st_ctime_ns,
+                )
+                if final_signature == signature:
+                    return True, digest, None
+                last_signature = final_signature
+                stable_since = time.monotonic()
+
+        if now >= deadline:
+            return False, None, f"timed out waiting for stable screenshot file {path}"
+        time.sleep(min(0.025, deadline - now))
+
+
+def mpv_screenshot_request(
+    socket_path: Path, screenshot_path: Path
+) -> dict[str, object]:
+    if not screenshot_path.is_absolute() or screenshot_path.suffix.lower() != ".png":
+        raise ValueError("screenshot path must be absolute and end in .png")
+    if os.path.lexists(screenshot_path):
+        raise FileExistsError(f"screenshot path already exists: {screenshot_path}")
+
+    position_before, media_time_before = _mpv_time_position(socket_path)
+    screenshot = mpv_ipc_request(
+        socket_path,
+        ["screenshot-to-file", str(screenshot_path), "video"],
+    )
+    position_after: dict[str, object] | None = None
+    media_time_after: float | None = None
+    time_after_error: str | None = None
+
+    if screenshot.get("error") == "success":
+        file_exists, file_sha256, file_error = _wait_for_screenshot_file(
+            screenshot_path
+        )
+    else:
+        file_exists = False
+        file_sha256 = None
+        file_error = "mpv screenshot command did not succeed"
+
+    try:
+        position_after, media_time_after = _mpv_time_position(socket_path)
+    except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
+        # Keep the successful screenshot response and its file identity even
+        # if the second timestamp query fails.
+        time_after_error = str(exc)
+
     return {
-        "time_pos_response": position,
-        "time_pos_seconds": float(raw_time),
+        "time_pos_before_response": position_before,
+        "media_time_before_seconds": media_time_before,
         "screenshot_response": screenshot,
+        "time_pos_after_response": position_after,
+        "media_time_after_seconds": media_time_after,
+        "time_pos_after_error": time_after_error,
+        "screenshot_path": str(screenshot_path),
+        "screenshot_file_exists": file_exists,
+        "screenshot_sha256": file_sha256,
+        "screenshot_file_error": file_error,
     }
 
 
@@ -1193,6 +1287,7 @@ def service_run(run_dir: Path) -> int:
     screenshot_dir = run_dir / "mpv-screenshots"
     screenshot_attempts = 0
     screenshot_ipc_successes = 0
+    screenshot_file_successes = 0
     next_screenshot_at = time.monotonic() + FIRST_SCREENSHOT_DELAY_SECONDS
     try:
         while child.poll() is None and not stop_event.is_set():
@@ -1203,14 +1298,22 @@ def service_run(run_dir: Path) -> int:
                     "utc": dt.datetime.now(dt.timezone.utc).isoformat(),
                     "attempt": screenshot_attempts,
                 }
+                screenshot_path = screenshot_dir / f"capture-{screenshot_attempts:04d}.png"
                 try:
-                    response = mpv_screenshot_request(ipc_path)
+                    response = mpv_screenshot_request(ipc_path, screenshot_path)
                 except (OSError, RuntimeError, ValueError, subprocess.TimeoutExpired) as exc:
                     record["error"] = str(exc)
                     next_screenshot_at = now + FIRST_SCREENSHOT_DELAY_SECONDS
                 else:
                     record["response"] = response
-                    record["media_time_seconds"] = response.get("time_pos_seconds")
+                    record["media_time_before_seconds"] = response.get(
+                        "media_time_before_seconds"
+                    )
+                    record["media_time_after_seconds"] = response.get(
+                        "media_time_after_seconds"
+                    )
+                    record["screenshot_path"] = response.get("screenshot_path")
+                    record["screenshot_sha256"] = response.get("screenshot_sha256")
                     screenshot_response = response.get("screenshot_response")
                     succeeded = (
                         isinstance(screenshot_response, dict)
@@ -1219,6 +1322,14 @@ def service_run(run_dir: Path) -> int:
                     record["command_succeeded"] = succeeded
                     if succeeded:
                         screenshot_ipc_successes += 1
+                    saved = (
+                        succeeded
+                        and response.get("screenshot_file_exists") is True
+                        and isinstance(response.get("screenshot_sha256"), str)
+                    )
+                    record["file_saved"] = saved
+                    if saved:
+                        screenshot_file_successes += 1
                         next_screenshot_at = now + SCREENSHOT_INTERVAL_SECONDS
                     else:
                         next_screenshot_at = now + FIRST_SCREENSHOT_DELAY_SECONDS
@@ -1280,6 +1391,7 @@ def service_run(run_dir: Path) -> int:
         run_dir / "screenshot-summary.txt",
         f"attempts={screenshot_attempts}\n"
         f"ipc_successes={screenshot_ipc_successes}\n"
+        f"file_saved={screenshot_file_successes}\n"
         f"png_files={len(screenshot_files)}\n"
         + ("first_file=" + str(screenshot_files[0]) + "\n" if screenshot_files else ""),
     )
