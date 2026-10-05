@@ -113,6 +113,15 @@ class ModuleCompressionTests(unittest.TestCase):
 
             self.assertEqual(restored.read_bytes(), payload)
 
+    def test_large_module_decompression_has_a_bounded_five_minute_timeout(self):
+        with tempfile.TemporaryDirectory(prefix="module-decompression-timeout-test-") as temporary:
+            root = Path(temporary)
+            compressed = root / "nouveau.ko.zst"
+            compressed.write_bytes(b"compressed module fixture")
+            with patch.object(FINALIZER.subprocess, "run") as run:
+                FINALIZER.decompress_module(compressed, root / "restored.ko")
+            self.assertEqual(run.call_args.kwargs["timeout"], 300)
+
 
 class EarlyModuleOptionsTests(unittest.TestCase):
     def test_module_options_parser_accepts_exact_ambient_parameters(self):

@@ -375,10 +375,10 @@ def decompress_module(path: Path, destination: Path) -> None:
         shutil.copy2(path, destination)
         return
     if path.suffix == ".zst":
-        subprocess.run(command, check=True, timeout=60)
+        subprocess.run(command, check=True, timeout=300)
     else:
         with destination.open("wb") as output:
-            subprocess.run(command, check=True, stdout=output, timeout=60)
+            subprocess.run(command, check=True, stdout=output, timeout=300)
 
 
 def compress_module(source: Path, destination: Path) -> None:
