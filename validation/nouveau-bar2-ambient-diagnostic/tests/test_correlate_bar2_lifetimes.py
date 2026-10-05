@@ -109,7 +109,14 @@ def decoded_fault_message(va: int = 0x4000) -> str:
     )
 
 
-def row(message: str, mono: int, boot: str = BOOT, *, real: int | None = None) -> dict[str, object]:
+def row(
+    message: str,
+    mono: int,
+    boot: str = BOOT,
+    *,
+    real: int | None = None,
+    ring_ns: int | None = None,
+) -> dict[str, object]:
     result: dict[str, object] = {
         "MESSAGE": message,
         "_BOOT_ID": boot,
@@ -119,6 +126,8 @@ def row(message: str, mono: int, boot: str = BOOT, *, real: int | None = None) -
     }
     if real is not None:
         result["__REALTIME_TIMESTAMP"] = str(real)
+    if ring_ns is not None:
+        result["NOUVEAU_DIAG_RING_MONO_NS"] = str(ring_ns)
     return result
 
 
@@ -231,6 +240,27 @@ class AmbientCorrelationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             fault = read_result(records, temporary)["faults"][0]
         self.assertEqual(fault["outcome"], "INCONCLUSIVE_VMA_TRANSITION")
+
+    def test_ring_lifecycle_and_fault_same_microsecond_are_inconclusive(self):
+        import tempfile
+        records = active_lifecycle()
+        records[-1]["__MONOTONIC_TIMESTAMP"] = "29"
+        records[-1]["NOUVEAU_DIAG_RING_MONO_NS"] = "29001"
+        records += fault_pair(va=0x4000, mono=30)
+        with tempfile.TemporaryDirectory() as temporary:
+            fault = read_result(records, temporary)["faults"][0]
+        self.assertEqual(fault["outcome"], "INCONCLUSIVE_TIMESTAMP_COLLISION")
+        self.assertEqual(fault["timestamp_collision_records"][0]["ring_monotonic_ns"], 29001)
+        self.assertEqual(fault["active_candidates"], [])
+        self.assertFalse(fault["causal_ownership_proven"])
+
+    def test_ring_nanoseconds_must_agree_with_journal_microseconds(self):
+        import tempfile
+        records = active_lifecycle()
+        records[-1]["NOUVEAU_DIAG_RING_MONO_NS"] = "16999"
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(CorrelationInputError, "disagree with journal microseconds"):
+                parse_journal(write_journal(records, temporary))
 
     def test_release_after_raw_fault_does_not_retroactively_change_fault_state(self):
         import tempfile

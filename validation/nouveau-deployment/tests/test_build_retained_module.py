@@ -23,8 +23,20 @@ class PatchInputTests(unittest.TestCase):
             ROOT / "validation/nouveau-bar2-vma-diagnostic/patches/"
             "0010-drm-nouveau-correlate-instmem-vma-selftest.patch"
         )
+        ambient = (
+            ROOT / "validation/nouveau-bar2-ambient-diagnostic/patches/"
+            "0011-drm-nouveau-trace-ambient-bar2-lifetimes.patch"
+        )
+        teardown = (
+            ROOT / "validation/nouveau-bar2-ambient-diagnostic/patches/"
+            "0012-drm-nouveau-mark-bar2-teardown-phases.patch"
+        )
+        ring = (
+            ROOT / "validation/nouveau-bar2-ambient-diagnostic/patches/"
+            "0013-drm-nouveau-capture-ambient-bar2-events.patch"
+        )
 
-        paths = BUILDER.verify_patch_inputs(nvif, vma)
+        paths = BUILDER.verify_patch_inputs(nvif, vma, ambient, teardown, ring)
 
         self.assertEqual(paths["0009-drm-nouveau-log-nvif-duplicate-layer.patch"], nvif)
         self.assertEqual(paths["0010-drm-nouveau-correlate-instmem-vma-selftest.patch"], vma)
@@ -41,9 +53,14 @@ class PatchInputTests(unittest.TestCase):
                 ROOT / "validation/nouveau-bar2-vma-diagnostic/patches/"
                 "0010-drm-nouveau-correlate-instmem-vma-selftest.patch"
             )
+            remaining = [
+                ROOT / "validation/nouveau-bar2-ambient-diagnostic/patches/"
+                / name
+                for name in list(BUILDER.PATCHES)[2:]
+            ]
 
             with self.assertRaisesRegex(RuntimeError, "unexpected hash for 0009"):
-                BUILDER.verify_patch_inputs(wrong, vma)
+                BUILDER.verify_patch_inputs(wrong, vma, *remaining)
 
 
 class KernelHeaderReleaseTests(unittest.TestCase):

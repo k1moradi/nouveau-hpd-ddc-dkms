@@ -150,6 +150,7 @@ class JournalRow:
     real_usec: int | None
     message: str
     metadata: dict[str, Any]
+    ring_mono_ns: int | None
 
 
 @dataclass(frozen=True)
@@ -297,6 +298,24 @@ def parse_journal(path: Path) -> ParsedInput:
             message = record.get("MESSAGE", "")
             if not isinstance(message, str):
                 raise CorrelationInputError(f"line {line_number}: MESSAGE must be a string")
+            ring_mono_ns: int | None = None
+            if "NOUVEAU_DIAG_RING_MONO_NS" in record:
+                ring_mono_ns = _uint(
+                    str(record["NOUVEAU_DIAG_RING_MONO_NS"]),
+                    "ring monotonic nanoseconds", line_number,
+                )
+                if record.get("_TRANSPORT") != "kernel":
+                    raise CorrelationInputError(
+                        f"line {line_number}: ring timestamp is not kernel transport"
+                    )
+                if MAP_TAG not in message and RESET_TAG not in message:
+                    raise CorrelationInputError(
+                        f"line {line_number}: ring timestamp is not attached to a lifecycle event"
+                    )
+                if ring_mono_ns // 1000 != mono:
+                    raise CorrelationInputError(
+                        f"line {line_number}: ring nanoseconds disagree with journal microseconds"
+                    )
             metadata = {
                 key: record[key]
                 for key in (
@@ -306,7 +325,9 @@ def parse_journal(path: Path) -> ParsedInput:
                 )
                 if key in record
             }
-            row = JournalRow(line_number, boot, mono, real, message, metadata)
+            row = JournalRow(
+                line_number, boot, mono, real, message, metadata, ring_mono_ns,
+            )
             rows.append(row)
 
             if MAP_TAG in message:
@@ -1300,6 +1321,48 @@ def correlate(parsed: ParsedInput) -> dict[str, Any]:
     reset_begins = [event for event in parsed.resets if event.stage == "BEGIN"]
     previous_fault: FaultEvent | None = None
     for ordinal, fault in enumerate(faults, 1):
+        collision_rows = [
+            row for row in parsed.rows
+            if row.ring_mono_ns is not None
+            and row.mono_usec in {fault.raw_mono_usec, fault.mono_usec}
+        ]
+        delta_previous = (
+            None if previous_fault is None
+            else fault.raw_mono_usec - previous_fault.raw_mono_usec
+        )
+        if collision_rows:
+            fault_results.append({
+                "fault_ordinal": ordinal,
+                "time_since_previous_fault_usec": delta_previous,
+                "bar2_resets_before_fault": None,
+                "bar2_reset_generation_at_fault": None,
+                "bar2_resets_since_previous_fault": None,
+                "reset_in_progress_at_fault": None,
+                "post_fault_recovery_reset_generations": [],
+                "fault": fault.as_json(),
+                "outcome": "INCONCLUSIVE_TIMESTAMP_COLLISION",
+                "timestamp_collision_records": [
+                    {
+                        "ring_journal_line": row.line,
+                        "ring_monotonic_ns": row.ring_mono_ns,
+                        "ring_message": row.message,
+                        "fault_raw_monotonic_usec": fault.raw_mono_usec,
+                        "fault_decoded_monotonic_usec": fault.mono_usec,
+                    }
+                    for row in collision_rows
+                ],
+                "numeric_address_correlation_only": True,
+                "causal_ownership_proven": False,
+                "active_candidates": [],
+                "zero_ref_candidates": [],
+                "resident_candidates": [],
+                "recently_evicted_ranges": [],
+                "incomplete_lifecycles": [],
+                "transition_records": [],
+            })
+            previous_fault = fault
+            continue
+
         current_gen, reset_in_progress = _reset_state_at_fault(parsed.resets, fault)
         active_candidates: list[dict[str, Any]] = []
         zero_ref_candidates: list[dict[str, Any]] = []
@@ -1501,6 +1564,10 @@ def correlate(parsed: ParsedInput) -> dict[str, Any]:
         "pointer_identity_used": False,
         "memory_address_used_for_fault_matching": False,
         "fault_count": len(parsed.faults),
+        "timestamp_collision_fault_count": sum(
+            item["outcome"] == "INCONCLUSIVE_TIMESTAMP_COLLISION"
+            for item in fault_results
+        ),
         "mapping_event_count": len(parsed.maps),
         "reset_event_count": len(parsed.resets),
         "allocation_id_count": len({event.allocation_id for event in parsed.maps}),

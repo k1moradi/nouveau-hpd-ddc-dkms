@@ -1,0 +1,351 @@
+From: Keivan Moradi <18602635+k1moradi@users.noreply.github.com>
+Subject: [PATCH] drm/nouveau: capture ambient BAR2 events in a bounded ring
+
+Store ambient BAR2 map and reset events in a preallocated ring instead of
+flooding printk. The read-only debugfs snapshot records a monotonic cutoff
+and immutable index prefix, and reports overflow, gaps, or cutoff races.
+
+The ring is allocated only when diag_bar2_map is enabled. Event paths use
+fixed memory, atomics, and monotonic timestamps. They add no VMM walk, MMIO
+read, sleeping lock, or allocation.
+
+Signed-off-by: Keivan Moradi <18602635+k1moradi@users.noreply.github.com>
+
+diff --git a/drivers/gpu/drm/nouveau/include/nvkm/subdev/bar.h b/drivers/gpu/drm/nouveau/include/nvkm/subdev/bar.h
+index 7b9c7b9..1497480 100644
+--- a/drivers/gpu/drm/nouveau/include/nvkm/subdev/bar.h
++++ b/drivers/gpu/drm/nouveau/include/nvkm/subdev/bar.h
+@@ -31,0 +32,8 @@
++int nvkm_bar2_diag_ring_init(void);
++void nvkm_bar2_diag_ring_fini(void);
++void nvkm_bar2_diag_ring_record(const char *message);
++u64 nvkm_bar2_diag_ring_capacity(void);
++u64 nvkm_bar2_diag_ring_head(void);
++u64 nvkm_bar2_diag_ring_dropped(void);
++bool nvkm_bar2_diag_ring_read(u64 index, u64 *mono_ns, char *message,
++			      size_t message_size);
+
+diff --git a/drivers/gpu/drm/nouveau/nouveau_debugfs.c b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+index 27453dc..09723c2 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_debugfs.c
++++ b/drivers/gpu/drm/nouveau/nouveau_debugfs.c
+@@ -35,0 +36,2 @@
++#include <linux/ktime.h>
++#include <linux/seq_file.h>
+@@ -42,0 +45 @@
++#include <nvkm/subdev/bar.h>
+@@ -1108,0 +1112,144 @@
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++struct nouveau_bar2_diag_dump {
++	u64 capacity;
++	u64 head;
++	u64 dropped;
++	u64 captured;
++	u64 cutoff_ns;
++	u64 index;
++};
++
++static char nouveau_bar2_diag_end_token;
++
++static void *
++nouveau_bar2_diag_seq_start(struct seq_file *m, loff_t *pos)
++{
++	struct nouveau_bar2_diag_dump *dump = m->private;
++
++	if (*pos == 0) {
++		/*
++		 * Ring producers reserve an index before timestamping it. Taking
++		 * the cutoff before head means every event timestamped at or
++		 * before the cutoff has already reserved an index in this prefix.
++		 */
++		dump->cutoff_ns = ktime_get_mono_fast_ns();
++		dump->capacity = nvkm_bar2_diag_ring_capacity();
++		dump->head = nvkm_bar2_diag_ring_head();
++		dump->dropped = nvkm_bar2_diag_ring_dropped();
++		dump->captured = min_t(u64, dump->head, dump->capacity);
++		return SEQ_START_TOKEN;
++	}
++	if (*pos <= dump->captured) {
++		dump->index = *pos - 1;
++		return dump;
++	}
++	if (*pos == dump->captured + 1)
++		return (void *)&nouveau_bar2_diag_end_token;
++	return NULL;
++}
++
++static void *
++nouveau_bar2_diag_seq_next(struct seq_file *m, void *v, loff_t *pos)
++{
++	++*pos;
++	return nouveau_bar2_diag_seq_start(m, pos);
++}
++
++static int
++nouveau_bar2_diag_seq_show(struct seq_file *m, void *v)
++{
++	struct nouveau_bar2_diag_dump *dump = m->private;
++
++	if (v == SEQ_START_TOKEN) {
++		seq_printf(m,
++			   "NOUVEAU_DIAG_BAR2_RING capacity=%llu head=%llu captured=%llu dropped=%llu cutoff_ns=%llu\n",
++			   (unsigned long long)dump->capacity,
++			   (unsigned long long)dump->head,
++			   (unsigned long long)dump->captured,
++			   (unsigned long long)dump->dropped,
++			   (unsigned long long)dump->cutoff_ns);
++	} else if (v == &nouveau_bar2_diag_end_token) {
++		seq_printf(m,
++			   "NOUVEAU_DIAG_BAR2_RING_END head=%llu dropped=%llu\n",
++			   (unsigned long long)nvkm_bar2_diag_ring_head(),
++			   (unsigned long long)nvkm_bar2_diag_ring_dropped());
++	} else {
++		u64 mono_ns;
++		char message[512];
++
++		if (nvkm_bar2_diag_ring_read(dump->index, &mono_ns, message,
++					     sizeof(message)))
++			seq_printf(m,
++				   "NOUVEAU_DIAG_BAR2_RING_EVENT index=%llu mono_ns=%llu message=%s\n",
++				   (unsigned long long)dump->index,
++				   (unsigned long long)mono_ns, message);
++		else
++			seq_printf(m,
++				   "NOUVEAU_DIAG_BAR2_RING_GAP index=%llu\n",
++				   (unsigned long long)dump->index);
++	}
++	return 0;
++}
++
++static void
++nouveau_bar2_diag_seq_stop(struct seq_file *m, void *v)
++{
++}
++
++static const struct seq_operations nouveau_bar2_diag_seq_ops = {
++	.start = nouveau_bar2_diag_seq_start,
++	.next = nouveau_bar2_diag_seq_next,
++	.stop = nouveau_bar2_diag_seq_stop,
++	.show = nouveau_bar2_diag_seq_show,
++};
++
++static int
++nouveau_bar2_diag_open(struct inode *inode, struct file *file)
++{
++	return seq_open_private(file, &nouveau_bar2_diag_seq_ops,
++				sizeof(struct nouveau_bar2_diag_dump));
++}
++
++static const struct file_operations nouveau_bar2_diag_fops = {
++	.owner = THIS_MODULE,
++	.open = nouveau_bar2_diag_open,
++	.read = seq_read,
++	.llseek = seq_lseek,
++	.release = seq_release_private,
++};
++
++static int
++nouveau_bar2_diag_status_show(struct seq_file *m, void *data)
++{
++	u64 head_before = nvkm_bar2_diag_ring_head();
++	u64 dropped_before = nvkm_bar2_diag_ring_dropped();
++	u64 head_after = nvkm_bar2_diag_ring_head();
++	u64 dropped_after = nvkm_bar2_diag_ring_dropped();
++
++	seq_printf(m,
++		   "NOUVEAU_DIAG_BAR2_RING_STATUS enabled=%u capacity=%llu head_before=%llu head_after=%llu dropped_before=%llu dropped_after=%llu\n",
++		   nvkm_bar2_diag_enabled(),
++		   (unsigned long long)nvkm_bar2_diag_ring_capacity(),
++		   (unsigned long long)head_before,
++		   (unsigned long long)head_after,
++		   (unsigned long long)dropped_before,
++		   (unsigned long long)dropped_after);
++	return 0;
++}
++
++static int
++nouveau_bar2_diag_status_open(struct inode *inode, struct file *file)
++{
++	return single_open(file, nouveau_bar2_diag_status_show,
++			   inode->i_private);
++}
++
++static const struct file_operations nouveau_bar2_diag_status_fops = {
++	.owner = THIS_MODULE,
++	.open = nouveau_bar2_diag_status_open,
++	.read = seq_read,
++	.llseek = seq_lseek,
++	.release = single_release,
++};
++#endif
++
+@@ -1141,0 +1289,6 @@
++	debugfs_create_file("ambient_bar2_events", 0400,
++			    minor->debugfs_root, minor->dev,
++			    &nouveau_bar2_diag_fops);
++	debugfs_create_file("ambient_bar2_status", 0400,
++			    minor->debugfs_root, minor->dev,
++			    &nouveau_bar2_diag_status_fops);
+
+diff --git a/drivers/gpu/drm/nouveau/nouveau_drm.c b/drivers/gpu/drm/nouveau/nouveau_drm.c
+index 0c23398..513ddfc 100644
+--- a/drivers/gpu/drm/nouveau/nouveau_drm.c
++++ b/drivers/gpu/drm/nouveau/nouveau_drm.c
+@@ -54,0 +55 @@
++#include <nvkm/subdev/bar.h>
+@@ -1463,0 +1465,6 @@ nouveau_drm_init
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	ret = nvkm_bar2_diag_ring_init();
++	if (ret)
++		return ret;
++#endif
++
+@@ -1476,0 +1484,3 @@
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++		nvkm_bar2_diag_ring_fini();
++#endif
+@@ -1506,0 +1517,3 @@
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	nvkm_bar2_diag_ring_fini();
++#endif
+
+diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/bar/base.c b/drivers/gpu/drm/nouveau/nvkm/subdev/bar/base.c
+index 4e83069..2e4adb2 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/bar/base.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/bar/base.c
+@@ -27,0 +28,2 @@
++#include <linux/bitops.h>
++#include <linux/ktime.h>
+@@ -28,0 +31 @@
++#include <linux/slab.h>
+@@ -35,0 +39,98 @@
++
++#define NVKM_BAR2_DIAG_RING_ORDER 16
++#define NVKM_BAR2_DIAG_RING_SIZE BIT(NVKM_BAR2_DIAG_RING_ORDER)
++#define NVKM_BAR2_DIAG_MESSAGE_SIZE 512
++
++struct nvkm_bar2_diag_event {
++	u64 published;
++	u64 mono_ns;
++	char message[NVKM_BAR2_DIAG_MESSAGE_SIZE];
++};
++
++static struct nvkm_bar2_diag_event *nvkm_bar2_diag_events;
++static atomic64_t nvkm_bar2_diag_ring_next = ATOMIC64_INIT(0);
++static atomic64_t nvkm_bar2_diag_ring_dropped = ATOMIC64_INIT(0);
++
++int
++nvkm_bar2_diag_ring_init(void)
++{
++	if (!nvkm_bar2_diag_enabled())
++		return 0;
++
++	nvkm_bar2_diag_events = kvcalloc(NVKM_BAR2_DIAG_RING_SIZE,
++					 sizeof(*nvkm_bar2_diag_events), GFP_KERNEL);
++	if (!nvkm_bar2_diag_events)
++		return -ENOMEM;
++
++	atomic64_set(&nvkm_bar2_diag_ring_next, 0);
++	atomic64_set(&nvkm_bar2_diag_ring_dropped, 0);
++	return 0;
++}
++
++void
++nvkm_bar2_diag_ring_fini(void)
++{
++	kvfree(nvkm_bar2_diag_events);
++	nvkm_bar2_diag_events = NULL;
++}
++
++void
++nvkm_bar2_diag_ring_record(const char *message)
++{
++	struct nvkm_bar2_diag_event *events = READ_ONCE(nvkm_bar2_diag_events);
++	struct nvkm_bar2_diag_event *event;
++	u64 index;
++
++	if (!nvkm_bar2_diag_enabled() || !events)
++		return;
++
++	index = atomic64_fetch_inc(&nvkm_bar2_diag_ring_next);
++	if (index >= NVKM_BAR2_DIAG_RING_SIZE) {
++		atomic64_inc(&nvkm_bar2_diag_ring_dropped);
++		return;
++	}
++
++	event = &events[index];
++	event->mono_ns = ktime_get_mono_fast_ns();
++	if (strscpy(event->message, message, sizeof(event->message)) < 0) {
++		atomic64_inc(&nvkm_bar2_diag_ring_dropped);
++		return;
++	}
++	/* Publish only after the timestamp and message are fully written. */
++	smp_store_release(&event->published, index + 1);
++}
++
++u64
++nvkm_bar2_diag_ring_capacity(void)
++{
++	return NVKM_BAR2_DIAG_RING_SIZE;
++}
++
++u64
++nvkm_bar2_diag_ring_head(void)
++{
++	return atomic64_read(&nvkm_bar2_diag_ring_next);
++}
++
++u64
++nvkm_bar2_diag_ring_dropped(void)
++{
++	return atomic64_read(&nvkm_bar2_diag_ring_dropped);
++}
++
++bool
++nvkm_bar2_diag_ring_read(u64 index, u64 *mono_ns, char *message,
++			 size_t message_size)
++{
++	struct nvkm_bar2_diag_event *events = READ_ONCE(nvkm_bar2_diag_events);
++	struct nvkm_bar2_diag_event *event;
++
++	if (!events || index >= NVKM_BAR2_DIAG_RING_SIZE || !message_size)
++		return false;
++	event = &events[index];
++	/* Pair with the producer release before reading the completed slot. */
++	if (smp_load_acquire(&event->published) != index + 1)
++		return false;
++	*mono_ns = READ_ONCE(event->mono_ns);
++	return strscpy(message, event->message, message_size) >= 0;
++}
+@@ -106,0 +208,2 @@
++			char message[128];
++
+@@ -108,2 +211,2 @@
+-			nvkm_info(&bar->subdev,
+-				  "NOUVEAU_DIAG_BAR2_RESET seq=%llu gen=%llu stage=BEGIN\n",
++			scnprintf(message, sizeof(message),
++				  "NOUVEAU_DIAG_BAR2_RESET seq=%llu gen=%llu stage=BEGIN",
+@@ -111,0 +215 @@
++			nvkm_bar2_diag_ring_record(message);
+@@ -117,3 +221,5 @@
+-		if (diag)
+-			nvkm_info(&bar->subdev,
+-				  "NOUVEAU_DIAG_BAR2_RESET seq=%llu gen=%llu stage=END\n",
++		if (diag) {
++			char message[128];
++
++			scnprintf(message, sizeof(message),
++				  "NOUVEAU_DIAG_BAR2_RESET seq=%llu gen=%llu stage=END",
+@@ -121,0 +228,2 @@
++			nvkm_bar2_diag_ring_record(message);
++		}
+
+diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
+index 33857e3..adb0f38 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
+@@ -102,0 +103 @@
++	(void)subdev;
+@@ -142 +143 @@
+-	nvkm_info(subdev, "%s\n", message);
++	nvkm_bar2_diag_ring_record(message);

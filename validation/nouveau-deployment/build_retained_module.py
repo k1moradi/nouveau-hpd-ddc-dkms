@@ -15,7 +15,6 @@ import sys
 
 
 EXPECTED_KERNEL = "7.0.0-34-generic"
-EXPECTED_SRCVERSION = "936407678F3DA1E8515F5EC"
 EXPECTED_VERMAGIC = "7.0.0-34-generic SMP preempt mod_unload modversions"
 EXPECTED_REVIEW_BRANCH = "review/gk104-vaapi-selftest-v8-20261002"
 EXPECTED_MAIN_COMMIT = "7b44b1c1e282eac7c54c1cfa8c758118cd66312c"
@@ -27,15 +26,36 @@ PATCHES = {
         "442b14bfb53201dc7c9e7ac8bcfd6a1f74bb94280a8d766ffc119bcf20d327fc",
     "0010-drm-nouveau-correlate-instmem-vma-selftest.patch":
         "472886814c7dd67ff2685bc50791030f24f4267f6a22be16f57ce5c9e1b4818e",
+    "0011-drm-nouveau-trace-ambient-bar2-lifetimes.patch":
+        "67f0ba18f3e4ce979bc97784f622a33e0eb5f6e0472b7de4cd3d96925004e625",
+    "0012-drm-nouveau-mark-bar2-teardown-phases.patch":
+        "b0b549a128a77ade7dbcccd88fcd2d37ce30558fdf23d1a8f4792546c267266b",
+    "0013-drm-nouveau-capture-ambient-bar2-events.patch":
+        "5146c45006eae2ba74aeedaaa499285a1adff5cfa6b5dcdae835fec1ea537e66",
 }
-PATCH_ARGUMENTS = {
-    "0009-drm-nouveau-log-nvif-duplicate-layer.patch": "nvif_duplicate_patch",
-    "0010-drm-nouveau-correlate-instmem-vma-selftest.patch": "vma_lifecycle_patch",
-}
+PATCH_ARGUMENTS = tuple(PATCHES)
 REQUIRED_MARKERS = (
     "NOUVEAU_DIAG_NVIF_DUP",
     "NOUVEAU_DIAG_BAR2_FAULT",
     "NOUVEAU_DIAG_V3_VMA",
+    "NOUVEAU_DIAG_BAR2_MAP",
+    "NOUVEAU_DIAG_BAR2_RESET",
+    "NOUVEAU_DIAG_BAR2_CONFIG",
+    "OBJECT_IOUNMAP_BEGIN",
+    "OBJECT_VMM_PUT_BEGIN",
+    "NOUVEAU_DIAG_BAR2_RING_EVENT",
+    "ambient_bar2_events",
+    "NOUVEAU_DIAG_BAR2_RING_STATUS",
+    "ambient_bar2_status",
+)
+DISABLED_MARKERS = (
+    "NOUVEAU_DIAG_BAR2_CONFIG",
+    "diag_bar2_map_kmap_start",
+    "diag_bar2_map_kmap_end",
+    "NOUVEAU_DIAG_BAR2_RING_EVENT",
+    "ambient_bar2_events",
+    "NOUVEAU_DIAG_BAR2_RING_STATUS",
+    "ambient_bar2_status",
 )
 
 
@@ -47,15 +67,14 @@ def sha256_file(path: Path) -> str:
     return digest.hexdigest()
 
 
-def verify_patch_inputs(
-    nvif_duplicate_patch: Path,
-    vma_lifecycle_patch: Path,
-) -> dict[str, Path]:
+def verify_patch_inputs(*patch_inputs: Path) -> dict[str, Path]:
+    if len(patch_inputs) != len(PATCH_ARGUMENTS):
+        raise RuntimeError(
+            f"expected {len(PATCH_ARGUMENTS)} pinned kernel patches, got {len(patch_inputs)}"
+        )
     paths = {
-        "0009-drm-nouveau-log-nvif-duplicate-layer.patch":
-            nvif_duplicate_patch.resolve(strict=True),
-        "0010-drm-nouveau-correlate-instmem-vma-selftest.patch":
-            vma_lifecycle_patch.resolve(strict=True),
+        filename: path.resolve(strict=True)
+        for filename, path in zip(PATCH_ARGUMENTS, patch_inputs, strict=True)
     }
     for filename, path in paths.items():
         if not path.is_file():
@@ -162,6 +181,9 @@ def main() -> int:
     parser.add_argument("--kernel-headers", type=Path, required=True)
     parser.add_argument("--nvif-duplicate-patch", type=Path, required=True)
     parser.add_argument("--vma-lifecycle-patch", type=Path, required=True)
+    parser.add_argument("--ambient-lifetime-patch", type=Path, required=True)
+    parser.add_argument("--teardown-phase-patch", type=Path, required=True)
+    parser.add_argument("--ambient-ring-patch", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--review-commit", required=True)
     args = parser.parse_args()
@@ -187,6 +209,9 @@ def main() -> int:
     patch_paths = verify_patch_inputs(
         args.nvif_duplicate_patch,
         args.vma_lifecycle_patch,
+        args.ambient_lifetime_patch,
+        args.teardown_phase_patch,
+        args.ambient_ring_patch,
     )
     output_dir = args.output_dir.resolve()
     if output_dir.exists():
@@ -207,10 +232,7 @@ def main() -> int:
     output_dir.mkdir(parents=True)
     # Verify both patches are present in the retained source overlay without
     # modifying that source tree.
-    for filename in (
-        "0010-drm-nouveau-correlate-instmem-vma-selftest.patch",
-        "0009-drm-nouveau-log-nvif-duplicate-layer.patch",
-    ):
+    for filename in reversed(PATCH_ARGUMENTS):
         command = [
             "patch", "--batch", "--fuzz=0", "--dry-run", "-R", "-p1",
             "-i", str(patch_paths[filename]),
@@ -220,7 +242,7 @@ def main() -> int:
     clean_command = [
         "make", "-C", str(kernel_headers), "M=" + str(module_source), "clean",
     ]
-    run_logged(clean_command, output_dir / "clean.log")
+    run_logged(clean_command, output_dir / "clean-enabled.log")
     tree = source_fingerprint(module_source)
 
     build_command = [
@@ -234,8 +256,8 @@ def main() -> int:
         raise RuntimeError(f"build did not produce {built_module}")
     srcversion = read_modinfo(built_module, "srcversion")
     vermagic = read_modinfo(built_module, "vermagic")
-    if srcversion != EXPECTED_SRCVERSION:
-        raise RuntimeError(f"unexpected module srcversion {srcversion}")
+    if not srcversion:
+        raise RuntimeError("enabled module has no srcversion")
     if vermagic != EXPECTED_VERMAGIC:
         raise RuntimeError(f"unexpected module vermagic {vermagic}")
     marker_text = subprocess.run(
@@ -248,8 +270,40 @@ def main() -> int:
     if markers != list(REQUIRED_MARKERS):
         raise RuntimeError(f"diagnostic marker check failed: {markers}")
 
-    retained = output_dir / "nouveau.ko"
-    shutil.copy2(built_module, retained)
+    enabled_retained = output_dir / "nouveau-enabled.ko"
+    shutil.copy2(built_module, enabled_retained)
+
+    run_logged(clean_command, output_dir / "clean-disabled.log")
+    disabled_tree = source_fingerprint(module_source)
+    if disabled_tree != tree:
+        raise RuntimeError("source overlay changed between enabled and disabled builds")
+    disabled_build_command = [
+        "nice", "-n", "10", "make", "-C", str(kernel_headers),
+        "M=" + str(module_source), "CONFIG_DRM_NOUVEAU=m", "W=1", "-j1", "modules",
+    ]
+    run_logged(disabled_build_command, output_dir / "build-disabled-W1.log")
+    disabled_module = module_source / "nouveau.ko"
+    if not disabled_module.is_file():
+        raise RuntimeError(f"disabled build did not produce {disabled_module}")
+    disabled_srcversion = read_modinfo(disabled_module, "srcversion")
+    disabled_vermagic = read_modinfo(disabled_module, "vermagic")
+    if disabled_vermagic != EXPECTED_VERMAGIC:
+        raise RuntimeError(f"unexpected disabled module vermagic {disabled_vermagic}")
+    disabled_strings = subprocess.run(
+        ["strings", "-a", str(disabled_module)],
+        check=True,
+        capture_output=True,
+        text=True,
+    ).stdout
+    leaked = [marker for marker in DISABLED_MARKERS if marker in disabled_strings]
+    if leaked:
+        raise RuntimeError(f"diagnostic markers leaked into disabled build: {leaked}")
+    disabled_retained = output_dir / "nouveau-disabled.ko"
+    shutil.copy2(disabled_module, disabled_retained)
+    if source_fingerprint(module_source) != tree:
+        raise RuntimeError("source overlay changed during enabled/disabled build matrix")
+
+    retained = enabled_retained
     shutil.copy2(module_source / "Module.symvers", output_dir / "Module.symvers")
     shutil.copy2(module_source / "modules.order", output_dir / "modules.order")
     compiler_path = Path(shutil.which("gcc") or "gcc").resolve(strict=True)
@@ -281,8 +335,22 @@ def main() -> int:
         "vermagic": vermagic,
         "diagnostic_markers": markers,
         "build_command": build_command,
+        "enabled_module": str(enabled_retained),
+        "enabled_module_sha256": sha256_file(enabled_retained),
+        "enabled_srcversion": srcversion,
+        "disabled_module": str(disabled_retained),
+        "disabled_module_sha256": sha256_file(disabled_retained),
+        "disabled_srcversion": disabled_srcversion,
+        "disabled_vermagic": disabled_vermagic,
+        "disabled_markers_absent": leaked == [],
+        "disabled_diagnostic_markers_checked": list(DISABLED_MARKERS),
+        "disabled_build_command": disabled_build_command,
         "build_log_sha256": sha256_file(output_dir / "build-enabled-W1.log"),
-        "clean_log_sha256": sha256_file(output_dir / "clean.log"),
+        "disabled_build_log_sha256": sha256_file(output_dir / "build-disabled-W1.log"),
+        "clean_log_sha256": {
+            "enabled": sha256_file(output_dir / "clean-enabled.log"),
+            "disabled": sha256_file(output_dir / "clean-disabled.log"),
+        },
         "patch_verify_log_sha256": {
             path.name: sha256_file(path)
             for path in output_dir.glob("verify-*.log")
@@ -304,7 +372,8 @@ def main() -> int:
         json.dumps(manifest, indent=2, sort_keys=True) + "\n", encoding="utf-8"
     )
     (output_dir / "SHA256SUMS").write_text(
-        f"{sha256_file(retained)}  nouveau.ko\n"
+        f"{sha256_file(enabled_retained)}  nouveau-enabled.ko\n"
+        f"{sha256_file(disabled_retained)}  nouveau-disabled.ko\n"
         f"{sha256_file(manifest_path)}  build-manifest.json\n"
         f"{sha256_file(output_dir / 'build-enabled-W1.log')}  build-enabled-W1.log\n",
         encoding="ascii",
