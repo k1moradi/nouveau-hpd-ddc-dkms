@@ -56,6 +56,39 @@ class ManifestWriteTests(unittest.TestCase):
             self.assertEqual(json.loads(path.read_text()), {"schema": 2, "value": "exact"})
 
 
+class ReviewHeadPinTests(unittest.TestCase):
+    def test_apply_review_head_must_match_plan(self):
+        plan = {
+            "expected_review_branch": "review/gk104-vaapi-selftest-v8-20261002",
+            "expected_main_commit": "7b44b1c1e282eac7c54c1cfa8c758118cd66312c",
+            "expected_review_head": "1" * 40,
+        }
+        with patch.object(
+            FINALIZER,
+            "command_output",
+            side_effect=[
+                plan["expected_review_branch"],
+                plan["expected_main_commit"],
+                "",
+                plan["expected_review_head"],
+            ],
+        ):
+            self.assertEqual(FINALIZER.current_review_head(plan), "1" * 40)
+
+        with patch.object(
+            FINALIZER,
+            "command_output",
+            side_effect=[
+                plan["expected_review_branch"],
+                plan["expected_main_commit"],
+                "",
+                "2" * 40,
+            ],
+        ):
+            with self.assertRaisesRegex(RuntimeError, "review HEAD does not match"):
+                FINALIZER.current_review_head(plan)
+
+
 class ModuleCompressionTests(unittest.TestCase):
     def test_zstd_module_compress_decompress_round_trip(self):
         with tempfile.TemporaryDirectory(prefix="module-compression-test-") as temporary:

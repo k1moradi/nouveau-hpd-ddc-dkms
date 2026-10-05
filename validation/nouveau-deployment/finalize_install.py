@@ -87,7 +87,10 @@ def current_review_head(plan: dict[str, Any]) -> str:
     ])
     if dirty:
         raise RuntimeError("refusing deployment finalization from a dirty review worktree")
-    return command_output(["git", "-C", str(repository), "rev-parse", "HEAD"])
+    head = command_output(["git", "-C", str(repository), "rev-parse", "HEAD"])
+    if plan.get("expected_review_head") and head != plan["expected_review_head"]:
+        raise RuntimeError("current review HEAD does not match the deployment plan")
+    return head
 
 
 def load_json(path: Path) -> dict[str, Any]:
