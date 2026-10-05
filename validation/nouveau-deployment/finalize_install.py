@@ -246,12 +246,18 @@ def validate_inputs(
             "0009-drm-nouveau-log-nvif-duplicate-layer.patch",
             "0010-drm-nouveau-correlate-instmem-vma-selftest.patch",
             "0011-drm-nouveau-trace-ambient-bar2-lifetimes.patch",
+            "0012-drm-nouveau-mark-bar2-teardown-phases.patch",
         }
         if set(build.get("patch_sha256", {})) != expected_patch_names:
-            raise ValueError("ambient build manifest does not pin exactly patches 0009-0011")
+            raise ValueError("ambient build manifest does not pin exactly patches 0009-0012")
         markers = set(build.get("diagnostic_markers", []))
-        if not {"NOUVEAU_DIAG_BAR2_MAP", "NOUVEAU_DIAG_BAR2_RESET"} <= markers:
-            raise ValueError("ambient module build lacks BAR2 mapping/reset markers")
+        if not {
+            "NOUVEAU_DIAG_BAR2_MAP",
+            "NOUVEAU_DIAG_BAR2_RESET",
+            "OBJECT_IOUNMAP_BEGIN",
+            "OBJECT_VMM_PUT_BEGIN",
+        } <= markers:
+            raise ValueError("ambient module build lacks BAR2 teardown phase markers")
     if build.get("srcversion") != plan.get("expected_srcversion"):
         raise ValueError("build srcversion does not match deployment plan")
     if build.get("vermagic") != plan.get("expected_vermagic"):
@@ -733,6 +739,9 @@ def build_final_manifest(
             "patch_0010_sha256": build["patch_sha256"]["0010-drm-nouveau-correlate-instmem-vma-selftest.patch"],
             "patch_0011_sha256": build["patch_sha256"].get(
                 "0011-drm-nouveau-trace-ambient-bar2-lifetimes.patch"
+            ),
+            "patch_0012_sha256": build["patch_sha256"].get(
+                "0012-drm-nouveau-mark-bar2-teardown-phases.patch"
             ),
         },
         "nouveau": {

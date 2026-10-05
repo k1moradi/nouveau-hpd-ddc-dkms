@@ -531,6 +531,34 @@ class FinalManifestTests(unittest.TestCase):
             }
             values = FINALIZER.validate_inputs(build, plan, raw_module)
             self.assertEqual(values["review_commit"], "c" * 40)
+
+            ambient_plan = dict(plan)
+            ambient_plan["module_parameters"] = {
+                "diag_bar2_map": "Y",
+                "diag_ctxsw": "N",
+            }
+            with self.assertRaisesRegex(
+                ValueError, "ambient build manifest does not pin exactly patches 0009-0012"
+            ):
+                FINALIZER.validate_inputs(build, ambient_plan, raw_module)
+
+            patch_names = (
+                "0009-drm-nouveau-log-nvif-duplicate-layer.patch",
+                "0010-drm-nouveau-correlate-instmem-vma-selftest.patch",
+                "0011-drm-nouveau-trace-ambient-bar2-lifetimes.patch",
+                "0012-drm-nouveau-mark-bar2-teardown-phases.patch",
+            )
+            build["patch_sha256"] = {
+                name: str(index) * 64
+                for index, name in enumerate(patch_names, 1)
+            }
+            ambient_plan["patch_sha256"] = build["patch_sha256"]
+            with self.assertRaisesRegex(
+                ValueError, "ambient module build lacks BAR2 teardown phase markers"
+            ):
+                FINALIZER.validate_inputs(build, ambient_plan, raw_module)
+
+            build["patch_sha256"] = plan["patch_sha256"]
             tools["supervisor"]["sha256"] = "0" * 64
             with self.assertRaisesRegex(ValueError, "pinned tool path/hash mismatch"):
                 FINALIZER.validate_inputs(build, plan, raw_module)
@@ -607,6 +635,9 @@ class FinalManifestTests(unittest.TestCase):
             option_content = "options nouveau diag_bar2_map=Y diag_ctxsw=N\n"
             option_hash = FINALIZER.sha256_file_from_bytes(option_content.encode("ascii"))
             build["patch_sha256"]["0011-drm-nouveau-trace-ambient-bar2-lifetimes.patch"] = "d" * 64
+            build["patch_sha256"][
+                "0012-drm-nouveau-mark-bar2-teardown-phases.patch"
+            ] = "e" * 64
             plan["review_head"] = "e" * 40
             plan["module_parameters"] = {"diag_bar2_map": "Y", "diag_ctxsw": "N"}
             plan["module_options"] = {
@@ -646,6 +677,9 @@ class FinalManifestTests(unittest.TestCase):
             )
             self.assertEqual(
                 ambient_result["source"]["patch_0011_sha256"], "d" * 64
+            )
+            self.assertEqual(
+                ambient_result["source"]["patch_0012_sha256"], "e" * 64
             )
             self.assertEqual(
                 ambient_result["module_options"]["content_sha256"], option_hash
