@@ -75,8 +75,15 @@ class RingHeadroomTests(unittest.TestCase):
                 CHECKER.check_status(payload)
 
     def test_rejects_negative_minimum(self):
-        with self.assertRaisesRegex(CHECKER.RingHeadroomError, "cannot be negative"):
+        with self.assertRaisesRegex(CHECKER.RingHeadroomError, "non-negative integer"):
             CHECKER.check_status(status(), minimum_free=-1)
+
+    def test_rejects_non_integer_minimum_free_values(self):
+        for minimum_free in (True, 1.5, "30000"):
+            with self.subTest(minimum_free=minimum_free), self.assertRaisesRegex(
+                CHECKER.RingHeadroomError, "non-negative integer"
+            ):
+                CHECKER.check_status(status(), minimum_free=minimum_free)
 
     def test_sampled_headroom_projects_observed_ambient_rate(self):
         result = CHECKER.check_sampled_headroom(
@@ -176,15 +183,102 @@ class RingHeadroomTests(unittest.TestCase):
             (1.0, status()),
             (2.0, status()),
         ]
-        for budget in (-1, 1.5, True):
+        for budget in (0, -1, 1.5, True):
             with self.subTest(budget=budget), self.assertRaisesRegex(
-                CHECKER.RingHeadroomError, "budget must be"
+                CHECKER.RingHeadroomError, "positive integer"
             ):
                 CHECKER.check_sampled_headroom(
                     samples,
                     projection_seconds=10,
                     expected_trigger_events=budget,
                 )
+
+    def test_rejects_non_integer_ring_budgets(self):
+        samples = [
+            (0.0, status()),
+            (1.0, status()),
+            (2.0, status()),
+        ]
+        for minimum_free in (True, 1.5, "30000"):
+            with self.subTest(minimum_free=minimum_free), self.assertRaisesRegex(
+                CHECKER.RingHeadroomError, "minimum free capacity.*integer"
+            ):
+                CHECKER.check_sampled_headroom(
+                    samples,
+                    projection_seconds=10,
+                    expected_trigger_events=100,
+                    minimum_free=minimum_free,
+                )
+        for safety_margin in (True, 1.5, "5000"):
+            with self.subTest(safety_margin=safety_margin), self.assertRaisesRegex(
+                CHECKER.RingHeadroomError, "safety margin.*integer"
+            ):
+                CHECKER.check_sampled_headroom(
+                    samples,
+                    projection_seconds=10,
+                    expected_trigger_events=100,
+                    safety_margin=safety_margin,
+                )
+
+    def test_rejects_boolean_or_string_projection_policies(self):
+        samples = [
+            (0.0, status()),
+            (1.0, status()),
+            (2.0, status()),
+        ]
+        for projection_seconds in (True, "10", float("nan"), float("inf")):
+            with self.subTest(projection_seconds=projection_seconds), self.assertRaisesRegex(
+                CHECKER.RingHeadroomError, "projection horizon"
+            ):
+                CHECKER.check_sampled_headroom(
+                    samples,
+                    projection_seconds=projection_seconds,
+                    expected_trigger_events=100,
+                )
+        for safety_factor in (True, "1.5", float("nan"), float("inf")):
+            with self.subTest(safety_factor=safety_factor), self.assertRaisesRegex(
+                CHECKER.RingHeadroomError, "safety factor"
+            ):
+                CHECKER.check_sampled_headroom(
+                    samples,
+                    projection_seconds=10,
+                    expected_trigger_events=100,
+                    safety_factor=safety_factor,
+                )
+
+    def test_required_free_boundary_is_inclusive(self):
+        admitted_samples = [
+            (0.0, status(capacity=1_000, head_before=900, head_after=900)),
+            (1.0, status(capacity=1_000, head_before=900, head_after=900)),
+            (2.0, status(capacity=1_000, head_before=900, head_after=900)),
+        ]
+        result = CHECKER.check_sampled_headroom(
+            admitted_samples,
+            projection_seconds=10,
+            expected_trigger_events=100,
+            minimum_free=0,
+            safety_factor=1.0,
+            safety_margin=0,
+        )
+        self.assertEqual(result["free"], 100)
+        self.assertEqual(result["required_free"], 100)
+
+        refused_samples = [
+            (0.0, status(capacity=1_000, head_before=901, head_after=901)),
+            (1.0, status(capacity=1_000, head_before=901, head_after=901)),
+            (2.0, status(capacity=1_000, head_before=901, head_after=901)),
+        ]
+        with self.assertRaisesRegex(
+            CHECKER.RingHeadroomError, "projected requirement"
+        ):
+            CHECKER.check_sampled_headroom(
+                refused_samples,
+                projection_seconds=10,
+                expected_trigger_events=100,
+                minimum_free=0,
+                safety_factor=1.0,
+                safety_margin=0,
+            )
 
 
 if __name__ == "__main__":

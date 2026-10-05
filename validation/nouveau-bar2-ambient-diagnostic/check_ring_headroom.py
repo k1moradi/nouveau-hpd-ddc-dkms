@@ -22,9 +22,20 @@ class RingHeadroomError(ValueError):
     """The ring status is malformed or cannot safely admit the workload."""
 
 
+def is_finite_number(value: Any) -> bool:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
+
+
 def check_status(payload: str, minimum_free: int = 30_000) -> dict[str, Any]:
-    if minimum_free < 0:
-        raise RingHeadroomError("minimum free capacity cannot be negative")
+    if type(minimum_free) is not int or minimum_free < 0:
+        raise RingHeadroomError(
+            "minimum free capacity must be a non-negative integer"
+        )
     lines = [line.strip() for line in payload.splitlines() if line.strip()]
     if len(lines) != 1:
         raise RingHeadroomError("ring status must contain exactly one nonempty line")
@@ -71,18 +82,30 @@ def check_sampled_headroom(
     safety_margin: int = 5_000,
 ) -> dict[str, Any]:
     """Reserve trigger records plus projected ambient growth before admission."""
-    if minimum_free < 0:
-        raise RingHeadroomError("minimum free capacity cannot be negative")
-    if type(expected_trigger_events) is not int or expected_trigger_events < 0:
-        raise RingHeadroomError("expected trigger event budget must be a non-negative integer")
+    if type(minimum_free) is not int or minimum_free < 0:
+        raise RingHeadroomError(
+            "minimum free capacity must be a non-negative integer"
+        )
+    if type(expected_trigger_events) is not int or expected_trigger_events <= 0:
+        raise RingHeadroomError(
+            "expected trigger event budget must be a positive integer"
+        )
     if len(samples) < 3:
         raise RingHeadroomError("at least three ring headroom samples are required")
-    if not math.isfinite(projection_seconds) or projection_seconds <= 0:
+    if (
+        not is_finite_number(projection_seconds)
+        or projection_seconds <= 0
+    ):
         raise RingHeadroomError("headroom projection horizon must be positive")
-    if not math.isfinite(safety_factor) or safety_factor < 1:
+    if (
+        not is_finite_number(safety_factor)
+        or safety_factor < 1
+    ):
         raise RingHeadroomError("headroom safety factor must be at least one")
-    if safety_margin < 0:
-        raise RingHeadroomError("headroom safety margin cannot be negative")
+    if type(safety_margin) is not int or safety_margin < 0:
+        raise RingHeadroomError(
+            "headroom safety margin must be a non-negative integer"
+        )
 
     parsed = [
         (timestamp, check_status(payload, minimum_free=0))
@@ -91,8 +114,10 @@ def check_sampled_headroom(
     capacity = parsed[0][1]["capacity"]
     rates: list[float] = []
     for (time_a, status_a), (time_b, status_b) in zip(parsed, parsed[1:]):
+        if not is_finite_number(time_a) or not is_finite_number(time_b):
+            raise RingHeadroomError("headroom sample timestamps must be finite numbers")
         elapsed = time_b - time_a
-        if not math.isfinite(time_a) or not math.isfinite(time_b) or elapsed <= 0:
+        if elapsed <= 0:
             raise RingHeadroomError("headroom sample interval must be positive")
         if status_b["capacity"] != capacity:
             raise RingHeadroomError("ring capacity changed between headroom samples")

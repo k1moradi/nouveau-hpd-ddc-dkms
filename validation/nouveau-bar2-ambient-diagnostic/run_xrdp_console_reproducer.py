@@ -39,6 +39,10 @@ RING_FAULT = re.compile(r"NOUVEAU_DIAG_BAR2_FAULT", re.IGNORECASE)
 DEFAULT_MAX_RUNTIME_SECONDS = 180
 FOLLOW_READY_SECONDS = 0.15
 FAULT_CLEANUP_SECONDS = 35
+MINIMUM_TRIGGER_EVENT_BUDGET = 65_536
+MINIMUM_RING_HEADROOM = 30_000
+MINIMUM_RING_HEADROOM_SAFETY_FACTOR = 1.5
+MINIMUM_RING_HEADROOM_SAFETY_MARGIN = 5_000
 PCI_BDF = re.compile(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]")
 
 
@@ -155,11 +159,68 @@ def benchmark_argv(
 
 def validate_trigger_event_budget(workload: dict[str, Any]) -> int:
     value = workload.get("expected_trigger_events")
-    if type(value) is not int or value <= 0:
+    if type(value) is not int or value < MINIMUM_TRIGGER_EVENT_BUDGET:
         raise ReproducerError(
-            "trigger profile lacks a positive explicit trigger-event budget"
+            "trigger profile expected_trigger_events must be an integer "
+            f">= {MINIMUM_TRIGGER_EVENT_BUDGET}"
         )
     return value
+
+
+def validate_headroom_policy(
+    workload: dict[str, Any],
+) -> tuple[int, int, float, int]:
+    expected_trigger_events = validate_trigger_event_budget(workload)
+
+    minimum_ring_headroom = workload.get("minimum_ring_headroom")
+    if (
+        type(minimum_ring_headroom) is not int
+        or minimum_ring_headroom < MINIMUM_RING_HEADROOM
+    ):
+        raise ReproducerError(
+            "trigger profile minimum_ring_headroom must be an integer "
+            f">= {MINIMUM_RING_HEADROOM}"
+        )
+
+    safety_factor_value = workload.get("ring_headroom_safety_factor")
+    if (
+        isinstance(safety_factor_value, bool)
+        or not isinstance(safety_factor_value, (int, float))
+    ):
+        raise ReproducerError(
+            "trigger profile ring_headroom_safety_factor must be numeric"
+        )
+    try:
+        ring_headroom_safety_factor = float(safety_factor_value)
+    except (OverflowError, ValueError) as exc:
+        raise ReproducerError(
+            "trigger profile ring_headroom_safety_factor must be finite"
+        ) from exc
+    if (
+        not math.isfinite(ring_headroom_safety_factor)
+        or ring_headroom_safety_factor < MINIMUM_RING_HEADROOM_SAFETY_FACTOR
+    ):
+        raise ReproducerError(
+            "trigger profile ring_headroom_safety_factor must be "
+            f">= {MINIMUM_RING_HEADROOM_SAFETY_FACTOR}"
+        )
+
+    ring_headroom_safety_margin = workload.get("ring_headroom_safety_margin")
+    if (
+        type(ring_headroom_safety_margin) is not int
+        or ring_headroom_safety_margin < MINIMUM_RING_HEADROOM_SAFETY_MARGIN
+    ):
+        raise ReproducerError(
+            "trigger profile ring_headroom_safety_margin must be an integer "
+            f">= {MINIMUM_RING_HEADROOM_SAFETY_MARGIN}"
+        )
+
+    return (
+        expected_trigger_events,
+        minimum_ring_headroom,
+        ring_headroom_safety_factor,
+        ring_headroom_safety_margin,
+    )
 
 
 def kernel_record_stop_reason(line: str, boot_id: str) -> str | None:
@@ -396,7 +457,12 @@ def execute(args: argparse.Namespace) -> int:
     workload = profile.get("workload")
     if not isinstance(workload, dict) or workload.get("stop_on_first_kernel_hard_stop") is not True:
         raise ReproducerError("trigger profile does not require stop-on-first-hard-stop")
-    expected_trigger_events = validate_trigger_event_budget(workload)
+    (
+        expected_trigger_events,
+        minimum_ring_headroom,
+        ring_headroom_safety_factor,
+        ring_headroom_safety_margin,
+    ) = validate_headroom_policy(workload)
 
     display = os.environ.get("DISPLAY", "")
     if not display:
@@ -460,9 +526,9 @@ def execute(args: argparse.Namespace) -> int:
             samples,
             projection_seconds=projection_seconds,
             expected_trigger_events=expected_trigger_events,
-            minimum_free=int(workload.get("minimum_ring_headroom", 30_000)),
-            safety_factor=float(workload.get("ring_headroom_safety_factor", 1.5)),
-            safety_margin=int(workload.get("ring_headroom_safety_margin", 5_000)),
+            minimum_free=minimum_ring_headroom,
+            safety_factor=ring_headroom_safety_factor,
+            safety_margin=ring_headroom_safety_margin,
         )
     except RingHeadroomError as exc:
         raise ReproducerError(f"refusing xrdp trigger: {exc}") from exc

@@ -150,16 +150,50 @@ class XrdpReproducerTests(unittest.TestCase):
     def test_profile_requires_explicit_trigger_event_budget(self):
         profile = RUNNER.load_json(RUNNER.PROFILE)
         self.assertEqual(profile["workload"]["expected_trigger_events"], 65_536)
-        for invalid in (None, 0, -1, "65536", True):
+        for invalid in (None, 1, 65_535, -1, "65536", True):
             workload = dict(profile["workload"])
             if invalid is None:
                 workload.pop("expected_trigger_events")
             else:
                 workload["expected_trigger_events"] = invalid
             with self.subTest(invalid=invalid), self.assertRaisesRegex(
-                RUNNER.ReproducerError, "explicit trigger-event budget"
+                RUNNER.ReproducerError, "expected_trigger_events.*integer"
             ):
                 RUNNER.validate_trigger_event_budget(workload)
+        self.assertEqual(
+            RUNNER.validate_trigger_event_budget(
+                {"expected_trigger_events": 65_536}
+            ),
+            65_536,
+        )
+
+    def test_headroom_policy_rejects_weakened_or_coerced_profile_values(self):
+        profile = RUNNER.load_json(RUNNER.PROFILE)
+        original = dict(profile["workload"])
+        self.assertEqual(
+            RUNNER.validate_headroom_policy(original),
+            (65_536, 30_000, 1.5, 5_000),
+        )
+        weakened = (
+            ("minimum_ring_headroom", 0),
+            ("minimum_ring_headroom", 29_999),
+            ("minimum_ring_headroom", "30000"),
+            ("ring_headroom_safety_factor", 1.0),
+            ("ring_headroom_safety_factor", True),
+            ("ring_headroom_safety_factor", "1.5"),
+            ("ring_headroom_safety_factor", float("nan")),
+            ("ring_headroom_safety_factor", float("inf")),
+            ("ring_headroom_safety_margin", 4_999),
+            ("ring_headroom_safety_margin", 5_000.0),
+            ("ring_headroom_safety_margin", True),
+        )
+        for field, value in weakened:
+            workload = dict(original)
+            workload[field] = value
+            with self.subTest(field=field, value=value), self.assertRaises(
+                RUNNER.ReproducerError
+            ):
+                RUNNER.validate_headroom_policy(workload)
 
     def test_profile_cannot_silently_expand_or_change_trigger(self):
         profile = RUNNER.load_json(RUNNER.PROFILE)
