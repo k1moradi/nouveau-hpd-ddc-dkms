@@ -1238,6 +1238,7 @@
   "input_completeness_proven": false,
   "mapping_event_count": 0,
   "memory_address_used_for_fault_matching": false,
+  "module_load_epoch_policy": "single_nouveau_module_instance_per_boot",
   "outcomes": {
     "NO_OBSERVED_BAR2_MAPPING_MATCH": 30
   },

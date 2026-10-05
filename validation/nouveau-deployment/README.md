@@ -112,6 +112,12 @@ existing media player; Mesa A/B DSO hashes; executing admission/supervisor
 identities; pinned diagnostic tools; input; build manifest; deployment plan;
 and exact software NV12 reference capture.
 
+Do not unload or reload Nouveau before or during an ambient BAR2 experiment.
+The allocation IDs, event sequence, reset generation, and map-attempt IDs are
+local to one module-load epoch. A same-boot reload invalidates whole-boot
+lifecycle correlation; the parser rejects repeated sequence values rather
+than merging the epochs.
+
 The manifest is deliberately labeled
 `FINALIZED_NOT_REBOOTED_NOT_RUNTIME_VERIFIED`. Admission rechecks the live
 state and does not rewrite that immutable build/deployment record.

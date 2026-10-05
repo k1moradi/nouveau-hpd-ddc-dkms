@@ -450,9 +450,11 @@ class AmbientCorrelationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             result = read_result(records, temporary)["faults"][0]
         candidate = result["active_candidates"][0]
-        self.assertEqual(result["outcome"], "ONE_ACTIVE_KMAP_RESIDENT_VMA_CANDIDATE")
+        self.assertEqual(result["outcome"], "ONE_RESET_SPANNING_ACTIVE_VMA_CANDIDATE")
         self.assertTrue(candidate["mapping_spans_reset"])
         self.assertEqual(candidate["current_reset_gen_at_fault"], 1)
+        self.assertEqual(candidate["kmap_ref_state_at_fault"], "NONZERO")
+        self.assertFalse(candidate["reused_from_cache_after_reset"])
         self.assertFalse(candidate["causal_ownership_proven"])
 
     def test_fault_during_reset_is_inconclusive(self):
@@ -496,6 +498,10 @@ class AmbientCorrelationTests(unittest.TestCase):
             result = read_result(records, temporary)
         self.assertEqual(result["faults"][0]["outcome"], "NO_OBSERVED_BAR2_MAPPING_MATCH")
         self.assertFalse(result["input_completeness_proven"])
+        self.assertEqual(
+            result["module_load_epoch_policy"],
+            "single_nouveau_module_instance_per_boot",
+        )
 
     def test_same_fault_address_across_separate_lifetimes_uses_active_id(self):
         import tempfile
@@ -689,6 +695,18 @@ class AmbientCorrelationTests(unittest.TestCase):
         self.assertEqual(result[1]["bar2_resets_since_previous_fault"], 1)
         self.assertEqual(result[1]["time_since_previous_fault_usec"], 100)
 
+    def test_same_boot_module_reload_sequence_reset_is_rejected(self):
+        import tempfile
+        records = [
+            row(map_message(1, 1, "ALLOCATED"), 1),
+            row(map_message(2, 1, "MAP_BEGIN", attempt=1), 2),
+            # A second load in this boot restarts the module-local counters.
+            row(map_message(1, 1, "ALLOCATED"), 3),
+        ] + fault_pair(mono=10)
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(CorrelationInputError, "duplicate diagnostic sequence"):
+                parse_journal(write_journal(records, temporary))
+
     def test_cached_reuse_without_previously_resident_vma_is_rejected(self):
         import tempfile
         records = [
@@ -743,7 +761,7 @@ class AmbientCorrelationTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as temporary:
             item = read_result(records, temporary)["faults"][0]
         candidate = item["resident_candidates"][0]
-        self.assertEqual(item["outcome"], "ONE_ACTIVE_KMAP_RESIDENT_VMA_CANDIDATE")
+        self.assertEqual(item["outcome"], "ONE_RESET_SPANNING_ACTIVE_VMA_CANDIDATE")
         self.assertEqual(candidate["map_reset_gen"], 0)
         self.assertEqual(candidate["current_reset_gen_at_fault"], 1)
         self.assertTrue(candidate["mapping_spans_reset"])

@@ -1,5 +1,9 @@
 #!/usr/bin/env python3
-"""Offline numeric correlation for ambient Nouveau BAR2 instmem lifetimes."""
+"""Offline numeric correlation for ambient Nouveau BAR2 instmem lifetimes.
+
+Whole-boot correlation supports exactly one Nouveau module-load epoch. A
+sequence reset after a reload is rejected rather than merged.
+"""
 
 from __future__ import annotations
 
@@ -1223,7 +1227,12 @@ def correlate(parsed: ParsedInput) -> dict[str, Any]:
                 if state.incomplete_reason:
                     continue
                 if state.kmap_refs_nonzero:
-                    outcome = "ONE_ACTIVE_KMAP_RESIDENT_VMA_CANDIDATE"
+                    outcome = (
+                        "ONE_RESET_SPANNING_ACTIVE_VMA_CANDIDATE"
+                        if state.map_reset_gen is not None
+                        and current_gen > state.map_reset_gen
+                        else "ONE_ACTIVE_KMAP_RESIDENT_VMA_CANDIDATE"
+                    )
                 elif state.cache_state == "lru":
                     outcome = (
                         "ONE_RESET_SPANNING_CACHED_VMA_CANDIDATE"
@@ -1368,6 +1377,7 @@ def correlate(parsed: ParsedInput) -> dict[str, Any]:
         "boot_id": parsed.boot_id,
         "input_completeness_proven": False,
         "diagnostic_sequence_gaps_rejected": True,
+        "module_load_epoch_policy": "single_nouveau_module_instance_per_boot",
         "pointer_identity_used": False,
         "memory_address_used_for_fault_matching": False,
         "fault_count": len(parsed.faults),
