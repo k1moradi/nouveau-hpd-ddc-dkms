@@ -117,7 +117,10 @@ def verify_trigger_profile(profile: dict[str, Any]) -> dict[str, Path]:
 
 def benchmark_argv(
     workspace: Path, display: str, python: Path, workload: dict[str, Any],
+    *, no_chansrv: bool = False,
 ) -> list[str]:
+    if type(no_chansrv) is not bool:
+        raise ReproducerError("no_chansrv variant must be a boolean")
     script = workspace / "tools/benchmark/xrdp_console_bench.py"
     expected = {
         "backend": "vnc",
@@ -154,6 +157,8 @@ def benchmark_argv(
     ]
     if workload["enable_gfx_for_vnc"]:
         argv.append("--enable-gfx-for-vnc")
+    if no_chansrv:
+        argv.append("--no-chansrv")
     return argv
 
 
@@ -563,7 +568,9 @@ def execute(args: argparse.Namespace) -> int:
     )
 
     workspace = Path(str(profile["workspace"])).resolve(strict=True)
-    argv = benchmark_argv(workspace, display, python, workload)
+    argv = benchmark_argv(
+        workspace, display, python, workload, no_chansrv=args.no_chansrv,
+    )
     env = os.environ.copy()
     env.update({
         "XRDP_CONSOLE_WORKSPACE": str(workspace),
@@ -584,6 +591,10 @@ def execute(args: argparse.Namespace) -> int:
         "xrdp_profile": PROFILE.name,
         "xrdp_profile_sha256": sha256_file(PROFILE),
         "xrdp_workspace_commit": profile["review_commit"],
+        "chansrv_mode": (
+            "disabled_diagnostic_variant" if args.no_chansrv
+            else "profile_default"
+        ),
         "artifact_sha256": {
             name: sha256_file(path) for name, path in artifacts.items()
         },
@@ -711,6 +722,10 @@ def execute(args: argparse.Namespace) -> int:
         "boot_id": boot_id,
         "admission": "RUN_ELIGIBLE=true",
         "experiment": "pinned xrdp-console graphics-under-churn VNC/RDP reproducer",
+        "chansrv_mode": (
+            "disabled_diagnostic_variant" if args.no_chansrv
+            else "profile_default"
+        ),
         "stop_reason": stop_reason,
         "benchmark_exit_status": benchmark_rc,
         "benchmark_cleanup_timeout": cleanup_timeout,
@@ -739,6 +754,10 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
+    parser.add_argument(
+        "--no-chansrv", action="store_true",
+        help="omit the private chansrv helper while preserving the VNC/RDP graphics path",
+    )
     args = parser.parse_args()
     try:
         return execute(args)

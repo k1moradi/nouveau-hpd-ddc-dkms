@@ -184,6 +184,17 @@ class XrdpReproducerTests(unittest.TestCase):
             name in " ".join(argv).lower()
             for name in ("mpv", "ffmpeg", "ffplay", "vainfo")
         ))
+        variant_argv = RUNNER.benchmark_argv(
+            Path(profile["workspace"]), ":0", python, workload,
+            no_chansrv=True,
+        )
+        self.assertEqual(variant_argv[:-1], argv)
+        self.assertEqual(variant_argv[-1], "--no-chansrv")
+        with self.assertRaisesRegex(RUNNER.ReproducerError, "must be a boolean"):
+            RUNNER.benchmark_argv(
+                Path(profile["workspace"]), ":0", python, workload,
+                no_chansrv=1,  # type: ignore[arg-type]
+            )
 
     def test_profile_requires_explicit_trigger_event_budget(self):
         profile = RUNNER.load_json(RUNNER.PROFILE)
