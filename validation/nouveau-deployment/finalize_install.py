@@ -279,6 +279,16 @@ def validate_inputs(
     retired_module_options = plan.get("retired_module_options")
     validate_module_options(params, module_options, retired_module_options)
     validate_dracut_config(module_options, dracut_config)
+    gpu = plan.get("gpu")
+    if "diag_bar2_map" in params:
+        if (
+            not isinstance(gpu, dict)
+            or not re.fullmatch(
+                r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]",
+                str(gpu.get("pci_bdf", "")),
+            )
+        ):
+            raise ValueError("ambient deployment plan lacks a pinned GPU PCI BDF")
     for variant in ("A", "B"):
         item = plan.get("mesa_variants", {}).get(variant)
         if not isinstance(item, dict):
@@ -356,6 +366,7 @@ def validate_inputs(
         "input": input_item,
         "software_reference": reference,
         "module_parameters": params,
+        "gpu": gpu,
         "module_options": module_options,
         "dracut_config": dracut_config,
         "retired_module_options": retired_module_options,
@@ -727,6 +738,7 @@ def build_final_manifest(
         "driver_source_head": build["review_commit"],
         "review_branch": build["review_branch"],
         "main_commit": build["main_commit"],
+        "gpu": plan.get("gpu"),
         "build_manifest": {
             "path": str(build_manifest_path.resolve()),
             "sha256": build_manifest_sha256,

@@ -1,6 +1,9 @@
 import importlib.util
+from dataclasses import replace
 from difflib import unified_diff
+import hashlib
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -11,10 +14,36 @@ SCRIPT = ROOT / "validation/nouveau-deployment/build_retained_module.py"
 SPEC = importlib.util.spec_from_file_location("build_retained_module", SCRIPT)
 assert SPEC is not None and SPEC.loader is not None
 BUILDER = importlib.util.module_from_spec(SPEC)
+sys.modules[SPEC.name] = BUILDER
 SPEC.loader.exec_module(BUILDER)
 
 
 class PatchInputTests(unittest.TestCase):
+    def test_retained_build_guard_detects_repository_or_input_changes(self):
+        before = BUILDER.ReviewTreeSnapshot(
+            branch="review",
+            head="a" * 40,
+            main_head="b" * 40,
+            status="",
+            builder_sha256="c" * 64,
+            patch_sha256=(("0013.patch", "d" * 64),),
+            tool_sha256=(("validation/tool.py", "1" * 64),),
+        )
+        changes = (
+            replace(before, head="e" * 40),
+            replace(before, builder_sha256="f" * 64),
+            replace(before, status="?? new-file"),
+            replace(before, patch_sha256=(("0013.patch", "0" * 64),)),
+            replace(before, tool_sha256=(("validation/tool.py", "2" * 64),)),
+        )
+        for after in changes:
+            with self.subTest(after=after), self.assertRaisesRegex(
+                RuntimeError, "changed during retained build",
+            ):
+                BUILDER.require_unchanged_review_tree(before, after)
+
+        BUILDER.require_unchanged_review_tree(before, before)
+
     def test_marker_sets_match_the_ambient_patch_contract(self):
         self.assertNotIn("NOUVEAU_DIAG_BAR2_CONFIG", BUILDER.REQUIRED_MARKERS)
         self.assertNotIn("diag_bar2_map_kmap_start", BUILDER.DISABLED_MARKERS)
@@ -96,10 +125,16 @@ class PatchInputTests(unittest.TestCase):
     def test_stack_verification_reverses_overlapping_patches_sequentially(self):
         with tempfile.TemporaryDirectory(prefix="patch-stack-verify-test-") as temporary:
             root = Path(temporary)
+            canonical_root = root / "canonical"
             relative = "drivers/example.c"
             source_file = root / relative
             source_file.parent.mkdir(parents=True)
             source_file.write_text("before\nlatest\nafter\n", encoding="utf-8")
+            canonical_file = canonical_root / relative
+            canonical_file.parent.mkdir(parents=True)
+            canonical_file.write_text(
+                "before\nbefore\nafter\n", encoding="utf-8",
+            )
 
             def make_patch(name: str, old: str, new: str) -> Path:
                 patch_path = root / name
@@ -119,9 +154,16 @@ class PatchInputTests(unittest.TestCase):
             second = make_patch("0011.patch", "middle", "latest")
             logs = root / "logs"
             logs.mkdir()
+            expected = {
+                relative: hashlib.sha256(canonical_file.read_bytes()).hexdigest(),
+            }
 
             BUILDER.verify_patch_stack(
-                root, {"0010.patch": first, "0011.patch": second}, logs,
+                root,
+                canonical_root,
+                {"0010.patch": first, "0011.patch": second},
+                logs,
+                expected,
             )
 
             self.assertEqual(
@@ -130,6 +172,55 @@ class PatchInputTests(unittest.TestCase):
             )
             self.assertTrue((logs / "verify-0011.patch.log").is_file())
             self.assertTrue((logs / "verify-0010.patch.log").is_file())
+
+    def test_stack_verification_rejects_unrelated_overlay_edit(self):
+        with tempfile.TemporaryDirectory(prefix="patch-stack-extra-edit-") as temporary:
+            root = Path(temporary)
+            canonical_root = root / "canonical"
+            relative = "drivers/example.c"
+            source_file = root / relative
+            source_file.parent.mkdir(parents=True)
+            source_file.write_text(
+                "before\nlatest\nafter\nunrelated edit\n", encoding="utf-8",
+            )
+            canonical_file = canonical_root / relative
+            canonical_file.parent.mkdir(parents=True)
+            canonical_file.write_text(
+                "before\nbefore\nafter\n", encoding="utf-8",
+            )
+
+            def make_patch(name: str, old: str, new: str) -> Path:
+                patch_path = root / name
+                lines = list(unified_diff(
+                    ["before\n", old + "\n", "after\n"],
+                    ["before\n", new + "\n", "after\n"],
+                    fromfile=f"a/{relative}", tofile=f"b/{relative}",
+                ))
+                patch_path.write_text(
+                    f"diff --git a/{relative} b/{relative}\n" +
+                    "".join(lines),
+                    encoding="utf-8",
+                )
+                return patch_path
+
+            first = make_patch("0010.patch", "before", "middle")
+            second = make_patch("0011.patch", "middle", "latest")
+            logs = root / "logs"
+            logs.mkdir()
+            expected = {
+                relative: hashlib.sha256(canonical_file.read_bytes()).hexdigest(),
+            }
+
+            with self.assertRaisesRegex(
+                RuntimeError, "does not reproduce canonical base",
+            ):
+                BUILDER.verify_patch_stack(
+                    root,
+                    canonical_root,
+                    {"0010.patch": first, "0011.patch": second},
+                    logs,
+                    expected,
+                )
 
 
 class KernelHeaderReleaseTests(unittest.TestCase):

@@ -56,6 +56,7 @@ def fixtures():
     snapshot = {
         "kernel_release": "7.0.0-34-generic",
         "boot_id": "11223344-5566-7788-99aa-bbccddeeff00",
+        "bound_nouveau_pci_functions": ["0000:01:00.0"],
         "loaded_srcversion": "936407678F3DA1E8515F5EC",
         "selected_module_path": "/lib/modules/7.0.0-34-generic/updates/dkms/nouveau.ko.zst",
         "installed_compressed_sha256": "c" * 64,
@@ -85,6 +86,23 @@ def fixtures():
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_bound_nouveau_pci_scan_ignores_non_bdf_entries(self):
+        with tempfile.TemporaryDirectory(prefix="nouveau-pci-functions-") as temporary:
+            root = Path(temporary)
+            for name in ("0000:01:00.0", "module", "bind", "unbind", "new_id"):
+                (root / name).touch()
+            self.assertEqual(
+                ADMISSION.bound_nouveau_pci_functions(root),
+                ["0000:01:00.0"],
+            )
+
+    def test_bound_nouveau_pci_scan_fails_closed_when_driver_root_is_missing(self):
+        with tempfile.TemporaryDirectory(prefix="nouveau-pci-missing-") as temporary:
+            self.assertEqual(
+                ADMISSION.bound_nouveau_pci_functions(Path(temporary) / "missing"),
+                [],
+            )
+
     def test_running_admission_and_supervisor_are_hash_pinned(self):
         manifest, _snapshot = fixtures()
         with tempfile.TemporaryDirectory(prefix="admission-tools-test-") as temporary:
@@ -168,12 +186,30 @@ class AdmissionTests(unittest.TestCase):
         manifest, snapshot = fixtures()
         self.assertEqual(ADMISSION.evaluate_snapshot(manifest, snapshot), [])
 
+    def test_ambient_admission_pins_exact_nouveau_pci_function_set(self):
+        manifest, snapshot = fixtures()
+        manifest["nouveau"]["parameters"]["diag_bar2_map"] = "Y"
+        manifest["gpu"] = {"pci_bdf": "0000:01:00.0"}
+        self.assertEqual(
+            ADMISSION.gpu_identity_reasons(manifest, snapshot),
+            [],
+        )
+        for devices in ([], ["0000:01:00.0", "0000:02:00.0"], ["0000:02:00.0"]):
+            with self.subTest(devices=devices):
+                snapshot["bound_nouveau_pci_functions"] = devices
+                reasons = ADMISSION.gpu_identity_reasons(manifest, snapshot)
+                self.assertTrue(any(
+                    reason.startswith("Nouveau PCI device set mismatch:")
+                    for reason in reasons
+                ))
+
     def test_ambient_fault_archive_does_not_admit_workloads(self):
         manifest, snapshot = fixtures()
         manifest["nouveau"]["parameters"] = {
             "diag_bar2_map": "Y",
             "diag_ctxsw": "N",
         }
+        manifest["gpu"] = {"pci_bdf": "0000:01:00.0"}
         options_entries = [{
             "path_in_initramfs": "main/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf",
             "sha256": "8" * 64,

@@ -8,6 +8,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 import sys
@@ -19,6 +20,7 @@ from finalize_install import decompress_module, embedded_module_hashes, sha256_f
 from finalize_install import embedded_module_options
 
 ROOT = Path(__file__).resolve().parents[2]
+PCI_BDF = re.compile(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]")
 sys.path.insert(0, str(ROOT / "validation/detached-mpv-supervisor"))
 from bar2_baseline import matching_lines  # noqa: E402
 from detached_mpv_supervisor import (  # noqa: E402
@@ -38,6 +40,16 @@ def command(argv: list[str], *, timeout: float = 20) -> subprocess.CompletedProc
     )
 
 
+def bound_nouveau_pci_functions(
+    driver_root: Path = Path("/sys/bus/pci/drivers/nouveau"),
+) -> list[str]:
+    try:
+        entries = tuple(driver_root.iterdir())
+    except OSError:
+        return []
+    return sorted(entry.name for entry in entries if PCI_BDF.fullmatch(entry.name))
+
+
 def load_manifest(path: Path) -> dict[str, Any]:
     manifest = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(manifest, dict) or manifest.get("schema") != 2:
@@ -51,6 +63,11 @@ def load_manifest(path: Path) -> dict[str, Any]:
     if not required <= manifest.keys():
         raise ValueError(f"deployment manifest lacks {sorted(required - manifest.keys())}")
     if "diag_bar2_map" in manifest["nouveau"].get("parameters", {}):
+        gpu = manifest.get("gpu")
+        if not isinstance(gpu, dict) or not PCI_BDF.fullmatch(
+            str(gpu.get("pci_bdf", ""))
+        ):
+            raise ValueError("ambient manifest lacks a valid pinned GPU PCI BDF")
         if not isinstance(manifest.get("module_options"), dict):
             raise ValueError("ambient manifest lacks verified early-load module options")
         for name in (
@@ -60,6 +77,20 @@ def load_manifest(path: Path) -> dict[str, Any]:
             if not isinstance(manifest.get("tools", {}).get(name), dict):
                 raise ValueError(f"ambient manifest lacks pinned {name}")
     return manifest
+
+
+def gpu_identity_reasons(
+    manifest: dict[str, Any], snapshot: dict[str, Any],
+) -> list[str]:
+    if "diag_bar2_map" not in manifest["nouveau"].get("parameters", {}):
+        return []
+    gpu = manifest.get("gpu")
+    expected_bdf = gpu.get("pci_bdf") if isinstance(gpu, dict) else None
+    expected_devices = [expected_bdf] if isinstance(expected_bdf, str) else None
+    devices = snapshot.get("bound_nouveau_pci_functions")
+    if devices == expected_devices:
+        return []
+    return [f"Nouveau PCI device set mismatch: {devices!r} != {expected_devices!r}"]
 
 
 def verify_execution_identity(
@@ -371,6 +402,7 @@ def collect_snapshot(manifest: dict[str, Any]) -> dict[str, Any]:
     return {
         "kernel_release": kernel,
         "boot_id": boot_id,
+        "bound_nouveau_pci_functions": bound_nouveau_pci_functions(),
         "loaded_srcversion": loaded_srcversion,
         "selected_module_path": str(selected_path.resolve()) if selected_path.exists() else "MISSING",
         "installed_compressed_sha256": installed_compressed_sha,
@@ -409,6 +441,7 @@ def evaluate_snapshot(manifest: dict[str, Any], snapshot: dict[str, Any]) -> lis
     reasons: list[str] = []
     module = manifest["nouveau"]
     initramfs = manifest["initramfs"]
+    reasons.extend(gpu_identity_reasons(manifest, snapshot))
     if snapshot.get("kernel_release") != manifest["kernel"]:
         reasons.append("running kernel mismatch")
     if snapshot.get("loaded_srcversion") != module["srcversion"]:
@@ -490,6 +523,7 @@ def evaluate_ambient_capture(
     reasons: list[str] = []
     module = manifest["nouveau"]
     initramfs = manifest["initramfs"]
+    reasons.extend(gpu_identity_reasons(manifest, snapshot))
     options = manifest.get("module_options")
     if options is None or module.get("parameters", {}).get("diag_bar2_map") != "Y":
         reasons.append("manifest does not pin diag_bar2_map=Y")
@@ -569,6 +603,7 @@ def main(argv: list[str] | None = None) -> int:
             print("RUN_ELIGIBLE=false")
             print("AMBIENT_FAULT_CAPTURE_ELIGIBLE=" + ("false" if reasons else "true"))
             print("BAR2_HOST_CPU_PTE_COUNT=" + str(snapshot["bar2_pte_count"]))
+            print("NOUVEAU_PCI_FUNCTIONS=" + ",".join(snapshot["bound_nouveau_pci_functions"]))
             print("MODULE_RELOAD_ASSERTION=" + (
                 "operator_confirmed" if args.confirm_no_nouveau_reload else "missing"
             ))
@@ -585,6 +620,7 @@ def main(argv: list[str] | None = None) -> int:
             return 2
         print("RUN_ELIGIBLE=true")
         print("BOOT_ID=" + snapshot["boot_id"])
+        print("NOUVEAU_PCI_FUNCTIONS=" + ",".join(snapshot["bound_nouveau_pci_functions"]))
         print("BAR2_HOST_CPU_PTE_COUNT=0")
         print("HARD_STOP_COUNT=0")
         return 0

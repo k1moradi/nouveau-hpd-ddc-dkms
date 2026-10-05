@@ -539,6 +539,7 @@ class FinalManifestTests(unittest.TestCase):
                 "diag_bar2_map": "Y",
                 "diag_ctxsw": "N",
             }
+            ambient_plan["gpu"] = {"pci_bdf": "0000:01:00.0"}
             with self.assertRaisesRegex(
                 ValueError, "ambient build manifest does not pin exactly patches 0009-0013"
             ):
@@ -646,6 +647,7 @@ class FinalManifestTests(unittest.TestCase):
             ] = "f" * 64
             plan["review_head"] = "e" * 40
             plan["module_parameters"] = {"diag_bar2_map": "Y", "diag_ctxsw": "N"}
+            plan["gpu"] = {"pci_bdf": "0000:01:00.0"}
             plan["module_options"] = {
                 "path": "/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf",
                 "content": option_content,
@@ -678,6 +680,7 @@ class FinalManifestTests(unittest.TestCase):
             }
             ambient_result = FINALIZER.build_final_manifest(**kwargs)
             self.assertEqual(ambient_result["review_head"], "e" * 40)
+            self.assertEqual(ambient_result["gpu"], {"pci_bdf": "0000:01:00.0"})
             self.assertEqual(
                 ambient_result["driver_source_head"], build["review_commit"]
             )
