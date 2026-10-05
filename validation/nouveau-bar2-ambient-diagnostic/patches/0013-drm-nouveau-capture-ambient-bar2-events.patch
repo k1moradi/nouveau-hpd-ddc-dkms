@@ -232,7 +232,7 @@ index 4e83069..2e4adb2 100644
 +
 +static struct nvkm_bar2_diag_event *nvkm_bar2_diag_events;
 +static atomic64_t nvkm_bar2_diag_ring_next = ATOMIC64_INIT(0);
-+static atomic64_t nvkm_bar2_diag_ring_dropped = ATOMIC64_INIT(0);
++static atomic64_t nvkm_bar2_diag_ring_drop_count = ATOMIC64_INIT(0);
 +
 +int
 +nvkm_bar2_diag_ring_init(void)
@@ -246,7 +246,7 @@ index 4e83069..2e4adb2 100644
 +		return -ENOMEM;
 +
 +	atomic64_set(&nvkm_bar2_diag_ring_next, 0);
-+	atomic64_set(&nvkm_bar2_diag_ring_dropped, 0);
++	atomic64_set(&nvkm_bar2_diag_ring_drop_count, 0);
 +	return 0;
 +}
 +
@@ -269,14 +269,14 @@ index 4e83069..2e4adb2 100644
 +
 +	index = atomic64_fetch_inc(&nvkm_bar2_diag_ring_next);
 +	if (index >= NVKM_BAR2_DIAG_RING_SIZE) {
-+		atomic64_inc(&nvkm_bar2_diag_ring_dropped);
++		atomic64_inc(&nvkm_bar2_diag_ring_drop_count);
 +		return;
 +	}
 +
 +	event = &events[index];
 +	event->mono_ns = ktime_get_mono_fast_ns();
 +	if (strscpy(event->message, message, sizeof(event->message)) < 0) {
-+		atomic64_inc(&nvkm_bar2_diag_ring_dropped);
++		atomic64_inc(&nvkm_bar2_diag_ring_drop_count);
 +		return;
 +	}
 +	/* Publish only after the timestamp and message are fully written. */
@@ -298,7 +298,7 @@ index 4e83069..2e4adb2 100644
 +u64
 +nvkm_bar2_diag_ring_dropped(void)
 +{
-+	return atomic64_read(&nvkm_bar2_diag_ring_dropped);
++	return atomic64_read(&nvkm_bar2_diag_ring_drop_count);
 +}
 +
 +bool

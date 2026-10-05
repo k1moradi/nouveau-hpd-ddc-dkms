@@ -32,7 +32,7 @@ PATCHES = {
     "0012-drm-nouveau-mark-bar2-teardown-phases.patch":
         "b0b549a128a77ade7dbcccd88fcd2d37ce30558fdf23d1a8f4792546c267266b",
     "0013-drm-nouveau-capture-ambient-bar2-events.patch":
-        "5146c45006eae2ba74aeedaaa499285a1adff5cfa6b5dcdae835fec1ea537e66",
+        "3032b540240007a6d6f2fae0bde791f5c7fbac26d8b543379981eddd6915e8a0",
 }
 PATCH_ARGUMENTS = tuple(PATCHES)
 REQUIRED_MARKERS = (

@@ -63,7 +63,7 @@ class AmbientRingPatchContractTests(unittest.TestCase):
         ):
             with self.subTest(forbidden=forbidden):
                 self.assertNotIn(forbidden, body)
-        self.assertIn("atomic64_inc(&nvkm_bar2_diag_ring_dropped)", body)
+        self.assertIn("atomic64_inc(&nvkm_bar2_diag_ring_drop_count)", body)
 
     def test_snapshot_is_a_cutoff_bound_prefix_and_reports_live_footer(self):
         start = self.text.index("nouveau_bar2_diag_seq_start(struct seq_file *m")
