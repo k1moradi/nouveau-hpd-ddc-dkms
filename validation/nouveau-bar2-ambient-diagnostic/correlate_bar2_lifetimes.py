@@ -708,11 +708,12 @@ def _validate_map_records(events: list[MapEvent]) -> None:
                 continue
 
             if event.stage == "KMAP_ACTIVE":
-                if state.kmap_refs_nonzero or event.refs != 1 or event.cache_state != "active":
+                if state.kmap_refs_nonzero or event.refs != 1:
                     raise CorrelationInputError(f"line {event.line}: invalid zero-to-nonzero kmap edge")
                 if event.access == "bar2":
                     if (
                         event.vma_state != "resident"
+                        or event.cache_state != "active"
                         or not event.bar2_len
                         or event.map_reset_gen is None
                         or event.map_source not in {"new", "cached"}
@@ -751,6 +752,40 @@ def _validate_map_records(events: list[MapEvent]) -> None:
                     if event.map_source not in {"none", "unknown"}:
                         raise CorrelationInputError(
                             f"line {event.line}: BAR0 access claims a BAR2 map source"
+                        )
+                    if event.cache_state not in {"none", "active"}:
+                        raise CorrelationInputError(
+                            f"line {event.line}: BAR0 kmap has an invalid cache state"
+                        )
+                    if event.vma_state == "not_established":
+                        if event.cache_state != "none" or event.bar2_len:
+                            raise CorrelationInputError(
+                                f"line {event.line}: unmapped BAR0 kmap reports a BAR2 VMA"
+                            )
+                    elif event.vma_state == "resident":
+                        if (
+                            event.cache_state != "active"
+                            or not event.bar2_len
+                            or event.map_reset_gen is None
+                        ):
+                            raise CorrelationInputError(
+                                f"line {event.line}: resident BAR0 kmap lacks a VMA snapshot"
+                            )
+                        if state.vma_state == "resident" and not _same_range(state, event):
+                            raise CorrelationInputError(
+                                f"line {event.line}: BAR0 kmap changed resident VMA identity"
+                            )
+                        if state.vma_state != "resident":
+                            state.incomplete_reason = (
+                                "resident VMA first observed at BAR0 kmap edge"
+                            )
+                            state.vma_state = "resident"
+                            state.bar2_va = event.bar2_va
+                            state.bar2_len = event.bar2_len
+                            state.map_reset_gen = event.map_reset_gen
+                    elif event.vma_state != "unknown":
+                        raise CorrelationInputError(
+                            f"line {event.line}: BAR0 kmap has an invalid VMA state"
                         )
                 else:
                     raise CorrelationInputError(f"line {event.line}: kmap edge has no access mode")

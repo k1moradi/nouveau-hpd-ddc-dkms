@@ -62,7 +62,7 @@ def map_message(
         }.get(stage, "not_established")
     if cache_state is None:
         cache_state = {
-            "KMAP_ACTIVE": "active",
+            "KMAP_ACTIVE": "none" if access == "bar0" else "active",
             "KMAP_LAST_RELEASE": "lru" if vma_state == "resident" else "none",
             "BOOT_MAP_PINNED": "pinned",
             "VMA_EVICTING": "lru",
@@ -232,6 +232,33 @@ class AmbientCorrelationTests(unittest.TestCase):
         self.assertEqual(candidate["exact_kmap_refcount_at_fault"], 0)
         self.assertEqual(candidate["vma_state"], "resident")
         self.assertEqual(candidate["cache_state"], "lru")
+
+    def test_bar0_kmap_edges_do_not_require_a_bar2_cache(self):
+        import tempfile
+        records = [
+            row(map_message(1, 1, "ALLOCATED"), 10),
+            row(map_message(2, 1, "KMAP_ACTIVE", access="bar0", refs=1), 11),
+            row(map_message(3, 1, "KMAP_LAST_RELEASE", refs=0), 12),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            parsed = parse_journal(write_journal(records, temporary))
+        self.assertEqual(parsed.maps[1].access, "bar0")
+        self.assertEqual(parsed.maps[1].cache_state, "none")
+        self.assertEqual(parsed.maps[1].vma_state, "not_established")
+        self.assertEqual(correlate(parsed)["fault_count"], 0)
+
+    def test_bar0_kmap_without_vma_rejects_false_active_cache(self):
+        import tempfile
+        records = [
+            row(map_message(1, 1, "ALLOCATED"), 10),
+            row(map_message(
+                2, 1, "KMAP_ACTIVE", access="bar0", refs=1,
+                cache_state="active",
+            ), 11),
+        ]
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(CorrelationInputError, "unmapped BAR0 kmap"):
+                parse_journal(write_journal(records, temporary))
 
     def test_fault_at_active_transition_timestamp_is_inconclusive(self):
         import tempfile
