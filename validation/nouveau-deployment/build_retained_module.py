@@ -12,6 +12,7 @@ import shlex
 import shutil
 import subprocess
 import sys
+import tempfile
 
 
 EXPECTED_KERNEL = "7.0.0-34-generic"
@@ -116,6 +117,77 @@ def source_fingerprint(root: Path) -> dict[str, object]:
     }
 
 
+def patch_file_paths(patch_path: Path) -> set[str]:
+    paths: set[str] = set()
+    lines = patch_path.read_text(encoding="utf-8").splitlines()
+    index = 0
+    while index < len(lines):
+        line = lines[index]
+        match = re.fullmatch(r"diff --git a/(\S+) b/(\S+)", line)
+        if match is not None:
+            old_path, new_path = match.groups()
+            index += 1
+        else:
+            match = re.fullmatch(r"--- a/(\S+)", line)
+            if match is None:
+                index += 1
+                continue
+            old_path = match.group(1)
+            if index + 1 >= len(lines):
+                raise RuntimeError(f"unpaired unified patch path header: {patch_path}")
+            new_match = re.fullmatch(r"\+\+\+ b/(\S+)", lines[index + 1])
+            if new_match is None:
+                raise RuntimeError(f"unpaired unified patch path header: {patch_path}")
+            new_path = new_match.group(1)
+            index += 2
+        if old_path != new_path:
+            raise RuntimeError(f"rename patches are not supported: {patch_path}")
+        relative = Path(old_path)
+        if relative.is_absolute() or ".." in relative.parts:
+            raise RuntimeError(f"unsafe patch path in {patch_path}: {old_path}")
+        paths.add(relative.as_posix())
+    if not paths:
+        raise RuntimeError(f"patch contains no file paths: {patch_path}")
+    return paths
+
+
+def verify_patch_stack(
+    source_root: Path, patch_paths: dict[str, Path], log_dir: Path,
+) -> None:
+    """Reverse the complete stack on copied touched files in exact order."""
+    touched_files: set[str] = set()
+    for patch_path in patch_paths.values():
+        touched_files.update(patch_file_paths(patch_path))
+
+    with tempfile.TemporaryDirectory(prefix="nouveau-patch-stack-verify-") as temporary:
+        verification_root = Path(temporary)
+        for relative in sorted(touched_files):
+            source = source_root / relative
+            if not source.is_file():
+                raise RuntimeError(f"patch stack source file is missing: {source}")
+            destination = verification_root / relative
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(source, destination)
+
+        for filename, patch_path in reversed(tuple(patch_paths.items())):
+            check_command = [
+                "git", "apply", "--reverse", "--check", "--unidiff-zero",
+                str(patch_path),
+            ]
+            run_logged(
+                check_command, log_dir / f"verify-check-{filename}.log",
+                cwd=verification_root,
+            )
+            apply_command = [
+                "git", "apply", "--reverse", "--unidiff-zero",
+                str(patch_path),
+            ]
+            run_logged(
+                apply_command, log_dir / f"verify-{filename}.log",
+                cwd=verification_root,
+            )
+
+
 def run_logged(command: list[str], log_path: Path, *, cwd: Path | None = None) -> None:
     with log_path.open("w", encoding="utf-8") as log:
         log.write(shlex.join(command) + "\n")
@@ -129,7 +201,7 @@ def run_logged(command: list[str], log_path: Path, *, cwd: Path | None = None) -
             text=True,
         )
     if result.returncode:
-        raise RuntimeError(f"build command failed ({result.returncode}); see {log_path}")
+        raise RuntimeError(f"command failed ({result.returncode}); see {log_path}")
 
 
 def configured_kernel_release(headers: Path) -> tuple[str, str]:
@@ -230,14 +302,10 @@ def main() -> int:
     }
 
     output_dir.mkdir(parents=True)
-    # Verify both patches are present in the retained source overlay without
-    # modifying that source tree.
-    for filename in reversed(PATCH_ARGUMENTS):
-        command = [
-            "patch", "--batch", "--fuzz=0", "--dry-run", "-R", "-p1",
-            "-i", str(patch_paths[filename]),
-        ]
-        run_logged(command, output_dir / f"verify-{filename}.log", cwd=source_root)
+    # Reverse the patch stack on temporary copies: later patches can modify
+    # the same source lines as earlier ones, so independent dry-runs against
+    # the unchanged final overlay are not a valid stack check.
+    verify_patch_stack(source_root, patch_paths, output_dir)
 
     clean_command = [
         "make", "-C", str(kernel_headers), "M=" + str(module_source), "clean",

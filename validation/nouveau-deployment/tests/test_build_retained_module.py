@@ -1,4 +1,5 @@
 import importlib.util
+from difflib import unified_diff
 from pathlib import Path
 import tempfile
 import unittest
@@ -61,6 +62,58 @@ class PatchInputTests(unittest.TestCase):
 
             with self.assertRaisesRegex(RuntimeError, "unexpected hash for 0009"):
                 BUILDER.verify_patch_inputs(wrong, vma, *remaining)
+
+    def test_patch_paths_support_traditional_unified_headers(self):
+        patch = (
+            ROOT / "validation/nouveau-nvif-duplicate-diagnostic/patches/"
+            "0009-drm-nouveau-log-nvif-duplicate-layer.patch"
+        )
+
+        self.assertEqual(
+            BUILDER.patch_file_paths(patch),
+            {
+                "drivers/gpu/drm/nouveau/nouveau_abi16.c",
+                "drivers/gpu/drm/nouveau/nvkm/core/ioctl.c",
+            },
+        )
+
+    def test_stack_verification_reverses_overlapping_patches_sequentially(self):
+        with tempfile.TemporaryDirectory(prefix="patch-stack-verify-test-") as temporary:
+            root = Path(temporary)
+            relative = "drivers/example.c"
+            source_file = root / relative
+            source_file.parent.mkdir(parents=True)
+            source_file.write_text("before\nlatest\nafter\n", encoding="utf-8")
+
+            def make_patch(name: str, old: str, new: str) -> Path:
+                patch_path = root / name
+                lines = list(unified_diff(
+                    ["before\n", old + "\n", "after\n"],
+                    ["before\n", new + "\n", "after\n"],
+                    fromfile=f"a/{relative}", tofile=f"b/{relative}",
+                ))
+                patch_path.write_text(
+                    f"diff --git a/{relative} b/{relative}\n" +
+                    "".join(lines),
+                    encoding="utf-8",
+                )
+                return patch_path
+
+            first = make_patch("0010.patch", "before", "middle")
+            second = make_patch("0011.patch", "middle", "latest")
+            logs = root / "logs"
+            logs.mkdir()
+
+            BUILDER.verify_patch_stack(
+                root, {"0010.patch": first, "0011.patch": second}, logs,
+            )
+
+            self.assertEqual(
+                source_file.read_text(encoding="utf-8"),
+                "before\nlatest\nafter\n",
+            )
+            self.assertTrue((logs / "verify-0011.patch.log").is_file())
+            self.assertTrue((logs / "verify-0010.patch.log").is_file())
 
 
 class KernelHeaderReleaseTests(unittest.TestCase):
