@@ -154,6 +154,43 @@ class EarlyModuleOptionsTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "content hash mismatch"):
             FINALIZER.validate_module_options(params, options, retired)
 
+    def test_dracut_config_pins_the_exact_early_options_file(self):
+        options = {
+            "path": "/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf",
+        }
+        content = FINALIZER.expected_dracut_config_content(options)
+        config = {
+            "path": "/etc/dracut.conf.d/99-nouveau-ambient-bar2-0011.conf",
+            "content": content,
+            "sha256": FINALIZER.sha256_file_from_bytes(content.encode("ascii")),
+        }
+        FINALIZER.validate_dracut_config(options, config)
+
+        config["content"] = 'install_items+=" /etc/modprobe.d/other.conf "\n'
+        with self.assertRaisesRegex(ValueError, "does not install the exact"):
+            FINALIZER.validate_dracut_config(options, config)
+
+    def test_apply_dracut_config_is_exact_and_resumable(self):
+        with tempfile.TemporaryDirectory(prefix="dracut-options-test-") as temporary:
+            root = Path(temporary)
+            path = root / "99-nouveau-ambient-bar2-0011.conf"
+            content = 'install_items+=" /etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf "\n'
+            plan = {
+                "dracut_config": {
+                    "path": str(path),
+                    "content": content,
+                    "sha256": FINALIZER.sha256_file_from_bytes(content.encode("ascii")),
+                }
+            }
+            first = FINALIZER.apply_dracut_config(plan)
+            second = FINALIZER.apply_dracut_config(plan)
+            self.assertEqual(path.read_text(encoding="ascii"), content)
+            self.assertEqual(first, second)
+
+            path.write_text('install_items+=" /etc/modprobe.d/unexpected.conf "\n')
+            with self.assertRaisesRegex(RuntimeError, "different bytes"):
+                FINALIZER.apply_dracut_config(plan)
+
     def test_apply_ambient_options_archives_old_file_and_leaves_one_active_config(self):
         with tempfile.TemporaryDirectory(prefix="apply-ambient-options-test-") as temporary:
             root = Path(temporary)
@@ -568,6 +605,21 @@ class FinalManifestTests(unittest.TestCase):
                 "content": option_content,
                 "sha256": option_hash,
             }
+            dracut_content = FINALIZER.expected_dracut_config_content(
+                plan["module_options"]
+            )
+            dracut_hash = FINALIZER.sha256_file_from_bytes(
+                dracut_content.encode("ascii")
+            )
+            plan["dracut_config"] = {
+                "path": "/etc/dracut.conf.d/99-nouveau-ambient-bar2-0011.conf",
+                "content": dracut_content,
+                "sha256": dracut_hash,
+            }
+            kwargs["installed_dracut_config"] = {
+                "path": plan["dracut_config"]["path"],
+                "content_sha256": dracut_hash,
+            }
             kwargs["embedded_options"] = [{
                 "path_in_initramfs": "main/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf",
                 "sha256": option_hash,
@@ -592,6 +644,10 @@ class FinalManifestTests(unittest.TestCase):
             self.assertEqual(
                 ambient_result["initramfs"]["embedded_module_options"],
                 kwargs["embedded_options"],
+            )
+            self.assertEqual(
+                ambient_result["dracut_config"]["content_sha256"],
+                dracut_hash,
             )
 
             kwargs["embedded"] = [{

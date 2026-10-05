@@ -183,6 +183,34 @@ def validate_module_options(
         raise ValueError("superseded module options lack an exact SHA-256")
 
 
+def expected_dracut_config_content(module_options: dict[str, Any]) -> str:
+    options_path = Path(module_options["path"])
+    return f'install_items+=" {options_path} "\n'
+
+
+def validate_dracut_config(
+    module_options: Any,
+    dracut_config: Any,
+) -> None:
+    if module_options is None:
+        if dracut_config is not None:
+            raise ValueError("non-ambient deployment may not configure dracut module options")
+        return
+    if not isinstance(dracut_config, dict):
+        raise ValueError("ambient deployment lacks pinned dracut install_items config")
+    config_path = Path(dracut_config.get("path", ""))
+    if (
+        config_path.parent != Path("/etc/dracut.conf.d")
+        or config_path.name != "99-nouveau-ambient-bar2-0011.conf"
+    ):
+        raise ValueError("ambient dracut config must use its dedicated /etc/dracut.conf.d path")
+    expected_content = expected_dracut_config_content(module_options)
+    if dracut_config.get("content") != expected_content:
+        raise ValueError("ambient dracut config does not install the exact Nouveau options file")
+    if dracut_config.get("sha256") != sha256_file_from_bytes(expected_content.encode("ascii")):
+        raise ValueError("ambient dracut config content hash mismatch")
+
+
 def validate_inputs(
     build: dict[str, Any], plan: dict[str, Any], raw_module: Path
 ) -> dict[str, Any]:
@@ -238,8 +266,10 @@ def validate_inputs(
         raise ValueError("build manifest vermagic does not match target kernel")
     params = plan.get("module_parameters")
     module_options = plan.get("module_options")
+    dracut_config = plan.get("dracut_config")
     retired_module_options = plan.get("retired_module_options")
     validate_module_options(params, module_options, retired_module_options)
+    validate_dracut_config(module_options, dracut_config)
     for variant in ("A", "B"):
         item = plan.get("mesa_variants", {}).get(variant)
         if not isinstance(item, dict):
@@ -315,6 +345,7 @@ def validate_inputs(
         "software_reference": reference,
         "module_parameters": params,
         "module_options": module_options,
+        "dracut_config": dracut_config,
         "retired_module_options": retired_module_options,
     }
 
@@ -604,6 +635,32 @@ def apply_module_options(
     }
 
 
+def preflight_dracut_config(plan: dict[str, Any]) -> dict[str, Any] | None:
+    config = plan.get("dracut_config")
+    if config is None:
+        return None
+    path = Path(config["path"])
+    content = config["content"].encode("ascii")
+    if path.is_symlink():
+        raise RuntimeError(f"ambient dracut config may not be a symlink: {path}")
+    if path.exists():
+        if not path.is_file() or path.read_bytes() != content:
+            raise RuntimeError(f"ambient dracut config already exists with different bytes: {path}")
+    return {"path": path, "content": content, "sha256": config["sha256"]}
+
+
+def apply_dracut_config(plan: dict[str, Any]) -> dict[str, str] | None:
+    state = preflight_dracut_config(plan)
+    if state is None:
+        return None
+    path = state["path"]
+    if not path.exists():
+        atomic_write(path, state["content"])
+    if sha256_file(path) != state["sha256"]:
+        raise RuntimeError("installed dracut config hash does not match the plan")
+    return {"path": str(path), "content_sha256": state["sha256"]}
+
+
 def matching_embedded_modules(
     initramfs: Path,
     expected_uncompressed_sha256: str,
@@ -640,6 +697,7 @@ def build_final_manifest(
     plan: dict[str, Any],
     signed: bool,
     certificate_sha256: str | None,
+    installed_dracut_config: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     embedded_hashes = {item["uncompressed_sha256"] for item in embedded}
     if embedded_hashes != {installed_uncompressed_sha256}:
@@ -735,6 +793,13 @@ def build_final_manifest(
             "content": plan["module_options"]["content"],
             "embedded_initramfs_entries": embedded_options,
         }
+    if plan.get("dracut_config") is not None:
+        if installed_dracut_config is None:
+            raise RuntimeError("ambient dracut config was not installed and verified")
+        final["dracut_config"] = {
+            **installed_dracut_config,
+            "content": plan["dracut_config"]["content"],
+        }
     return final
 
 
@@ -797,6 +862,7 @@ def apply_install(
             raise RuntimeError("module signing certificate is not reported enrolled by mokutil")
 
     preflight_module_options(plan, manifest_path)
+    preflight_dracut_config(plan)
     target = Path(plan["module_install_path"])
     target.parent.mkdir(parents=True, exist_ok=True)
     initramfs = Path(plan["initramfs_path"])
@@ -828,6 +894,7 @@ def apply_install(
             root / "current-initramfs-check",
         )
         installed_options = apply_module_options(plan, manifest_path)
+        installed_dracut_config = apply_dracut_config(plan)
         embedded_options = None
         if plan.get("module_options") is not None:
             embedded_options = embedded_module_options(
@@ -893,6 +960,7 @@ def apply_install(
             embedded=embedded,
             embedded_options=embedded_options,
             installed_options=installed_options,
+            installed_dracut_config=installed_dracut_config,
             plan=plan,
             signed=signing_key is not None,
             certificate_sha256=(
@@ -928,6 +996,7 @@ def main(argv: list[str] | None = None) -> int:
             if values.get("module_options") is not None:
                 print("DIAG_BAR2_MAP_BOOT_OPTION=Y")
                 print(f"MODULE_OPTIONS_FILE={values['module_options']['path']}")
+                print(f"DRACUT_CONFIG_FILE={values['dracut_config']['path']}")
             print("NO_SYSTEM_CHANGES=true")
             print("To install, sign if required, rebuild initramfs, and finalize provenance, rerun with --apply as root from the controlled desktop.")
             return 0
