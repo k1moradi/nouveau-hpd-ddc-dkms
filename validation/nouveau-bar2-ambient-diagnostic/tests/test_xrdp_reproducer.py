@@ -5,9 +5,11 @@ import json
 import os
 from pathlib import Path
 import selectors
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[3]
@@ -31,6 +33,102 @@ def journal_line(message: str, *, boot: str = BOOT, transport: str = "kernel") -
 
 
 class XrdpReproducerTests(unittest.TestCase):
+    def _ring_tree(self, root: Path) -> tuple[Path, Path]:
+        drm_root = root / "sys/class/drm"
+        debugfs_root = root / "sys/kernel/debug/dri"
+        device = root / "sys/devices/pci0000:00/0000:01:00.0"
+        device.mkdir(parents=True)
+        card = drm_root / "card0"
+        card.mkdir(parents=True)
+        (card / "device").symlink_to(device)
+        (card / "dev").write_text("226:0\n", encoding="ascii")
+
+        for minor in ("0", "128", "0000:01:00.0"):
+            node = debugfs_root / minor
+            node.mkdir(parents=True)
+            (node / "ambient_bar2_status").write_text("status\n", encoding="ascii")
+            (node / "ambient_bar2_events").write_text("events\n", encoding="ascii")
+        return drm_root, debugfs_root
+
+    def test_ring_locator_selects_pinned_gpu_primary_minor_with_alias_nodes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            drm_root, debugfs_root = self._ring_tree(Path(temporary))
+
+            with (
+                mock.patch.object(RUNNER.os, "geteuid", return_value=1000),
+                mock.patch.object(
+                    RUNNER,
+                    "run_command",
+                    return_value=subprocess.CompletedProcess([], 0, "", ""),
+                ) as run_command,
+            ):
+                status, events = RUNNER.find_debugfs_ring_files(
+                    "0000:01:00.0",
+                    drm_class_root=drm_root,
+                    debugfs_root=debugfs_root,
+                )
+
+            self.assertEqual(status, debugfs_root / "0/ambient_bar2_status")
+            self.assertEqual(events, debugfs_root / "0/ambient_bar2_events")
+            self.assertEqual(run_command.call_count, 2)
+            run_command.assert_any_call(
+                ["sudo", "-n", "test", "-f", str(status)], timeout=10,
+            )
+            run_command.assert_any_call(
+                ["sudo", "-n", "test", "-f", str(events)], timeout=10,
+            )
+
+    def test_ring_locator_rejects_malformed_or_unmatched_pci_identity(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            drm_root, debugfs_root = self._ring_tree(Path(temporary))
+
+            with self.assertRaisesRegex(RUNNER.ReproducerError, "malformed"):
+                RUNNER.find_debugfs_ring_files(
+                    "not-a-bdf", drm_class_root=drm_root,
+                    debugfs_root=debugfs_root,
+                )
+            with self.assertRaisesRegex(RUNNER.ReproducerError, "found 0"):
+                RUNNER.find_debugfs_ring_files(
+                    "0000:02:00.0", drm_class_root=drm_root,
+                    debugfs_root=debugfs_root,
+                )
+
+    def test_ring_locator_rejects_ambiguous_primary_cards(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            drm_root, debugfs_root = self._ring_tree(root)
+            device = root / "sys/devices/pci0000:00/0000:01:00.0"
+            card1 = drm_root / "card1"
+            card1.mkdir()
+            (card1 / "device").symlink_to(device)
+            (card1 / "dev").write_text("226:1\n", encoding="ascii")
+
+            with self.assertRaisesRegex(RUNNER.ReproducerError, "found 2"):
+                RUNNER.find_debugfs_ring_files(
+                    "0000:01:00.0",
+                    drm_class_root=drm_root,
+                    debugfs_root=debugfs_root,
+                )
+
+    def test_ring_locator_rejects_missing_primary_ring_node(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            drm_root, debugfs_root = self._ring_tree(Path(temporary))
+
+            def reject_status(argv: list[str], *, timeout: float = 30):
+                code = 1 if argv[-1].endswith("ambient_bar2_status") else 0
+                return subprocess.CompletedProcess(argv, code, "", "permission denied")
+
+            with (
+                mock.patch.object(RUNNER.os, "geteuid", return_value=1000),
+                mock.patch.object(RUNNER, "run_command", side_effect=reject_status),
+                self.assertRaisesRegex(RUNNER.ReproducerError, "cannot verify required"),
+            ):
+                RUNNER.find_debugfs_ring_files(
+                    "0000:01:00.0",
+                    drm_class_root=drm_root,
+                    debugfs_root=debugfs_root,
+                )
+
     def test_profile_builds_the_pinned_bounded_xrdp_trigger_only(self):
         profile = RUNNER.load_json(RUNNER.PROFILE)
         workload = profile["workload"]

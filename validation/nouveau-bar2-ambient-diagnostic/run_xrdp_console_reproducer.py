@@ -39,6 +39,7 @@ RING_FAULT = re.compile(r"NOUVEAU_DIAG_BAR2_FAULT", re.IGNORECASE)
 DEFAULT_MAX_RUNTIME_SECONDS = 180
 FOLLOW_READY_SECONDS = 0.15
 FAULT_CLEANUP_SECONDS = 35
+PCI_BDF = re.compile(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]")
 
 
 class ReproducerError(RuntimeError):
@@ -214,16 +215,48 @@ def journal_records_after(cursor: str, boot_id: str) -> tuple[list[str], str]:
     return lines, latest
 
 
-def find_debugfs_ring_files() -> tuple[Path, Path]:
-    status_candidates = sorted(Path("/sys/kernel/debug/dri").glob("*/ambient_bar2_status"))
-    if len(status_candidates) != 1:
+def find_debugfs_ring_files(
+    expected_bdf: str,
+    *,
+    drm_class_root: Path = Path("/sys/class/drm"),
+    debugfs_root: Path = Path("/sys/kernel/debug/dri"),
+) -> tuple[Path, Path]:
+    if PCI_BDF.fullmatch(expected_bdf) is None:
+        raise ReproducerError("pinned Nouveau PCI BDF is malformed")
+
+    primary_minors: list[int] = []
+    for card in sorted(drm_class_root.glob("card*")):
+        if re.fullmatch(r"card[0-9]+", card.name) is None:
+            continue
+        try:
+            device_bdf = (card / "device").resolve(strict=True).name
+            dev_text = (card / "dev").read_text(encoding="ascii").strip()
+        except OSError:
+            continue
+        if device_bdf.lower() != expected_bdf.lower():
+            continue
+        dev_match = re.fullmatch(r"([0-9]+):([0-9]+)", dev_text)
+        if dev_match is None or int(dev_match.group(1)) != 226:
+            raise ReproducerError(f"invalid DRM primary device number for {card}")
+        primary_minors.append(int(dev_match.group(2)))
+
+    if len(primary_minors) != 1:
         raise ReproducerError(
-            f"expected one Nouveau BAR2 ring status node, found {len(status_candidates)}"
+            f"expected one primary DRM card for {expected_bdf}, found {len(primary_minors)}"
         )
-    status = status_candidates[0]
+
+    status = debugfs_root / str(primary_minors[0]) / "ambient_bar2_status"
     events = status.with_name("ambient_bar2_events")
-    if not events.is_file():
-        raise ReproducerError("ambient BAR2 event ring node is missing")
+    for path in (status, events):
+        if os.geteuid() == 0:
+            exists = path.is_file()
+        else:
+            result = run_command(["sudo", "-n", "test", "-f", str(path)], timeout=10)
+            exists = result.returncode == 0
+        if not exists:
+            raise ReproducerError(
+                f"cannot verify required Nouveau BAR2 ring node {path} as root"
+            )
     return status, events
 
 
@@ -389,7 +422,11 @@ def execute(args: argparse.Namespace) -> int:
     (run_dir / "pretrigger-journal-delta.jsonl").write_text(
         "".join(line + "\n" for line in pretrigger_records), encoding="utf-8",
     )
-    status_path, events_path = find_debugfs_ring_files()
+    gpu = manifest.get("gpu")
+    expected_bdf = gpu.get("pci_bdf") if isinstance(gpu, dict) else None
+    if not isinstance(expected_bdf, str):
+        raise ReproducerError("deployment manifest lacks the pinned Nouveau PCI BDF")
+    status_path, events_path = find_debugfs_ring_files(expected_bdf)
     try:
         sample_delay = float(workload.get("ring_headroom_sample_seconds", 1.0))
     except (TypeError, ValueError) as exc:
@@ -438,6 +475,8 @@ def execute(args: argparse.Namespace) -> int:
     invocation = {
         "boot_id": boot_id,
         "display": display,
+        "bar2_ring_status_path": str(status_path),
+        "bar2_ring_events_path": str(events_path),
         "argv": argv,
         "xrdp_profile": PROFILE.name,
         "xrdp_profile_sha256": sha256_file(PROFILE),
