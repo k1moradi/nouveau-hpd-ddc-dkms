@@ -53,8 +53,12 @@ def load_manifest(path: Path) -> dict[str, Any]:
     if "diag_bar2_map" in manifest["nouveau"].get("parameters", {}):
         if not isinstance(manifest.get("module_options"), dict):
             raise ValueError("ambient manifest lacks verified early-load module options")
-        if not isinstance(manifest.get("tools", {}).get("ambient_correlator"), dict):
-            raise ValueError("ambient manifest lacks a pinned ambient correlator")
+        for name in (
+            "ambient_correlator", "ambient_ring_exporter", "ambient_ring_headroom",
+            "xrdp_bar2_reproducer", "xrdp_trigger_profile",
+        ):
+            if not isinstance(manifest.get("tools", {}).get(name), dict):
+                raise ValueError(f"ambient manifest lacks pinned {name}")
     return manifest
 
 
@@ -80,10 +84,14 @@ def verify_execution_identity(
         if sha256_file(actual_path) != item.get("sha256"):
             raise ValueError(f"running {name} SHA-256 mismatch")
     if "diag_bar2_map" in manifest["nouveau"].get("parameters", {}):
-        item = manifest["tools"]["ambient_correlator"]
-        path = Path(item["path"]).resolve(strict=True)
-        if not path.is_file() or sha256_file(path) != item.get("sha256"):
-            raise ValueError("pinned ambient correlator path/hash mismatch")
+        for name in (
+            "ambient_correlator", "ambient_ring_exporter", "ambient_ring_headroom",
+            "xrdp_bar2_reproducer", "xrdp_trigger_profile",
+        ):
+            item = manifest["tools"][name]
+            path = Path(item["path"]).resolve(strict=True)
+            if not path.is_file() or sha256_file(path) != item.get("sha256"):
+                raise ValueError(f"pinned ambient tool path/hash mismatch: {name}")
 
 
 def read_loaded_module_parameter(name: str) -> str:

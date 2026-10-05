@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "workspace": "/home/keivan/xrdp-console",
+  "review_commit": "22da3e098a1bccfe2bbfc3876c8bdca8aa6fcabd",
+  "artifacts": {
+    "python": {
+      "path": "/usr/bin/python3.14",
+      "sha256": "52e0a13e60a981d8c4b6478be2ba5176f69da07948a056bf49cf6f077e30cb41"
+    },
+    "benchmark": {
+      "path": "/home/keivan/xrdp-console/tools/benchmark/xrdp_console_bench.py",
+      "sha256": "3fbfda31957dcd33ccd97bdde8307b5893876cd7c57f532f7bdb616befe2174a"
+    },
+    "gpu_stimulus": {
+      "path": "/home/keivan/xrdp-console/build-direct-console/bin/x11-gpu-stimulus",
+      "sha256": "cea92614796f8c2cdf0b25f3970e62f6ad8f77ff5afe261a32e480335043cd86"
+    },
+    "churn_stimulus": {
+      "path": "/home/keivan/xrdp-console/build-direct-console/bin/x11-latency-stimulus",
+      "sha256": "749ff1d2cd735c35f3acaa9510624e243d1deb2bb9013aac52d0274b4a4a3438"
+    },
+    "pixel_probe": {
+      "path": "/home/keivan/xrdp-console/build-direct-console/bin/x11-pixel-probe",
+      "sha256": "72547bfb17b60179131bc3dc68c192ffc9676fa32491abee1847ad0dace660d3"
+    },
+    "xrdp": {
+      "path": "/home/keivan/xrdp-console/build-direct-console/_deps/xrdp-install/sbin/xrdp",
+      "sha256": "76fc0e594d6429f0d47a4e8ff654202038b5eefd6e7008f3ffd324ccb8b66871"
+    },
+    "xrdp_chansrv": {
+      "path": "/home/keivan/xrdp-console/build-direct-console/_deps/xrdp-install/sbin/xrdp-chansrv",
+      "sha256": "62a5c43fe27ebeb17449167da0696a1d2fadbd65ba0a3e7b2e45d56407d6a38c"
+    },
+    "libvnc": {
+      "path": "/home/keivan/xrdp-console/build-direct-console/_deps/xrdp-install/lib/xrdp/libvnc.so",
+      "sha256": "3026df88b3cc4790a553351d965b9eeafb9793dcdf714b5bd9c51f7675680c79"
+    },
+    "x11vnc": {
+      "path": "/usr/bin/x11vnc",
+      "sha256": "35b7306bb13a4115118500ea7db2ee333eef4a6a0a3d9252a469ab8fe8d170d4"
+    },
+    "freerdp": {
+      "path": "/usr/bin/xfreerdp",
+      "sha256": "e8699b634febc28149f3699c6e8ce120779f100d58b6b04695d0716d6b6e6692"
+    },
+    "xvfb": {
+      "path": "/usr/bin/Xvfb",
+      "sha256": "0f3651d7115c354cdef742a1ad609d874e4dbae651bae2976e061aeeaf4042c8"
+    },
+    "xwininfo": {
+      "path": "/usr/bin/xwininfo",
+      "sha256": "9b7525616998669b8971dffc118607f2338440cc4489eba05e88b59c0a3d89e4"
+    },
+    "xset": {
+      "path": "/usr/bin/xset",
+      "sha256": "4a3dcebef8769e5dd9692ed0b088eb2afc572ff0c7dfadf64c0ab931a0eafae4"
+    },
+    "v6_v4_proxy": {
+      "path": "/home/keivan/xrdp-console/tools/benchmark/rfb_v6_v4_proxy.py",
+      "sha256": "d5fd9b957cd23f52282af487383991b6b66211ed6ea5fbfd471ef7893fb412aa"
+    }
+  },
+  "workload": {
+    "backend": "vnc",
+    "transport": "rdp",
+    "mode": "graphics-under-churn",
+    "network_mode": "localhost",
+    "pipeline": "gfx",
+    "fps": 30,
+    "duration_seconds": 20,
+    "repetitions": 1,
+    "width": 1024,
+    "height": 640,
+    "enable_gfx_for_vnc": true,
+    "minimum_ring_headroom": 30000,
+    "stop_on_first_kernel_hard_stop": true
+  }
+}

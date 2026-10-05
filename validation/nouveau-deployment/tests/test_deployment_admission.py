@@ -187,10 +187,24 @@ class AdmissionTests(unittest.TestCase):
             "path": "/repo/ambient-correlator.py",
             "sha256": "a" * 64,
         }
+        for name, digest in (
+            ("ambient_ring_exporter", "b"),
+            ("ambient_ring_headroom", "c"),
+            ("xrdp_bar2_reproducer", "d"),
+            ("xrdp_trigger_profile", "e"),
+        ):
+            manifest["tools"][name] = {
+                "path": f"/repo/{name}.py",
+                "sha256": digest * 64,
+            }
         snapshot["module_parameters"] = {"diag_bar2_map": "Y", "diag_ctxsw": "N"}
         snapshot["module_options_file_sha256"] = "9" * 64
         snapshot["embedded_module_options"] = options_entries
         snapshot["tool_hashes"]["ambient_correlator"] = "a" * 64
+        snapshot["tool_hashes"]["ambient_ring_exporter"] = "b" * 64
+        snapshot["tool_hashes"]["ambient_ring_headroom"] = "c" * 64
+        snapshot["tool_hashes"]["xrdp_bar2_reproducer"] = "d" * 64
+        snapshot["tool_hashes"]["xrdp_trigger_profile"] = "e" * 64
         snapshot["bar2_pte_count"] = 1
         snapshot["hard_stops"] = ["BAR2/HOST_CPU/PTE"]
         snapshot["ambient_fault_correlation_parseable"] = True

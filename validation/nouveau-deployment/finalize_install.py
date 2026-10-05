@@ -247,17 +247,20 @@ def validate_inputs(
             "0010-drm-nouveau-correlate-instmem-vma-selftest.patch",
             "0011-drm-nouveau-trace-ambient-bar2-lifetimes.patch",
             "0012-drm-nouveau-mark-bar2-teardown-phases.patch",
+            "0013-drm-nouveau-capture-ambient-bar2-events.patch",
         }
         if set(build.get("patch_sha256", {})) != expected_patch_names:
-            raise ValueError("ambient build manifest does not pin exactly patches 0009-0012")
+            raise ValueError("ambient build manifest does not pin exactly patches 0009-0013")
         markers = set(build.get("diagnostic_markers", []))
         if not {
             "NOUVEAU_DIAG_BAR2_MAP",
             "NOUVEAU_DIAG_BAR2_RESET",
             "OBJECT_IOUNMAP_BEGIN",
             "OBJECT_VMM_PUT_BEGIN",
+            "NOUVEAU_DIAG_BAR2_RING_EVENT",
+            "NOUVEAU_DIAG_BAR2_RING_STATUS",
         } <= markers:
-            raise ValueError("ambient module build lacks BAR2 teardown phase markers")
+            raise ValueError("ambient module build lacks BAR2 ring/teardown markers")
     if build.get("srcversion") != plan.get("expected_srcversion"):
         raise ValueError("build srcversion does not match deployment plan")
     if build.get("vermagic") != plan.get("expected_vermagic"):
@@ -293,8 +296,11 @@ def validate_inputs(
         "admission_check", "deployment_finalizer", "retained_module_builder",
     } <= tools.keys():
         raise ValueError("deployment plan lacks one or more required pinned tools")
-    if "diag_bar2_map" in params and "ambient_correlator" not in tools:
-        raise ValueError("ambient deployment plan lacks the ambient correlator")
+    if "diag_bar2_map" in params and not {
+        "ambient_correlator", "ambient_ring_exporter", "ambient_ring_headroom",
+        "xrdp_bar2_reproducer", "xrdp_trigger_profile",
+    } <= tools.keys():
+        raise ValueError("ambient deployment plan lacks ring or xrdp trigger tools")
     for name, item in tools.items():
         if not isinstance(item, dict):
             raise ValueError(f"invalid pinned tool record {name}")
@@ -742,6 +748,9 @@ def build_final_manifest(
             ),
             "patch_0012_sha256": build["patch_sha256"].get(
                 "0012-drm-nouveau-mark-bar2-teardown-phases.patch"
+            ),
+            "patch_0013_sha256": build["patch_sha256"].get(
+                "0013-drm-nouveau-capture-ambient-bar2-events.patch"
             ),
         },
         "nouveau": {

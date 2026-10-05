@@ -483,6 +483,8 @@ class FinalManifestTests(unittest.TestCase):
                 "va_export_driver_dso",
                 "mesa_ab_manifest", "mesa_nvif_diagnostic_patch",
                 "admission_check", "deployment_finalizer", "retained_module_builder",
+                "ambient_correlator", "ambient_ring_exporter", "ambient_ring_headroom",
+                "xrdp_bar2_reproducer", "xrdp_trigger_profile",
             )
             for name in required_tools:
                 path = root / f"{name}.bin"
@@ -538,7 +540,7 @@ class FinalManifestTests(unittest.TestCase):
                 "diag_ctxsw": "N",
             }
             with self.assertRaisesRegex(
-                ValueError, "ambient build manifest does not pin exactly patches 0009-0012"
+                ValueError, "ambient build manifest does not pin exactly patches 0009-0013"
             ):
                 FINALIZER.validate_inputs(build, ambient_plan, raw_module)
 
@@ -547,6 +549,7 @@ class FinalManifestTests(unittest.TestCase):
                 "0010-drm-nouveau-correlate-instmem-vma-selftest.patch",
                 "0011-drm-nouveau-trace-ambient-bar2-lifetimes.patch",
                 "0012-drm-nouveau-mark-bar2-teardown-phases.patch",
+                "0013-drm-nouveau-capture-ambient-bar2-events.patch",
             )
             build["patch_sha256"] = {
                 name: str(index) * 64
@@ -554,7 +557,7 @@ class FinalManifestTests(unittest.TestCase):
             }
             ambient_plan["patch_sha256"] = build["patch_sha256"]
             with self.assertRaisesRegex(
-                ValueError, "ambient module build lacks BAR2 teardown phase markers"
+                ValueError, "ambient module build lacks BAR2 ring/teardown markers"
             ):
                 FINALIZER.validate_inputs(build, ambient_plan, raw_module)
 
@@ -638,6 +641,9 @@ class FinalManifestTests(unittest.TestCase):
             build["patch_sha256"][
                 "0012-drm-nouveau-mark-bar2-teardown-phases.patch"
             ] = "e" * 64
+            build["patch_sha256"][
+                "0013-drm-nouveau-capture-ambient-bar2-events.patch"
+            ] = "f" * 64
             plan["review_head"] = "e" * 40
             plan["module_parameters"] = {"diag_bar2_map": "Y", "diag_ctxsw": "N"}
             plan["module_options"] = {
@@ -680,6 +686,9 @@ class FinalManifestTests(unittest.TestCase):
             )
             self.assertEqual(
                 ambient_result["source"]["patch_0012_sha256"], "e" * 64
+            )
+            self.assertEqual(
+                ambient_result["source"]["patch_0013_sha256"], "f" * 64
             )
             self.assertEqual(
                 ambient_result["module_options"]["content_sha256"], option_hash
