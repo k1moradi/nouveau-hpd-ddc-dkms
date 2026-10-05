@@ -37,7 +37,7 @@ class AmbientRingPatchContractTests(unittest.TestCase):
         self.assertNotIn("ffplay", self.additions.lower())
 
     def test_ring_is_preallocated_only_when_diagnostic_is_enabled(self):
-        self.assertIn("#define NVKM_BAR2_DIAG_RING_ORDER 17", self.additions)
+        self.assertIn("#define NVKM_BAR2_DIAG_RING_ORDER 18", self.additions)
         self.assertIn("#define NVKM_BAR2_DIAG_RING_SIZE BIT(NVKM_BAR2_DIAG_RING_ORDER)", self.additions)
         self.assertIn("kvcalloc(NVKM_BAR2_DIAG_RING_SIZE", self.additions)
         self.assertIn("if (!nvkm_bar2_diag_enabled())", self.additions)

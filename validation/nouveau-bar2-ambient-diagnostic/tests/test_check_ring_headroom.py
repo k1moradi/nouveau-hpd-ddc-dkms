@@ -15,7 +15,7 @@ SPEC.loader.exec_module(CHECKER)
 def status(
     *,
     enabled: int = 1,
-    capacity: int = 131_072,
+    capacity: int = 262_144,
     head_before: int = 10_000,
     head_after: int = 10_000,
     dropped_before: int = 0,
@@ -33,11 +33,11 @@ class RingHeadroomTests(unittest.TestCase):
     def test_admits_stable_ring_with_at_least_minimum_headroom(self):
         result = CHECKER.check_status(status())
         self.assertTrue(result["trigger_eligible"])
-        self.assertEqual(result["free"], 121_072)
+        self.assertEqual(result["free"], 252_144)
 
     def test_rejects_ring_below_minimum_headroom(self):
         with self.assertRaisesRegex(CHECKER.RingHeadroomError, "need at least"):
-            CHECKER.check_status(status(head_before=101_073, head_after=101_073))
+            CHECKER.check_status(status(head_before=232_145, head_after=232_145))
 
     def test_rejects_disabled_ring(self):
         with self.assertRaisesRegex(CHECKER.RingHeadroomError, "not enabled"):
@@ -64,7 +64,7 @@ class RingHeadroomTests(unittest.TestCase):
 
     def test_rejects_unknown_duplicate_and_multiline_status(self):
         malformed = (
-            status().replace("capacity=131072", "capacity=131072 extra=1"),
+            status().replace("capacity=262144", "capacity=262144 extra=1"),
             status() + status(),
             "NOUVEAU_DIAG_BAR2_RING_STATUS enabled=1 capacity=8 head=0 dropped=0\n",
         )
@@ -110,9 +110,9 @@ class RingHeadroomTests(unittest.TestCase):
         ):
             CHECKER.check_sampled_headroom(
                 [
-                    (0.0, status(head_before=35_000, head_after=35_000)),
-                    (1.0, status(head_before=35_500, head_after=35_500)),
-                    (2.0, status(head_before=36_000, head_after=36_000)),
+                    (0.0, status(head_before=180_000, head_after=180_000)),
+                    (1.0, status(head_before=180_500, head_after=180_500)),
+                    (2.0, status(head_before=181_000, head_after=181_000)),
                 ],
                 projection_seconds=60,
                 expected_trigger_events=60_000,
@@ -163,9 +163,9 @@ class RingHeadroomTests(unittest.TestCase):
 
     def test_explicit_trigger_budget_is_included_in_required_capacity(self):
         samples = [
-            (0.0, status(head_before=10_000, head_after=10_000)),
-            (1.0, status(head_before=10_010, head_after=10_010)),
-            (2.0, status(head_before=10_020, head_after=10_020)),
+            (0.0, status(head_before=150_000, head_after=150_000)),
+            (1.0, status(head_before=150_010, head_after=150_010)),
+            (2.0, status(head_before=150_020, head_after=150_020)),
         ]
         with self.assertRaisesRegex(CHECKER.RingHeadroomError, "projected requirement"):
             CHECKER.check_sampled_headroom(

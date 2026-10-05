@@ -73,7 +73,7 @@
     "height": 640,
     "enable_gfx_for_vnc": true,
     "expected_trigger_events": 65536,
-    "trigger_event_budget_note": "Reserved half of the order-17 ring; unmeasured conservative admission budget, not an observed upper bound.",
+    "trigger_event_budget_note": "Reserved one quarter of the order-18 ring; unmeasured conservative admission budget, not an observed upper bound.",
     "minimum_ring_headroom": 30000,
     "ring_headroom_sample_seconds": 1.0,
     "ring_headroom_safety_factor": 1.5,

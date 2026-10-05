@@ -88,7 +88,7 @@ def fixtures():
 class AdmissionTests(unittest.TestCase):
     def test_ambient_ring_status_parser_requires_one_stable_schema_line(self):
         status = (
-            "NOUVEAU_DIAG_BAR2_RING_STATUS enabled=1 capacity=131072 "
+            "NOUVEAU_DIAG_BAR2_RING_STATUS enabled=1 capacity=262144 "
             "head_before=42 head_after=42 dropped_before=0 dropped_after=0\n"
         )
         parsed = ADMISSION.parse_ambient_ring_status(status)
@@ -96,7 +96,7 @@ class AdmissionTests(unittest.TestCase):
             "valid": True,
             "detail": "recognized ring status schema",
             "enabled": True,
-            "capacity": 131072,
+            "capacity": 262144,
             "head": 42,
             "dropped": 0,
             "stable": True,
@@ -107,7 +107,7 @@ class AdmissionTests(unittest.TestCase):
         self.assertFalse(ADMISSION.parse_ambient_ring_status(status + status)["valid"])
         self.assertFalse(ADMISSION.parse_ambient_ring_status("unknown\n")["valid"])
         self.assertFalse(ADMISSION.parse_ambient_ring_status(
-            status.replace("capacity=131072", "capacity=0")
+            status.replace("capacity=262144", "capacity=0")
         )["valid"])
 
     def test_ambient_workload_admission_rejects_bad_ring_state(self):
@@ -125,7 +125,7 @@ class AdmissionTests(unittest.TestCase):
             "valid": True,
             "detail": "recognized ring status schema",
             "enabled": True,
-            "capacity": 131072,
+            "capacity": 262144,
             "head": 42,
             "dropped": 0,
             "stable": True,
@@ -134,7 +134,7 @@ class AdmissionTests(unittest.TestCase):
 
         cases = (
             ({"dropped": 1}, "ambient BAR2 ring has dropped 1 events"),
-            ({"head": 131073}, "ambient BAR2 ring head exceeds capacity"),
+            ({"head": 262145}, "ambient BAR2 ring head exceeds capacity"),
             ({"stable": False}, "ambient BAR2 ring status changed while sampled"),
             ({"enabled": False}, "ambient BAR2 ring is not enabled"),
             ({"valid": False, "detail": "test malformed"}, "ambient BAR2 ring status is not valid"),
