@@ -21,6 +21,11 @@ from finalize_install import embedded_module_options
 
 ROOT = Path(__file__).resolve().parents[2]
 PCI_BDF = re.compile(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]")
+AMBIENT_RING_STATUS = re.compile(
+    r"NOUVEAU_DIAG_BAR2_RING_STATUS enabled=(\d+) capacity=(\d+) "
+    r"head_before=(\d+) head_after=(\d+) "
+    r"dropped_before=(\d+) dropped_after=(\d+)"
+)
 sys.path.insert(0, str(ROOT / "validation/detached-mpv-supervisor"))
 from bar2_baseline import matching_lines  # noqa: E402
 from detached_mpv_supervisor import (  # noqa: E402
@@ -132,6 +137,73 @@ def read_loaded_module_parameter(name: str) -> str:
     else:
         result = command(["sudo", "-n", "/usr/bin/cat", str(path)], timeout=5)
     return result.stdout.strip() if result.returncode == 0 else "MISSING"
+
+
+def parse_ambient_ring_status(payload: str) -> dict[str, Any]:
+    lines = [line.strip() for line in payload.splitlines() if line.strip()]
+    if len(lines) != 1:
+        return {"valid": False, "detail": "ring status must contain one nonempty line"}
+    match = AMBIENT_RING_STATUS.fullmatch(lines[0])
+    if match is None:
+        return {"valid": False, "detail": "ring status schema is unknown or malformed"}
+    enabled, capacity, head_before, head_after, dropped_before, dropped_after = (
+        int(value) for value in match.groups()
+    )
+    if enabled not in (0, 1) or capacity <= 0:
+        return {"valid": False, "detail": "ring enabled/capacity values are invalid"}
+    if min(head_before, head_after, dropped_before, dropped_after) < 0:
+        return {"valid": False, "detail": "ring counters must be nonnegative"}
+    stable = head_before == head_after and dropped_before == dropped_after
+    return {
+        "valid": True,
+        "detail": "recognized ring status schema",
+        "enabled": enabled == 1,
+        "capacity": capacity,
+        "head": head_after,
+        "dropped": dropped_after,
+        "stable": stable,
+    }
+
+
+def collect_ambient_ring_status(manifest: dict[str, Any]) -> dict[str, Any]:
+    if "diag_bar2_map" not in manifest["nouveau"].get("parameters", {}):
+        return {"valid": True, "detail": "ambient ring not required"}
+    gpu = manifest.get("gpu")
+    expected_bdf = gpu.get("pci_bdf") if isinstance(gpu, dict) else None
+    if not isinstance(expected_bdf, str) or PCI_BDF.fullmatch(expected_bdf) is None:
+        return {"valid": False, "detail": "pinned GPU BDF is missing or malformed"}
+
+    primary_minors: list[int] = []
+    for card in sorted(Path("/sys/class/drm").glob("card[0-9]*")):
+        if re.fullmatch(r"card[0-9]+", card.name) is None:
+            continue
+        try:
+            bdf = (card / "device").resolve(strict=True).name
+            dev_text = (card / "dev").read_text(encoding="ascii").strip()
+        except OSError:
+            continue
+        if bdf.lower() != expected_bdf.lower():
+            continue
+        dev_match = re.fullmatch(r"([0-9]+):([0-9]+)", dev_text)
+        if dev_match is None or int(dev_match.group(1)) != 226:
+            return {"valid": False, "detail": f"invalid DRM primary device number for {card}"}
+        primary_minors.append(int(dev_match.group(2)))
+    if len(primary_minors) != 1:
+        return {
+            "valid": False,
+            "detail": f"expected one primary DRM card for {expected_bdf}, found {len(primary_minors)}",
+        }
+
+    status_path = Path("/sys/kernel/debug/dri") / str(primary_minors[0]) / "ambient_bar2_status"
+    argv = ["/usr/bin/cat", str(status_path)]
+    if os.geteuid() != 0:
+        argv = ["sudo", "-n", *argv]
+    result = command(argv, timeout=5)
+    if result.returncode:
+        return {"valid": False, "detail": f"cannot read {status_path}: {result.stderr.strip()}"}
+    parsed = parse_ambient_ring_status(result.stdout)
+    parsed["path"] = str(status_path)
+    return parsed
 
 
 def parse_ambient_journal(
@@ -365,6 +437,7 @@ def collect_snapshot(manifest: dict[str, Any]) -> dict[str, Any]:
         ambient_parseable, ambient_report, ambient_parse_detail = parse_ambient_journal(
             kernel_journal_payload, manifest, boot_id
         )
+    ambient_ring_status = collect_ambient_ring_status(manifest)
 
     mesa_hashes: dict[str, str] = {}
     for variant, item in manifest["mesa"]["variants"].items():
@@ -424,6 +497,7 @@ def collect_snapshot(manifest: dict[str, Any]) -> dict[str, Any]:
         "ambient_fault_correlation_parseable": ambient_parseable,
         "ambient_fault_correlation_report": ambient_report,
         "ambient_fault_correlation_detail": ambient_parse_detail,
+        "ambient_ring_status": ambient_ring_status,
         "hard_stops": hard_stops,
         "desktop_errors": session_errors(),
         "players": current_players(),
@@ -482,6 +556,24 @@ def evaluate_snapshot(manifest: dict[str, Any], snapshot: dict[str, Any]) -> lis
         reasons.append("kernel journal boot identity not proven")
     if snapshot.get("bar2_pte_count") != 0:
         reasons.append(f"BAR2/HOST_CPU/PTE count is {snapshot.get('bar2_pte_count')!r}")
+    if "diag_bar2_map" in module.get("parameters", {}):
+        ring = snapshot.get("ambient_ring_status")
+        if not isinstance(ring, dict) or not ring.get("valid"):
+            detail = ring.get("detail", "missing ring status") if isinstance(ring, dict) else "missing ring status"
+            reasons.append(f"ambient BAR2 ring status is not valid: {detail}")
+        else:
+            if not ring.get("stable"):
+                reasons.append("ambient BAR2 ring status changed while sampled")
+            if not ring.get("enabled"):
+                reasons.append("ambient BAR2 ring is not enabled")
+            if ring.get("capacity", 0) <= 0:
+                reasons.append("ambient BAR2 ring capacity is invalid")
+            if ring.get("head", 0) > ring.get("capacity", 0):
+                reasons.append("ambient BAR2 ring head exceeds capacity")
+            if ring.get("dropped") != 0:
+                reasons.append(
+                    f"ambient BAR2 ring has dropped {ring.get('dropped')!r} events"
+                )
     if snapshot.get("hard_stops"):
         reasons.append("current-boot hard-stop signatures are present")
     if snapshot.get("desktop_errors"):

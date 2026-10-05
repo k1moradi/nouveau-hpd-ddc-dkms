@@ -86,6 +86,69 @@ def fixtures():
 
 
 class AdmissionTests(unittest.TestCase):
+    def test_ambient_ring_status_parser_requires_one_stable_schema_line(self):
+        status = (
+            "NOUVEAU_DIAG_BAR2_RING_STATUS enabled=1 capacity=65536 "
+            "head_before=42 head_after=42 dropped_before=0 dropped_after=0\n"
+        )
+        parsed = ADMISSION.parse_ambient_ring_status(status)
+        self.assertEqual(parsed, {
+            "valid": True,
+            "detail": "recognized ring status schema",
+            "enabled": True,
+            "capacity": 65536,
+            "head": 42,
+            "dropped": 0,
+            "stable": True,
+        })
+
+        changing = status.replace("head_after=42", "head_after=43")
+        self.assertFalse(ADMISSION.parse_ambient_ring_status(changing)["stable"])
+        self.assertFalse(ADMISSION.parse_ambient_ring_status(status + status)["valid"])
+        self.assertFalse(ADMISSION.parse_ambient_ring_status("unknown\n")["valid"])
+        self.assertFalse(ADMISSION.parse_ambient_ring_status(
+            status.replace("capacity=65536", "capacity=0")
+        )["valid"])
+
+    def test_ambient_workload_admission_rejects_bad_ring_state(self):
+        manifest, snapshot = fixtures()
+        manifest["nouveau"]["parameters"] = {
+            "diag_bar2_map": "Y",
+            "diag_ctxsw": "N",
+        }
+        manifest["gpu"] = {"pci_bdf": "0000:01:00.0"}
+        snapshot["module_parameters"] = {
+            "diag_bar2_map": "Y",
+            "diag_ctxsw": "N",
+        }
+        snapshot["ambient_ring_status"] = {
+            "valid": True,
+            "detail": "recognized ring status schema",
+            "enabled": True,
+            "capacity": 65536,
+            "head": 42,
+            "dropped": 0,
+            "stable": True,
+        }
+        self.assertEqual(ADMISSION.evaluate_snapshot(manifest, snapshot), [])
+
+        cases = (
+            ({"dropped": 1}, "ambient BAR2 ring has dropped 1 events"),
+            ({"head": 65537}, "ambient BAR2 ring head exceeds capacity"),
+            ({"stable": False}, "ambient BAR2 ring status changed while sampled"),
+            ({"enabled": False}, "ambient BAR2 ring is not enabled"),
+            ({"valid": False, "detail": "test malformed"}, "ambient BAR2 ring status is not valid"),
+        )
+        for changes, expected in cases:
+            with self.subTest(changes=changes):
+                sample = dict(snapshot)
+                sample["ambient_ring_status"] = {
+                    **snapshot["ambient_ring_status"],
+                    **changes,
+                }
+                reasons = ADMISSION.evaluate_snapshot(manifest, sample)
+                self.assertTrue(any(expected in reason for reason in reasons), reasons)
+
     def test_bound_nouveau_pci_scan_ignores_non_bdf_entries(self):
         with tempfile.TemporaryDirectory(prefix="nouveau-pci-functions-") as temporary:
             root = Path(temporary)
