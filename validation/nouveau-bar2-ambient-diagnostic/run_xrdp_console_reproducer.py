@@ -337,6 +337,32 @@ def read_root_debugfs(path: Path) -> str:
     return result.stdout
 
 
+def admission_command(manifest_path: Path, display: str) -> list[str]:
+    """Run protected provenance checks as root, keeping the benchmark unprivileged."""
+    checker = [
+        sys.executable, "-B", str(ADMISSION), "--manifest", str(manifest_path),
+    ]
+    if os.geteuid() == 0:
+        return checker
+
+    environment = {
+        "DISPLAY": display,
+        "PYTHONDONTWRITEBYTECODE": "1",
+    }
+    for name in (
+        "XAUTHORITY", "XDG_SESSION_ID", "XDG_RUNTIME_DIR",
+        "DBUS_SESSION_BUS_ADDRESS",
+    ):
+        value = os.environ.get(name)
+        if value:
+            environment[name] = value
+    return [
+        "sudo", "-n", "env",
+        *(f"{name}={value}" for name, value in sorted(environment.items())),
+        *checker,
+    ]
+
+
 def capture_root_debugfs(path: Path, output: Path, *, timeout: float = 180) -> None:
     with output.open("wb") as stream:
         result = subprocess.run(
@@ -477,9 +503,9 @@ def execute(args: argparse.Namespace) -> int:
     cursor = parse_cursor(cursor_result.stdout)
     (run_dir / "starting-journal-cursor.txt").write_text(cursor + "\n", encoding="ascii")
 
-    admission = run_command([
-        sys.executable, str(ADMISSION), "--manifest", str(manifest_path),
-    ], timeout=180)
+    admission = run_command(
+        admission_command(manifest_path, display), timeout=180,
+    )
     (run_dir / "admission.log").write_text(
         admission.stdout + admission.stderr, encoding="utf-8",
     )

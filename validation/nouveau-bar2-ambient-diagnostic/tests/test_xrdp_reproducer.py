@@ -33,6 +33,44 @@ def journal_line(message: str, *, boot: str = BOOT, transport: str = "kernel") -
 
 
 class XrdpReproducerTests(unittest.TestCase):
+    def test_admission_runs_unprivileged_invocation_via_sudo_with_session_identity(self):
+        session_environment = {
+            "XAUTHORITY": "/run/sddm/xauth_test",
+            "XDG_SESSION_ID": "4",
+            "XDG_RUNTIME_DIR": "/run/user/1000",
+            "DBUS_SESSION_BUS_ADDRESS": "unix:path=/run/user/1000/bus",
+        }
+        with (
+            mock.patch.object(RUNNER.os, "geteuid", return_value=1000),
+            mock.patch.dict(RUNNER.os.environ, session_environment, clear=True),
+        ):
+            argv = RUNNER.admission_command(Path("/tmp/manifest.json"), ":0")
+
+        self.assertEqual(argv[:3], ["sudo", "-n", "env"])
+        self.assertIn("DISPLAY=:0", argv)
+        self.assertIn("PYTHONDONTWRITEBYTECODE=1", argv)
+        for name, value in session_environment.items():
+            self.assertIn(f"{name}={value}", argv)
+        self.assertEqual(
+            argv[-5:],
+            [
+                sys.executable, "-B", str(RUNNER.ADMISSION),
+                "--manifest", "/tmp/manifest.json",
+            ],
+        )
+
+    def test_admission_running_as_root_does_not_nest_sudo(self):
+        with mock.patch.object(RUNNER.os, "geteuid", return_value=0):
+            argv = RUNNER.admission_command(Path("/tmp/manifest.json"), ":0")
+
+        self.assertEqual(
+            argv,
+            [
+                sys.executable, "-B", str(RUNNER.ADMISSION),
+                "--manifest", "/tmp/manifest.json",
+            ],
+        )
+
     def _ring_tree(self, root: Path) -> tuple[Path, Path]:
         drm_root = root / "sys/class/drm"
         debugfs_root = root / "sys/kernel/debug/dri"
