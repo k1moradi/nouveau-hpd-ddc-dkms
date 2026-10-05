@@ -78,6 +78,75 @@ class RingHeadroomTests(unittest.TestCase):
         with self.assertRaisesRegex(CHECKER.RingHeadroomError, "cannot be negative"):
             CHECKER.check_status(status(), minimum_free=-1)
 
+    def test_sampled_headroom_projects_observed_ambient_rate(self):
+        result = CHECKER.check_sampled_headroom(
+            [
+                (0.0, status(head_before=10_000, head_after=10_000)),
+                (1.0, status(head_before=10_020, head_after=10_020)),
+                (2.0, status(head_before=10_120, head_after=10_120)),
+            ],
+            projection_seconds=60,
+            minimum_free=1_000,
+            safety_margin=50,
+        )
+        self.assertEqual(result["estimated_events_per_second"], 100)
+        self.assertEqual(result["interval_event_rates"], [20, 100])
+        self.assertEqual(result["rate_reserve"], 9_000)
+        self.assertEqual(result["required_free"], 9_050)
+        self.assertTrue(result["trigger_eligible"])
+
+    def test_sampled_headroom_rejects_when_rate_will_consume_remaining_capacity(self):
+        with self.assertRaisesRegex(
+            CHECKER.RingHeadroomError, "projected requirement",
+        ):
+            CHECKER.check_sampled_headroom(
+                [
+                    (0.0, status(head_before=35_000, head_after=35_000)),
+                    (1.0, status(head_before=35_500, head_after=35_500)),
+                    (2.0, status(head_before=36_000, head_after=36_000)),
+                ],
+                projection_seconds=60,
+                minimum_free=1_000,
+                safety_margin=0,
+            )
+
+    def test_sampled_headroom_rejects_dropped_events_or_invalid_clock(self):
+        with self.assertRaisesRegex(CHECKER.RingHeadroomError, "already dropped"):
+            CHECKER.check_sampled_headroom(
+                [
+                    (0.0, status()),
+                    (1.0, status(dropped_before=1, dropped_after=1)),
+                    (2.0, status()),
+                ],
+                projection_seconds=60,
+            )
+        with self.assertRaisesRegex(CHECKER.RingHeadroomError, "interval"):
+            CHECKER.check_sampled_headroom(
+                [(0.0, status()), (0.0, status()), (1.0, status())],
+                projection_seconds=60,
+            )
+
+    def test_startup_and_shutdown_budget_can_make_projection_fail_closed(self):
+        samples = [
+            (0.0, status(head_before=30_000, head_after=30_000)),
+            (1.0, status(head_before=30_250, head_after=30_250)),
+            (2.0, status(head_before=30_500, head_after=30_500)),
+        ]
+        short = CHECKER.check_sampled_headroom(
+            samples,
+            projection_seconds=80,
+            minimum_free=1_000,
+            safety_margin=0,
+        )
+        self.assertTrue(short["trigger_eligible"])
+        with self.assertRaisesRegex(CHECKER.RingHeadroomError, "projected requirement"):
+            CHECKER.check_sampled_headroom(
+                samples,
+                projection_seconds=100,
+                minimum_free=1_000,
+                safety_margin=0,
+            )
+
 
 if __name__ == "__main__":
     unittest.main()

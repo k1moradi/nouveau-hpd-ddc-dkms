@@ -73,6 +73,12 @@
     "height": 640,
     "enable_gfx_for_vnc": true,
     "minimum_ring_headroom": 30000,
+    "ring_headroom_sample_seconds": 1.0,
+    "ring_headroom_safety_factor": 1.5,
+    "ring_headroom_safety_margin": 5000,
+    "startup_budget_seconds": 20,
+    "post_trigger_capture_seconds": 35,
+    "shutdown_budget_seconds": 10,
     "stop_on_first_kernel_hard_stop": true
   }
 }

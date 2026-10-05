@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 from pathlib import Path
 import re
 from typing import Any
@@ -56,6 +57,72 @@ def check_status(payload: str, minimum_free: int = 30_000) -> dict[str, Any]:
     if not result["trigger_eligible"]:
         raise RingHeadroomError(
             f"ring has {free} free records; need at least {minimum_free}"
+        )
+    return result
+
+
+def check_sampled_headroom(
+    samples: list[tuple[float, str]],
+    *,
+    projection_seconds: float,
+    minimum_free: int = 30_000,
+    safety_factor: float = 1.5,
+    safety_margin: int = 5_000,
+) -> dict[str, Any]:
+    """Admit a trigger only if fixed and observed-rate headroom both fit."""
+    if minimum_free < 0:
+        raise RingHeadroomError("minimum free capacity cannot be negative")
+    if len(samples) < 3:
+        raise RingHeadroomError("at least three ring headroom samples are required")
+    if not math.isfinite(projection_seconds) or projection_seconds <= 0:
+        raise RingHeadroomError("headroom projection horizon must be positive")
+    if not math.isfinite(safety_factor) or safety_factor < 1:
+        raise RingHeadroomError("headroom safety factor must be at least one")
+    if safety_margin < 0:
+        raise RingHeadroomError("headroom safety margin cannot be negative")
+
+    parsed = [
+        (timestamp, check_status(payload, minimum_free=0))
+        for timestamp, payload in samples
+    ]
+    capacity = parsed[0][1]["capacity"]
+    rates: list[float] = []
+    for (time_a, status_a), (time_b, status_b) in zip(parsed, parsed[1:]):
+        elapsed = time_b - time_a
+        if not math.isfinite(time_a) or not math.isfinite(time_b) or elapsed <= 0:
+            raise RingHeadroomError("headroom sample interval must be positive")
+        if status_b["capacity"] != capacity:
+            raise RingHeadroomError("ring capacity changed between headroom samples")
+        event_delta = status_b["head"] - status_a["head"]
+        if event_delta < 0:
+            raise RingHeadroomError("ring head decreased between headroom samples")
+        rates.append(event_delta / elapsed)
+
+    first_time, first = parsed[0]
+    last_time, latest = parsed[-1]
+    rate = max(rates, default=0.0)
+    rate_reserve = math.ceil(rate * projection_seconds * safety_factor)
+    required_free = max(minimum_free, rate_reserve + safety_margin)
+    free = latest["free"]
+    result = {
+        **latest,
+        "first_head": first["head"],
+        "last_head": latest["head"],
+        "sample_count": len(parsed),
+        "sample_window_seconds": last_time - first_time,
+        "interval_event_rates": rates,
+        "new_events_during_sample": latest["head"] - first["head"],
+        "estimated_events_per_second": rate,
+        "projection_seconds": projection_seconds,
+        "safety_factor": safety_factor,
+        "rate_reserve": rate_reserve,
+        "safety_margin": safety_margin,
+        "required_free": required_free,
+    }
+    result["trigger_eligible"] = free >= required_free
+    if not result["trigger_eligible"]:
+        raise RingHeadroomError(
+            f"ring has {free} free records; projected requirement is {required_free}"
         )
     return result
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -29,7 +30,7 @@ sys.path.insert(0, str(DETACHED_SUPERVISOR))
 sys.path.insert(0, str(AMBIENT_DIR))
 
 from detached_mpv_supervisor import stop_reason_for_line  # noqa: E402
-from check_ring_headroom import RingHeadroomError, check_status  # noqa: E402
+from check_ring_headroom import RingHeadroomError, check_sampled_headroom  # noqa: E402
 
 KERNEL_LOG_LOSS = re.compile(
     r"/dev/kmsg buffer overrun,\s*some messages lost", re.IGNORECASE,
@@ -389,10 +390,31 @@ def execute(args: argparse.Namespace) -> int:
         "".join(line + "\n" for line in pretrigger_records), encoding="utf-8",
     )
     status_path, events_path = find_debugfs_ring_files()
-    status_text = read_root_debugfs(status_path)
     try:
-        headroom = check_status(
-            status_text, int(workload.get("minimum_ring_headroom", 30_000)),
+        sample_delay = float(workload.get("ring_headroom_sample_seconds", 1.0))
+    except (TypeError, ValueError) as exc:
+        raise ReproducerError("ring headroom sample interval is not numeric") from exc
+    if not math.isfinite(sample_delay) or sample_delay <= 0 or sample_delay > 5:
+        raise ReproducerError("ring headroom sample interval must be in (0, 5] seconds")
+    samples: list[tuple[float, str]] = []
+    for sample_index in range(3):
+        if sample_index:
+            time.sleep(sample_delay)
+        status_sample = read_root_debugfs(status_path)
+        samples.append((time.monotonic(), status_sample))
+    try:
+        projection_seconds = (
+            float(workload.get("startup_budget_seconds", 20.0))
+            + float(workload["duration_seconds"])
+            + float(workload.get("post_trigger_capture_seconds", FAULT_CLEANUP_SECONDS))
+            + float(workload.get("shutdown_budget_seconds", 10.0))
+        )
+        headroom = check_sampled_headroom(
+            samples,
+            projection_seconds=projection_seconds,
+            minimum_free=int(workload.get("minimum_ring_headroom", 30_000)),
+            safety_factor=float(workload.get("ring_headroom_safety_factor", 1.5)),
+            safety_margin=int(workload.get("ring_headroom_safety_margin", 5_000)),
         )
     except RingHeadroomError as exc:
         raise ReproducerError(f"refusing xrdp trigger: {exc}") from exc
