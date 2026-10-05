@@ -13,6 +13,15 @@ FINALIZER = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(FINALIZER)
 
 
+class DeploymentTemporaryDirectoryTests(unittest.TestCase):
+    def test_large_initramfs_workspace_uses_var_tmp(self):
+        with FINALIZER.deployment_temporary_directory() as temporary:
+            self.assertEqual(
+                Path(temporary).parent.resolve(),
+                Path("/var/tmp").resolve(),
+            )
+
+
 class ManifestWriteTests(unittest.TestCase):
     def test_write_all_handles_one_complete_write(self):
         written = []

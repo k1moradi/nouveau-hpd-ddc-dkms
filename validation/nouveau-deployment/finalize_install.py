@@ -738,6 +738,16 @@ def build_final_manifest(
     return final
 
 
+def deployment_temporary_directory() -> tempfile.TemporaryDirectory[str]:
+    # Initramfs extraction can expand well beyond the compressed image size.
+    # /tmp is a small tmpfs on the deployment host, so keep these potentially
+    # multi-gigabyte verification trees on the root filesystem instead.
+    return tempfile.TemporaryDirectory(
+        prefix="nouveau-deploy-",
+        dir="/var/tmp",
+    )
+
+
 def apply_install(
     *,
     build: dict[str, Any],
@@ -790,7 +800,7 @@ def apply_install(
     target = Path(plan["module_install_path"])
     target.parent.mkdir(parents=True, exist_ok=True)
     initramfs = Path(plan["initramfs_path"])
-    with tempfile.TemporaryDirectory(prefix="nouveau-deploy-") as temporary:
+    with deployment_temporary_directory() as temporary:
         root = Path(temporary)
         prepared = root / "nouveau.ko"
         shutil.copy2(raw_module, prepared)
