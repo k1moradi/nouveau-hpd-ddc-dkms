@@ -130,6 +130,19 @@ def parse_module_options(content: str) -> dict[str, str]:
     return parsed
 
 
+def maybe_nouveau_options_fields(line: str) -> list[str] | None:
+    stripped = line.strip()
+    if not stripped or stripped.startswith("#"):
+        return None
+    try:
+        fields = shlex.split(line, comments=True, posix=True)
+    except ValueError as exc:
+        if stripped.split(None, 2)[:2] == ["options", "nouveau"]:
+            raise ValueError("malformed Nouveau module options quoting") from exc
+        return None
+    return fields if fields[:2] == ["options", "nouveau"] else None
+
+
 def validate_module_options(
     params: Any,
     module_options: Any,
@@ -429,10 +442,10 @@ def embedded_module_options(
                 return None
             for line in lines:
                 try:
-                    fields = shlex.split(line, comments=True, posix=True)
+                    fields = maybe_nouveau_options_fields(line)
                 except ValueError:
                     return None
-                if fields[:2] != ["options", "nouveau"]:
+                if fields is None:
                     continue
                 for item in fields[2:]:
                     if item.count("=") != 1:
@@ -468,10 +481,10 @@ def active_nouveau_option_files(
                 raise RuntimeError(f"cannot inspect modprobe config {path}: {exc}") from exc
             for line in lines:
                 try:
-                    fields = shlex.split(line, comments=True, posix=True)
+                    fields = maybe_nouveau_options_fields(line)
                 except ValueError as exc:
                     raise RuntimeError(f"malformed modprobe config line in {path}") from exc
-                if fields[:2] == ["options", "nouveau"]:
+                if fields is not None:
                     active.add(path.resolve())
                     break
     return active

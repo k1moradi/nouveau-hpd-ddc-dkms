@@ -249,6 +249,41 @@ class EarlyModuleOptionsTests(unittest.TestCase):
             self.assertFalse(target.exists())
             self.assertFalse(backup.exists())
 
+    def test_preflight_ignores_unrelated_multiline_modprobe_directive(self):
+        with tempfile.TemporaryDirectory(prefix="unrelated-modprobe-test-") as temporary:
+            root = Path(temporary)
+            retired = root / "99-old-nouveau.conf"
+            unrelated = root / "iwlwifi.conf"
+            target = root / "99-nouveau-ambient-bar2-0011.conf"
+            backup = root / "retired-options.original"
+            original = b"options nouveau diag_bar2_map=Y obsolete=N diag_ctxsw=N\n"
+            retired.write_bytes(original)
+            unrelated.write_text(
+                """remove iwlwifi \\
+(/sbin/lsmod | grep -o -e ^iwlmvm) \\
+&& /sbin/modprobe -r mac80211
+""",
+                encoding="ascii",
+            )
+            content = "options nouveau diag_bar2_map=Y diag_ctxsw=N\n"
+            plan = {
+                "module_parameters": {"diag_bar2_map": "Y", "diag_ctxsw": "N"},
+                "module_options": {
+                    "path": str(target),
+                    "content": content,
+                    "sha256": FINALIZER.sha256_file_from_bytes(content.encode("ascii")),
+                },
+                "retired_module_options": {
+                    "path": str(retired),
+                    "sha256": FINALIZER.sha256_file_from_bytes(original),
+                    "backup_path": str(backup),
+                },
+            }
+            state = FINALIZER.preflight_module_options(
+                plan, root / "deployment-manifest.json", config_directories=[root]
+            )
+            self.assertEqual(state["original_sha"], plan["retired_module_options"]["sha256"])
+
     def test_embedded_module_options_require_exact_bytes_and_parameters(self):
         with tempfile.TemporaryDirectory(prefix="embedded-options-test-") as temporary:
             root = Path(temporary)
@@ -262,6 +297,14 @@ class EarlyModuleOptionsTests(unittest.TestCase):
                 config = extract / "main/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf"
                 config.parent.mkdir(parents=True)
                 config.write_bytes(payload)
+                unrelated = extract / "main/etc/modprobe.d/iwlwifi.conf"
+                unrelated.write_text(
+                    """remove iwlwifi \\
+(/sbin/lsmod | grep -o -e ^iwlmvm) \\
+&& /sbin/modprobe -r mac80211
+""",
+                    encoding="ascii",
+                )
 
             with patch.object(FINALIZER.subprocess, "run", side_effect=fake_unmkinitramfs):
                 records = FINALIZER.embedded_module_options(
