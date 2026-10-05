@@ -53,6 +53,11 @@ def map_message(
             "VMA_EVICTING": "resident",
             "VMA_EVICTED": "evicted",
             "OBJECT_DESTROYING": "resident" if length else "not_established",
+            "OBJECT_IOUNMAP_BEGIN": "resident",
+            "OBJECT_IOUNMAP_DONE": "resident",
+            "OBJECT_VMM_PUT_BEGIN": "resident",
+            "OBJECT_VMM_PUT_DONE": "destroyed",
+            "OBJECT_VMM_PUT_SKIPPED": "unknown",
             "OBJECT_DESTROYED": "destroyed" if length else "not_established",
         }.get(stage, "not_established")
     if cache_state is None:
@@ -260,6 +265,53 @@ class AmbientCorrelationTests(unittest.TestCase):
         released = result["recently_evicted_ranges"][0]
         self.assertEqual(released["terminal_stage"], "OBJECT_DESTROYED")
         self.assertFalse(released["active_at_fault"])
+
+    def test_fault_during_vmm_put_reports_exact_destruction_phase(self):
+        import tempfile
+        records = active_lifecycle()
+        records.extend([
+            row(map_message(7, 1, "KMAP_LAST_RELEASE", va=0x4000, length=0x1000,
+                            vma_state="resident", cache_state="lru"), 20),
+            row(map_message(8, 1, "OBJECT_DESTROYING", va=0x4000, length=0x1000,
+                            vma_state="resident"), 40),
+            row(map_message(9, 1, "OBJECT_IOUNMAP_BEGIN", va=0x4000, length=0x1000,
+                            vma_state="resident"), 41),
+            row(map_message(10, 1, "OBJECT_IOUNMAP_DONE", va=0x4000, length=0x1000,
+                            vma_state="resident"), 42),
+            row(map_message(11, 1, "OBJECT_VMM_PUT_BEGIN", va=0x4000, length=0x1000,
+                            vma_state="resident"), 43),
+            row(map_message(12, 1, "OBJECT_VMM_PUT_DONE", va=0x4000, length=0x1000,
+                            vma_state="destroyed"), 45),
+            row(map_message(13, 1, "OBJECT_DESTROYED", va=0x4000, length=0x1000,
+                            vma_state="destroyed"), 46),
+        ])
+        records += fault_pair(va=0x4000, mono=44)
+        with tempfile.TemporaryDirectory() as temporary:
+            result = read_result(records, temporary)["faults"][0]
+        self.assertEqual(result["outcome"], "INCONCLUSIVE_VMA_TRANSITION")
+        self.assertEqual(result["resident_candidates"], [])
+        self.assertEqual(result["transition_records"][0]["phase"], "OBJECT_VMM_PUT_BEGIN")
+        self.assertEqual(result["transition_records"][0]["next_stage"], "OBJECT_VMM_PUT_DONE")
+        self.assertEqual(result["transition_records"][0]["start_usec"], 43)
+        self.assertEqual(result["transition_records"][0]["end_usec"], 45)
+
+    def test_new_teardown_phases_require_source_order(self):
+        import tempfile
+        records = active_lifecycle()
+        records.extend([
+            row(map_message(7, 1, "KMAP_LAST_RELEASE", va=0x4000, length=0x1000,
+                            vma_state="resident", cache_state="lru"), 20),
+            row(map_message(8, 1, "OBJECT_DESTROYING", va=0x4000, length=0x1000,
+                            vma_state="resident"), 30),
+            row(map_message(9, 1, "OBJECT_VMM_PUT_BEGIN", va=0x4000, length=0x1000,
+                            vma_state="resident"), 31),
+            row(map_message(10, 1, "OBJECT_DESTROYED", va=0x4000, length=0x1000,
+                            vma_state="destroyed"), 32),
+        ])
+        records += fault_pair(mono=10)
+        with tempfile.TemporaryDirectory() as temporary:
+            with self.assertRaisesRegex(CorrelationInputError, "invalid object teardown phase order"):
+                parse_journal(write_journal(records, temporary))
 
     def test_destroy_with_active_refs_is_reported_as_incomplete(self):
         import tempfile

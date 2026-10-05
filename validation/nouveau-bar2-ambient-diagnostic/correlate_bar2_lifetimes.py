@@ -31,8 +31,19 @@ MAP_STAGES = {
     "MAP_READY", "MAP_FAILED", "MAP_DISCARDED", "MAP_ROLLBACK_BEGIN",
     "MAP_ROLLBACK_DONE", "KMAP_ACTIVE", "KMAP_LAST_RELEASE",
     "BOOT_MAP_PINNED", "VMA_EVICTING", "VMA_EVICTED",
-    "OBJECT_DESTROYING", "OBJECT_DESTROYED",
+    "OBJECT_DESTROYING", "OBJECT_IOUNMAP_BEGIN", "OBJECT_IOUNMAP_DONE",
+    "OBJECT_VMM_PUT_BEGIN", "OBJECT_VMM_PUT_DONE", "OBJECT_VMM_PUT_SKIPPED",
+    "OBJECT_DESTROYED",
 }
+DESTROY_PHASE_NEXT = {
+    "OBJECT_DESTROYING": {"OBJECT_IOUNMAP_BEGIN"},
+    "OBJECT_IOUNMAP_BEGIN": {"OBJECT_IOUNMAP_DONE"},
+    "OBJECT_IOUNMAP_DONE": {"OBJECT_VMM_PUT_BEGIN", "OBJECT_VMM_PUT_SKIPPED"},
+    "OBJECT_VMM_PUT_BEGIN": {"OBJECT_VMM_PUT_DONE"},
+    "OBJECT_VMM_PUT_DONE": set(),
+    "OBJECT_VMM_PUT_SKIPPED": set(),
+}
+DESTROY_PHASE_STAGES = set(DESTROY_PHASE_NEXT) - {"OBJECT_DESTROYING"}
 VMA_STATES = {
     "not_established", "establishing", "resident", "evicted", "destroyed", "unknown",
 }
@@ -533,6 +544,7 @@ class MappingState:
     allocated: bool = False
     destroyed: bool = False
     destroying: bool = False
+    destroy_phase: str | None = None
     kmap_refs_nonzero: bool = False
     kmap_transition_refs: int = 0
     last_kmap_ref_stage: str | None = None
@@ -591,6 +603,10 @@ def _validate_map_records(events: list[MapEvent]) -> None:
             if state.destroyed:
                 raise CorrelationInputError(
                     f"line {event.line}: lifecycle continues after OBJECT_DESTROYED"
+                )
+            if state.destroying and event.stage not in DESTROY_PHASE_STAGES | {"OBJECT_DESTROYED"}:
+                raise CorrelationInputError(
+                    f"line {event.line}: invalid event during object destruction"
                 )
             if event.map_reset_gen is not None and event.map_reset_gen > event.current_reset_gen:
                 raise CorrelationInputError(
@@ -855,13 +871,77 @@ def _validate_map_records(events: list[MapEvent]) -> None:
                     raise CorrelationInputError(f"line {event.line}: invalid destruction VMA state")
                 state.destroying = True
                 state.pending_destroy = True
+                state.destroy_phase = "OBJECT_DESTROYING"
                 state.current_reset_gen = event.current_reset_gen
                 pending_destroy = event
+                continue
+
+            if event.stage in DESTROY_PHASE_STAGES:
+                if not state.destroying or pending_destroy is None:
+                    raise CorrelationInputError(
+                        f"line {event.line}: teardown phase without object destruction"
+                    )
+                if event.stage not in DESTROY_PHASE_NEXT.get(state.destroy_phase or "", set()):
+                    raise CorrelationInputError(
+                        f"line {event.line}: invalid object teardown phase order"
+                    )
+                if (
+                    event.refs != pending_destroy.refs
+                    or event.attempt != 0
+                    or event.cache_state != "none"
+                    or event.access != "none"
+                    or event.map_source != "none"
+                    or event.map_reset_gen != pending_destroy.map_reset_gen
+                    or event.bar2_va != pending_destroy.bar2_va
+                    or event.bar2_len != pending_destroy.bar2_len
+                ):
+                    raise CorrelationInputError(
+                        f"line {event.line}: teardown phase changed object snapshot"
+                    )
+                if event.stage in {
+                    "OBJECT_IOUNMAP_BEGIN", "OBJECT_IOUNMAP_DONE", "OBJECT_VMM_PUT_BEGIN",
+                }:
+                    if event.vma_state != pending_destroy.vma_state or event.rc != 0:
+                        raise CorrelationInputError(
+                            f"line {event.line}: invalid pre-release teardown phase state"
+                        )
+                elif event.stage == "OBJECT_VMM_PUT_DONE":
+                    if event.vma_state != "destroyed" or event.rc != 0:
+                        raise CorrelationInputError(
+                            f"line {event.line}: invalid completed VMM release state"
+                        )
+                    state.vma_state = "destroyed"
+                    state.cache_state = "none"
+                    state.map_reset_gen = event.map_reset_gen
+                    state.last_inactive = {
+                        "allocation_id": allocation_id,
+                        "terminal_stage": event.stage,
+                        "bar2_va": event.bar2_va,
+                        "bar2_len": event.bar2_len,
+                        "map_reset_gen": event.map_reset_gen,
+                        "mono_usec": event.mono_usec,
+                        "line": event.line,
+                    }
+                elif event.stage == "OBJECT_VMM_PUT_SKIPPED":
+                    if event.vma_state != "unknown" or event.rc != -19:
+                        raise CorrelationInputError(
+                            f"line {event.line}: invalid skipped VMM release state"
+                        )
+                    state.vma_state = "unknown"
+                    state.incomplete_reason = "object destruction could not release VMM range"
+                state.destroy_phase = event.stage
+                state.current_reset_gen = event.current_reset_gen
                 continue
 
             if event.stage == "OBJECT_DESTROYED":
                 if not state.destroying or pending_destroy is None:
                     raise CorrelationInputError(f"line {event.line}: object destroyed without valid start")
+                if state.destroy_phase not in {
+                    "OBJECT_DESTROYING", "OBJECT_VMM_PUT_DONE", "OBJECT_VMM_PUT_SKIPPED",
+                }:
+                    raise CorrelationInputError(
+                        f"line {event.line}: object destroyed before teardown phases completed"
+                    )
                 if event.refs != pending_destroy.refs:
                     raise CorrelationInputError(
                         f"line {event.line}: object destruction refcount changed without a kmap edge"
@@ -902,6 +982,7 @@ def _validate_map_records(events: list[MapEvent]) -> None:
                 state.destroyed = True
                 state.destroying = False
                 state.pending_destroy = False
+                state.destroy_phase = None
                 state.current_reset_gen = event.current_reset_gen
                 if event.refs:
                     state.incomplete_reason = "object was destroyed with active kmap refs"
@@ -1057,14 +1138,38 @@ def _state_at_fault(events: list[MapEvent], fault: FaultEvent) -> MappingState:
         elif event.stage == "OBJECT_DESTROYING":
             state.destroying = True
             state.pending_destroy = True
+            state.destroy_phase = event.stage
             state.incomplete_reason = "object destruction is in progress"
             if event.bar2_len:
                 state.bar2_va = event.bar2_va
                 state.bar2_len = event.bar2_len
+        elif event.stage in DESTROY_PHASE_STAGES:
+            state.destroy_phase = event.stage
+            state.incomplete_reason = "object destruction is in progress"
+            if event.bar2_len:
+                state.bar2_va = event.bar2_va
+                state.bar2_len = event.bar2_len
+            if event.stage == "OBJECT_VMM_PUT_DONE":
+                state.vma_state = "destroyed"
+                state.cache_state = "none"
+                state.map_reset_gen = event.map_reset_gen
+                state.last_inactive = {
+                    "allocation_id": event.allocation_id,
+                    "terminal_stage": event.stage,
+                    "bar2_va": event.bar2_va,
+                    "bar2_len": event.bar2_len,
+                    "map_reset_gen": event.map_reset_gen,
+                    "mono_usec": event.mono_usec,
+                    "line": event.line,
+                }
+            elif event.stage == "OBJECT_VMM_PUT_SKIPPED":
+                state.vma_state = "unknown"
+                state.incomplete_reason = "object destruction could not release VMM range"
         elif event.stage == "OBJECT_DESTROYED":
             state.destroying = False
             state.pending_destroy = False
             state.destroyed = True
+            state.destroy_phase = None
             state.vma_state = event.vma_state
             state.cache_state = "none"
             if event.bar2_len:
@@ -1112,6 +1217,11 @@ def _transition_records(parsed: ParsedInput, fault: FaultEvent) -> list[dict[str
     before = [event for event in parsed.maps if _before_fault(event, fault)]
     attempts: dict[tuple[int, int], list[MapEvent]] = {}
     by_id: dict[int, list[MapEvent]] = {}
+    all_by_id: dict[int, list[MapEvent]] = {}
+    for event in parsed.maps:
+        all_by_id.setdefault(event.allocation_id, []).append(event)
+    for records in all_by_id.values():
+        records.sort(key=lambda event: (event.mono_usec, event.line))
     attempt_stages = {
         "MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_VMM_MAP_OK", "MAP_READY",
         "MAP_FAILED", "MAP_DISCARDED", "MAP_ROLLBACK_BEGIN", "MAP_ROLLBACK_DONE",
@@ -1154,13 +1264,23 @@ def _transition_records(parsed: ParsedInput, fault: FaultEvent) -> list[dict[str
         if not records:
             continue
         last = records[-1]
-        if last.stage in {"VMA_EVICTING", "OBJECT_DESTROYING"} and last.bar2_len:
+        if (
+            last.stage == "VMA_EVICTING" or
+            last.stage in {"OBJECT_DESTROYING"} | DESTROY_PHASE_STAGES
+        ) and last.bar2_len:
             if last.bar2_va <= fault.va < last.bar2_va + last.bar2_len:
+                next_event = next((
+                    event for event in all_by_id.get(allocation_id, [])
+                    if not _before_fault(event, fault)
+                ), None)
                 transitions.append({
                     "kind": "vma_eviction" if last.stage == "VMA_EVICTING" else "object_destruction",
+                    "phase": last.stage,
+                    "next_stage": next_event.stage if next_event else None,
                     "allocation_id": allocation_id,
                     "attempt": 0,
                     "start_usec": last.mono_usec,
+                    "end_usec": next_event.mono_usec if next_event else None,
                     "va": f"0x{last.bar2_va:x}",
                     "length": f"0x{last.bar2_len:x}",
                     "event_line": last.line,
