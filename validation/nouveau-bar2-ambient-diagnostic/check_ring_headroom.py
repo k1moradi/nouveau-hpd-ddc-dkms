@@ -65,13 +65,16 @@ def check_sampled_headroom(
     samples: list[tuple[float, str]],
     *,
     projection_seconds: float,
+    expected_trigger_events: int,
     minimum_free: int = 30_000,
     safety_factor: float = 1.5,
     safety_margin: int = 5_000,
 ) -> dict[str, Any]:
-    """Admit a trigger only if fixed and observed-rate headroom both fit."""
+    """Reserve trigger records plus projected ambient growth before admission."""
     if minimum_free < 0:
         raise RingHeadroomError("minimum free capacity cannot be negative")
+    if type(expected_trigger_events) is not int or expected_trigger_events < 0:
+        raise RingHeadroomError("expected trigger event budget must be a non-negative integer")
     if len(samples) < 3:
         raise RingHeadroomError("at least three ring headroom samples are required")
     if not math.isfinite(projection_seconds) or projection_seconds <= 0:
@@ -102,7 +105,10 @@ def check_sampled_headroom(
     last_time, latest = parsed[-1]
     rate = max(rates, default=0.0)
     rate_reserve = math.ceil(rate * projection_seconds * safety_factor)
-    required_free = max(minimum_free, rate_reserve + safety_margin)
+    required_free = max(
+        minimum_free,
+        rate_reserve + expected_trigger_events + safety_margin,
+    )
     free = latest["free"]
     result = {
         **latest,
@@ -116,6 +122,7 @@ def check_sampled_headroom(
         "projection_seconds": projection_seconds,
         "safety_factor": safety_factor,
         "rate_reserve": rate_reserve,
+        "expected_trigger_events": expected_trigger_events,
         "safety_margin": safety_margin,
         "required_free": required_free,
     }

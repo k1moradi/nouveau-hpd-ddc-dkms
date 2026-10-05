@@ -53,7 +53,7 @@ PATCHES = {
     "0012-drm-nouveau-mark-bar2-teardown-phases.patch":
         "b0b549a128a77ade7dbcccd88fcd2d37ce30558fdf23d1a8f4792546c267266b",
     "0013-drm-nouveau-capture-ambient-bar2-events.patch":
-        "3032b540240007a6d6f2fae0bde791f5c7fbac26d8b543379981eddd6915e8a0",
+        "449989e5e198c2957220ea7815575d8238d50e6c23d94145011bf46d439bd034",
 }
 PATCH_ARGUMENTS = tuple(PATCHES)
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]

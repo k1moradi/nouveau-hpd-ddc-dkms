@@ -153,6 +153,15 @@ def benchmark_argv(
     return argv
 
 
+def validate_trigger_event_budget(workload: dict[str, Any]) -> int:
+    value = workload.get("expected_trigger_events")
+    if type(value) is not int or value <= 0:
+        raise ReproducerError(
+            "trigger profile lacks a positive explicit trigger-event budget"
+        )
+    return value
+
+
 def kernel_record_stop_reason(line: str, boot_id: str) -> str | None:
     try:
         record = json.loads(line)
@@ -387,6 +396,7 @@ def execute(args: argparse.Namespace) -> int:
     workload = profile.get("workload")
     if not isinstance(workload, dict) or workload.get("stop_on_first_kernel_hard_stop") is not True:
         raise ReproducerError("trigger profile does not require stop-on-first-hard-stop")
+    expected_trigger_events = validate_trigger_event_budget(workload)
 
     display = os.environ.get("DISPLAY", "")
     if not display:
@@ -449,6 +459,7 @@ def execute(args: argparse.Namespace) -> int:
         headroom = check_sampled_headroom(
             samples,
             projection_seconds=projection_seconds,
+            expected_trigger_events=expected_trigger_events,
             minimum_free=int(workload.get("minimum_ring_headroom", 30_000)),
             safety_factor=float(workload.get("ring_headroom_safety_factor", 1.5)),
             safety_margin=int(workload.get("ring_headroom_safety_margin", 5_000)),

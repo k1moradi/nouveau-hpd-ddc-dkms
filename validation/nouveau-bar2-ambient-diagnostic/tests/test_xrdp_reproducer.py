@@ -147,6 +147,20 @@ class XrdpReproducerTests(unittest.TestCase):
             for name in ("mpv", "ffmpeg", "ffplay", "vainfo")
         ))
 
+    def test_profile_requires_explicit_trigger_event_budget(self):
+        profile = RUNNER.load_json(RUNNER.PROFILE)
+        self.assertEqual(profile["workload"]["expected_trigger_events"], 65_536)
+        for invalid in (None, 0, -1, "65536", True):
+            workload = dict(profile["workload"])
+            if invalid is None:
+                workload.pop("expected_trigger_events")
+            else:
+                workload["expected_trigger_events"] = invalid
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                RUNNER.ReproducerError, "explicit trigger-event budget"
+            ):
+                RUNNER.validate_trigger_event_budget(workload)
+
     def test_profile_cannot_silently_expand_or_change_trigger(self):
         profile = RUNNER.load_json(RUNNER.PROFILE)
         workload = dict(profile["workload"])
