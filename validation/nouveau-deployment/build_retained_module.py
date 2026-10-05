@@ -41,22 +41,20 @@ REQUIRED_MARKERS = (
     "NOUVEAU_DIAG_V3_VMA",
     "NOUVEAU_DIAG_BAR2_MAP",
     "NOUVEAU_DIAG_BAR2_RESET",
-    "NOUVEAU_DIAG_BAR2_CONFIG",
     "OBJECT_IOUNMAP_BEGIN",
     "OBJECT_VMM_PUT_BEGIN",
+    "NOUVEAU_DIAG_BAR2_RING",
     "NOUVEAU_DIAG_BAR2_RING_EVENT",
+    "NOUVEAU_DIAG_BAR2_RING_END",
+    "NOUVEAU_DIAG_BAR2_RING_GAP",
     "ambient_bar2_events",
     "NOUVEAU_DIAG_BAR2_RING_STATUS",
     "ambient_bar2_status",
+    "diag_bar2_map",
 )
 DISABLED_MARKERS = (
-    "NOUVEAU_DIAG_BAR2_CONFIG",
-    "diag_bar2_map_kmap_start",
-    "diag_bar2_map_kmap_end",
-    "NOUVEAU_DIAG_BAR2_RING_EVENT",
-    "ambient_bar2_events",
-    "NOUVEAU_DIAG_BAR2_RING_STATUS",
-    "ambient_bar2_status",
+    *REQUIRED_MARKERS,
+    "nvkm_diag_bar2_map",
 )
 
 

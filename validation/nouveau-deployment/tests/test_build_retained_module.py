@@ -15,6 +15,22 @@ SPEC.loader.exec_module(BUILDER)
 
 
 class PatchInputTests(unittest.TestCase):
+    def test_marker_sets_match_the_ambient_patch_contract(self):
+        self.assertNotIn("NOUVEAU_DIAG_BAR2_CONFIG", BUILDER.REQUIRED_MARKERS)
+        self.assertNotIn("diag_bar2_map_kmap_start", BUILDER.DISABLED_MARKERS)
+        for marker in (
+            "NOUVEAU_DIAG_BAR2_MAP",
+            "NOUVEAU_DIAG_BAR2_RESET",
+            "NOUVEAU_DIAG_BAR2_RING_EVENT",
+            "NOUVEAU_DIAG_BAR2_RING_STATUS",
+            "OBJECT_IOUNMAP_BEGIN",
+            "OBJECT_VMM_PUT_BEGIN",
+            "diag_bar2_map",
+        ):
+            with self.subTest(marker=marker):
+                self.assertIn(marker, BUILDER.REQUIRED_MARKERS)
+                self.assertIn(marker, BUILDER.DISABLED_MARKERS)
+
     def test_builder_pins_patches_from_their_actual_separate_directories(self):
         nvif = (
             ROOT / "validation/nouveau-nvif-duplicate-diagnostic/patches/"
