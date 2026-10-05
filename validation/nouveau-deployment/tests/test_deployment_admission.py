@@ -168,6 +168,116 @@ class AdmissionTests(unittest.TestCase):
         manifest, snapshot = fixtures()
         self.assertEqual(ADMISSION.evaluate_snapshot(manifest, snapshot), [])
 
+    def test_ambient_fault_archive_does_not_admit_workloads(self):
+        manifest, snapshot = fixtures()
+        manifest["nouveau"]["parameters"] = {
+            "diag_bar2_map": "Y",
+            "diag_ctxsw": "N",
+        }
+        options_entries = [{
+            "path_in_initramfs": "main/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf",
+            "sha256": "8" * 64,
+        }]
+        manifest["module_options"] = {
+            "path": "/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf",
+            "content_sha256": "9" * 64,
+            "embedded_initramfs_entries": options_entries,
+        }
+        manifest["tools"]["ambient_correlator"] = {
+            "path": "/repo/ambient-correlator.py",
+            "sha256": "a" * 64,
+        }
+        snapshot["module_parameters"] = {"diag_bar2_map": "Y", "diag_ctxsw": "N"}
+        snapshot["module_options_file_sha256"] = "9" * 64
+        snapshot["embedded_module_options"] = options_entries
+        snapshot["tool_hashes"]["ambient_correlator"] = "a" * 64
+        snapshot["bar2_pte_count"] = 1
+        snapshot["hard_stops"] = ["BAR2/HOST_CPU/PTE"]
+        snapshot["ambient_fault_correlation_parseable"] = True
+        snapshot["ambient_fault_correlation_report"] = {
+            "fault_count": 1,
+            "module_load_epoch_policy": "single_nouveau_module_instance_per_boot",
+            "diagnostic_sequence_gaps_rejected": True,
+        }
+        self.assertEqual(
+            ADMISSION.evaluate_ambient_capture(
+                manifest, snapshot, confirmed_no_reload=True
+            ),
+            [],
+        )
+        run_reasons = ADMISSION.evaluate_snapshot(manifest, snapshot)
+        self.assertTrue(any("BAR2/HOST_CPU/PTE count" in reason for reason in run_reasons))
+        self.assertIn("current-boot hard-stop signatures are present", run_reasons)
+        capture_reasons = ADMISSION.evaluate_ambient_capture(
+            manifest, snapshot, confirmed_no_reload=False
+        )
+        self.assertIn(
+            "operator has not confirmed that Nouveau was not unloaded or reloaded",
+            capture_reasons,
+        )
+
+    def test_ambient_capture_rejects_wrong_parameter_or_epoch_policy(self):
+        manifest, snapshot = fixtures()
+        manifest["nouveau"]["parameters"] = {
+            "diag_bar2_map": "Y",
+            "diag_ctxsw": "N",
+        }
+        manifest["module_options"] = {
+            "content_sha256": "9" * 64,
+            "embedded_initramfs_entries": [],
+        }
+        snapshot["module_parameters"] = {"diag_bar2_map": "N", "diag_ctxsw": "N"}
+        snapshot["module_options_file_sha256"] = "9" * 64
+        snapshot["embedded_module_options"] = []
+        snapshot["bar2_pte_count"] = 1
+        snapshot["ambient_fault_correlation_parseable"] = True
+        snapshot["ambient_fault_correlation_report"] = {
+            "fault_count": 1,
+            "module_load_epoch_policy": "multiple_or_unknown",
+            "diagnostic_sequence_gaps_rejected": False,
+        }
+        reasons = ADMISSION.evaluate_ambient_capture(
+            manifest, snapshot, confirmed_no_reload=True
+        )
+        self.assertIn("loaded diag_bar2_map parameter mismatch", reasons)
+        self.assertIn("ambient correlation does not use the single-module-epoch policy", reasons)
+        self.assertIn("ambient diagnostic sequence was not validated", reasons)
+
+    def test_ambient_parser_rejects_wrong_boot_and_unparseable_journal(self):
+        with tempfile.TemporaryDirectory(prefix="ambient-parser-admission-test-") as temporary:
+            path = Path(temporary) / "correlator.py"
+            path.write_text("# pinned correlator fixture\n", encoding="ascii")
+            manifest = {"tools": {"ambient_correlator": {
+                "path": str(path),
+                "sha256": hashlib.sha256(path.read_bytes()).hexdigest(),
+            }}}
+            report = {
+                "boot_id": "112233445566778899aabbccddeeff00",
+                "fault_count": 1,
+                "module_load_epoch_policy": "single_nouveau_module_instance_per_boot",
+                "diagnostic_sequence_gaps_rejected": True,
+            }
+
+            def fake_command(_argv, timeout=20):
+                return subprocess.CompletedProcess([], 0, json.dumps(report), "")
+
+            with patch.object(ADMISSION, "command", side_effect=fake_command):
+                okay, parsed, _detail = ADMISSION.parse_ambient_journal(
+                    "journal fixture", manifest,
+                    "11223344-5566-7788-99aa-bbccddeeff00",
+                )
+            self.assertTrue(okay)
+            self.assertEqual(parsed["fault_count"], 1)
+
+            report["boot_id"] = "ffeeddccbbaa99887766554433221100"
+            with patch.object(ADMISSION, "command", side_effect=fake_command):
+                okay, _parsed, detail = ADMISSION.parse_ambient_journal(
+                    "journal fixture", manifest,
+                    "11223344-5566-7788-99aa-bbccddeeff00",
+                )
+            self.assertFalse(okay)
+            self.assertIn("boot ID mismatch", detail)
+
     def test_wrong_module_hash_or_selected_path_refuses(self):
         manifest, snapshot = fixtures()
         snapshot["installed_compressed_sha256"] = "0" * 64

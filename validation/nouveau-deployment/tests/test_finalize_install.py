@@ -72,6 +72,189 @@ class ModuleCompressionTests(unittest.TestCase):
             self.assertEqual(restored.read_bytes(), payload)
 
 
+class EarlyModuleOptionsTests(unittest.TestCase):
+    def test_module_options_parser_accepts_exact_ambient_parameters(self):
+        self.assertEqual(
+            FINALIZER.parse_module_options(
+                "options nouveau diag_bar2_map=Y diag_ctxsw=N\n"
+            ),
+            {"diag_bar2_map": "Y", "diag_ctxsw": "N"},
+        )
+
+    def test_module_options_parser_rejects_duplicate_or_extra_directives(self):
+        for payload in (
+            "options nouveau diag_bar2_map=Y diag_bar2_map=N\n",
+            "options nouveau diag_bar2_map=Y\noptions nouveau diag_ctxsw=N\n",
+            "options nouveau diag_bar2_map=Y stale_option=N\n",
+        ):
+            with self.subTest(payload=payload):
+                with self.assertRaises(ValueError):
+                    parsed = FINALIZER.parse_module_options(payload)
+                    if parsed != {"diag_bar2_map": "Y", "diag_ctxsw": "N"}:
+                        raise ValueError("module option set mismatch")
+
+    def test_ambient_module_options_are_exact_and_hash_pinned(self):
+        params = {"diag_bar2_map": "Y", "diag_ctxsw": "N"}
+        content = "options nouveau diag_bar2_map=Y diag_ctxsw=N\n"
+        options = {
+            "path": "/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf",
+            "content": content,
+            "sha256": FINALIZER.sha256_file_from_bytes(content.encode("ascii")),
+        }
+        retired = {
+            "path": "/etc/modprobe.d/99-nouveau-diag4-v3.conf",
+            "sha256": "9" * 64,
+            "backup_path": "/tmp/retired-options.original",
+        }
+        FINALIZER.validate_module_options(params, options, retired)
+
+        options["sha256"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "content hash mismatch"):
+            FINALIZER.validate_module_options(params, options, retired)
+
+    def test_apply_ambient_options_archives_old_file_and_leaves_one_active_config(self):
+        with tempfile.TemporaryDirectory(prefix="apply-ambient-options-test-") as temporary:
+            root = Path(temporary)
+            retired = root / "99-old-nouveau.conf"
+            target = root / "99-nouveau-ambient-bar2-0011.conf"
+            backup = root / "retired-options.original"
+            original = b"options nouveau diag_bar2_map=Y obsolete=N diag_ctxsw=N\n"
+            content = "options nouveau diag_bar2_map=Y diag_ctxsw=N\n"
+            retired.write_bytes(original)
+            plan = {
+                "module_parameters": {"diag_bar2_map": "Y", "diag_ctxsw": "N"},
+                "module_options": {
+                    "path": str(target),
+                    "content": content,
+                    "sha256": FINALIZER.sha256_file_from_bytes(content.encode("ascii")),
+                },
+                "retired_module_options": {
+                    "path": str(retired),
+                    "sha256": FINALIZER.sha256_file_from_bytes(original),
+                    "backup_path": str(backup),
+                },
+            }
+            manifest = root / "deployment-manifest.json"
+            result = FINALIZER.apply_module_options(
+                plan, manifest, config_directories=[root]
+            )
+            self.assertEqual(backup.read_bytes(), original)
+            self.assertEqual(target.read_text(), content)
+            self.assertTrue(retired.read_text().startswith("# Superseded"))
+            self.assertEqual(
+                FINALIZER.active_nouveau_option_files([root]),
+                {target.resolve()},
+            )
+            self.assertEqual(result["content_sha256"], plan["module_options"]["sha256"])
+            resumed = FINALIZER.apply_module_options(
+                plan, manifest, config_directories=[root]
+            )
+            self.assertEqual(resumed, result)
+
+    def test_apply_ambient_options_resumes_after_backup_and_retire_step(self):
+        with tempfile.TemporaryDirectory(prefix="resume-ambient-options-test-") as temporary:
+            root = Path(temporary)
+            retired = root / "99-old-nouveau.conf"
+            target = root / "99-nouveau-ambient-bar2-0011.conf"
+            backup = root / "retired-options.original"
+            original = b"options nouveau diag_bar2_map=Y obsolete=N diag_ctxsw=N\n"
+            content = "options nouveau diag_bar2_map=Y diag_ctxsw=N\n"
+            retired.write_bytes(b"# Superseded by the ambient BAR2 diagnostic deployment.\n")
+            backup.write_bytes(original)
+            plan = {
+                "module_parameters": {"diag_bar2_map": "Y", "diag_ctxsw": "N"},
+                "module_options": {
+                    "path": str(target),
+                    "content": content,
+                    "sha256": FINALIZER.sha256_file_from_bytes(content.encode("ascii")),
+                },
+                "retired_module_options": {
+                    "path": str(retired),
+                    "sha256": FINALIZER.sha256_file_from_bytes(original),
+                    "backup_path": str(backup),
+                },
+            }
+            result = FINALIZER.apply_module_options(
+                plan, root / "deployment-manifest.json", config_directories=[root]
+            )
+            self.assertEqual(target.read_text(encoding="ascii"), content)
+            self.assertEqual(backup.read_bytes(), original)
+            self.assertEqual(
+                result["superseded"]["original_sha256"],
+                plan["retired_module_options"]["sha256"],
+            )
+
+    def test_preflight_rejects_competing_options_without_mutation(self):
+        with tempfile.TemporaryDirectory(prefix="preflight-ambient-options-test-") as temporary:
+            root = Path(temporary)
+            retired = root / "99-old-nouveau.conf"
+            competing = root / "10-other-nouveau.conf"
+            target = root / "99-nouveau-ambient-bar2-0011.conf"
+            backup = root / "retired-options.original"
+            original = b"options nouveau diag_bar2_map=Y obsolete=N diag_ctxsw=N\n"
+            retired.write_bytes(original)
+            competing.write_text("options nouveau modeset=1\n", encoding="ascii")
+            content = "options nouveau diag_bar2_map=Y diag_ctxsw=N\n"
+            plan = {
+                "module_parameters": {"diag_bar2_map": "Y", "diag_ctxsw": "N"},
+                "module_options": {
+                    "path": str(target),
+                    "content": content,
+                    "sha256": FINALIZER.sha256_file_from_bytes(content.encode("ascii")),
+                },
+                "retired_module_options": {
+                    "path": str(retired),
+                    "sha256": FINALIZER.sha256_file_from_bytes(original),
+                    "backup_path": str(backup),
+                },
+            }
+            with self.assertRaisesRegex(RuntimeError, "additional Nouveau modprobe"):
+                FINALIZER.preflight_module_options(
+                    plan, root / "deployment-manifest.json", config_directories=[root]
+                )
+            self.assertEqual(retired.read_bytes(), original)
+            self.assertFalse(target.exists())
+            self.assertFalse(backup.exists())
+
+    def test_embedded_module_options_require_exact_bytes_and_parameters(self):
+        with tempfile.TemporaryDirectory(prefix="embedded-options-test-") as temporary:
+            root = Path(temporary)
+            initramfs = root / "initrd.img"
+            initramfs.write_bytes(b"initramfs fixture")
+            payload = b"options nouveau diag_bar2_map=Y diag_ctxsw=N\n"
+            expected = FINALIZER.sha256_file_from_bytes(payload)
+
+            def fake_unmkinitramfs(argv, **_kwargs):
+                extract = Path(argv[2])
+                config = extract / "main/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf"
+                config.parent.mkdir(parents=True)
+                config.write_bytes(payload)
+
+            with patch.object(FINALIZER.subprocess, "run", side_effect=fake_unmkinitramfs):
+                records = FINALIZER.embedded_module_options(
+                    initramfs,
+                    Path("/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf"),
+                    expected,
+                    {"diag_bar2_map": "Y", "diag_ctxsw": "N"},
+                    root / "extract-good",
+                )
+                self.assertEqual(len(records or []), 1)
+                self.assertIsNone(FINALIZER.embedded_module_options(
+                    initramfs,
+                    Path("/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf"),
+                    "0" * 64,
+                    {"diag_bar2_map": "Y", "diag_ctxsw": "N"},
+                    root / "extract-bad-hash",
+                ))
+                self.assertIsNone(FINALIZER.embedded_module_options(
+                    initramfs,
+                    Path("/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf"),
+                    expected,
+                    {"diag_ctxsw": "N"},
+                    root / "extract-bad-params",
+                ))
+
+
 class ExistingInitramfsTests(unittest.TestCase):
     def test_embedded_module_extraction_creates_nested_temp_root(self):
         with tempfile.TemporaryDirectory(prefix="initramfs-extract-test-") as temporary:
@@ -275,6 +458,8 @@ class FinalManifestTests(unittest.TestCase):
                 "initramfs_path": Path("/boot/initrd.img-7.0.0-34-generic"),
                 "initramfs_sha256": "8" * 64,
                 "embedded": [{"path_in_initramfs": "main/nouveau.ko.zst", "uncompressed_sha256": "6" * 64}],
+                "embedded_options": None,
+                "installed_options": None,
                 "plan": plan,
                 "signed": False,
                 "certificate_sha256": None,
@@ -287,6 +472,42 @@ class FinalManifestTests(unittest.TestCase):
             self.assertEqual(result["review_branch"], build["review_branch"])
             self.assertEqual(result["main_commit"], build["main_commit"])
             self.assertEqual(result["deployment_plan"]["sha256"], "a" * 64)
+
+            option_content = "options nouveau diag_bar2_map=Y diag_ctxsw=N\n"
+            option_hash = FINALIZER.sha256_file_from_bytes(option_content.encode("ascii"))
+            build["patch_sha256"]["0011-drm-nouveau-trace-ambient-bar2-lifetimes.patch"] = "d" * 64
+            plan["review_head"] = "e" * 40
+            plan["module_parameters"] = {"diag_bar2_map": "Y", "diag_ctxsw": "N"}
+            plan["module_options"] = {
+                "path": "/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf",
+                "content": option_content,
+                "sha256": option_hash,
+            }
+            kwargs["embedded_options"] = [{
+                "path_in_initramfs": "main/etc/modprobe.d/99-nouveau-ambient-bar2-0011.conf",
+                "sha256": option_hash,
+            }]
+            kwargs["installed_options"] = {
+                "path": plan["module_options"]["path"],
+                "content_sha256": option_hash,
+                "parameters": plan["module_parameters"],
+                "superseded": {"original_sha256": "c" * 64},
+            }
+            ambient_result = FINALIZER.build_final_manifest(**kwargs)
+            self.assertEqual(ambient_result["review_head"], "e" * 40)
+            self.assertEqual(
+                ambient_result["driver_source_head"], build["review_commit"]
+            )
+            self.assertEqual(
+                ambient_result["source"]["patch_0011_sha256"], "d" * 64
+            )
+            self.assertEqual(
+                ambient_result["module_options"]["content_sha256"], option_hash
+            )
+            self.assertEqual(
+                ambient_result["initramfs"]["embedded_module_options"],
+                kwargs["embedded_options"],
+            )
 
             kwargs["embedded"] = [{
                 "path_in_initramfs": "main/nouveau.ko.zst",

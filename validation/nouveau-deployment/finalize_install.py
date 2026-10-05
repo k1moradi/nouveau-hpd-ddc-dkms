@@ -12,6 +12,8 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
+import shlex
 import shutil
 import subprocess
 import sys
@@ -71,11 +73,98 @@ def command_output(argv: list[str]) -> str:
     return result.stdout.strip()
 
 
+def current_review_head(plan: dict[str, Any]) -> str:
+    repository = Path(__file__).resolve().parents[2]
+    branch = command_output(["git", "-C", str(repository), "branch", "--show-current"])
+    if branch != plan.get("expected_review_branch"):
+        raise RuntimeError("current review branch does not match the deployment plan")
+    main_head = command_output(["git", "-C", str(repository), "rev-parse", "main"])
+    if main_head != plan.get("expected_main_commit"):
+        raise RuntimeError("main moved from the pinned HOLD commit")
+    dirty = command_output([
+        "git", "-C", str(repository), "status", "--porcelain=v1",
+        "--untracked-files=all",
+    ])
+    if dirty:
+        raise RuntimeError("refusing deployment finalization from a dirty review worktree")
+    return command_output(["git", "-C", str(repository), "rev-parse", "HEAD"])
+
+
 def load_json(path: Path) -> dict[str, Any]:
     data = json.loads(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
         raise ValueError(f"expected JSON object in {path}")
     return data
+
+
+def sha256_file_from_bytes(payload: bytes) -> str:
+    return hashlib.sha256(payload).hexdigest()
+
+
+def parse_module_options(content: str) -> dict[str, str]:
+    active = []
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("#"):
+            continue
+        try:
+            fields = shlex.split(stripped, comments=True, posix=True)
+        except ValueError as exc:
+            raise ValueError("malformed modprobe option quoting") from exc
+        if fields[:2] != ["options", "nouveau"]:
+            raise ValueError("ambient options file contains a non-Nouveau directive")
+        active.append(fields[2:])
+    if len(active) != 1:
+        raise ValueError("ambient options file must contain exactly one options nouveau line")
+    parsed: dict[str, str] = {}
+    for item in active[0]:
+        if item.count("=") != 1:
+            raise ValueError("ambient module option must use key=value syntax")
+        key, value = item.split("=", 1)
+        if not key or not value or key in parsed:
+            raise ValueError("ambient module option is empty or duplicated")
+        parsed[key] = value
+    return parsed
+
+
+def validate_module_options(
+    params: Any,
+    module_options: Any,
+    retired_module_options: Any,
+) -> None:
+    if params not in (
+        {"diag_ctxsw": "N"},
+        {"diag_bar2_map": "Y", "diag_ctxsw": "N"},
+    ):
+        raise ValueError("unsupported reviewed Nouveau module parameter set")
+    if "diag_bar2_map" not in params:
+        if module_options is not None or retired_module_options is not None:
+            raise ValueError("non-ambient deployment may not configure ambient module options")
+        return
+    if not isinstance(module_options, dict):
+        raise ValueError("ambient BAR2 deployment lacks pinned early-load options")
+    options_path = Path(module_options.get("path", ""))
+    if options_path.parent != Path("/etc/modprobe.d") or not options_path.name.endswith(".conf"):
+        raise ValueError("ambient module options must target /etc/modprobe.d/*.conf")
+    options_content = module_options.get("content")
+    if not isinstance(options_content, str) or not options_content.endswith("\n"):
+        raise ValueError("ambient module options content must be newline-terminated text")
+    options_bytes = options_content.encode("ascii", errors="strict")
+    if sha256_file_from_bytes(options_bytes) != module_options.get("sha256"):
+        raise ValueError("ambient module options content hash mismatch")
+    if parse_module_options(options_content) != params:
+        raise ValueError("ambient module options do not exactly match pinned parameters")
+    if not isinstance(retired_module_options, dict):
+        raise ValueError("ambient deployment must pin the superseded module options file")
+    retired_path = Path(retired_module_options.get("path", ""))
+    if retired_path.parent != Path("/etc/modprobe.d") or not retired_path.name.endswith(".conf"):
+        raise ValueError("superseded module options must target /etc/modprobe.d/*.conf")
+    backup_path = Path(retired_module_options.get("backup_path", ""))
+    if not backup_path.is_absolute():
+        raise ValueError("superseded module options backup path must be absolute")
+    retired_sha = retired_module_options.get("sha256", "")
+    if not isinstance(retired_sha, str) or not re.fullmatch(r"[0-9a-f]{64}", retired_sha):
+        raise ValueError("superseded module options lack an exact SHA-256")
 
 
 def validate_inputs(
@@ -87,6 +176,9 @@ def validate_inputs(
         raise ValueError("unsupported deployment plan schema")
     if build.get("review_branch") != plan.get("expected_review_branch"):
         raise ValueError("build manifest review branch does not match deployment plan")
+    expected_driver_head = plan.get("expected_driver_source_head")
+    if expected_driver_head and build.get("review_commit") != expected_driver_head:
+        raise ValueError("build manifest driver source head does not match deployment plan")
     if build.get("main_commit") != plan.get("expected_main_commit"):
         raise ValueError("build manifest main commit does not match deployment plan")
     review_commit = build.get("review_commit")
@@ -105,6 +197,17 @@ def validate_inputs(
         raise ValueError("kernel source archive hash does not match deployment plan")
     if build.get("patch_sha256") != plan.get("patch_sha256"):
         raise ValueError("kernel diagnostic patch hashes do not match deployment plan")
+    if "diag_bar2_map" in plan.get("module_parameters", {}):
+        expected_patch_names = {
+            "0009-drm-nouveau-log-nvif-duplicate-layer.patch",
+            "0010-drm-nouveau-correlate-instmem-vma-selftest.patch",
+            "0011-drm-nouveau-trace-ambient-bar2-lifetimes.patch",
+        }
+        if set(build.get("patch_sha256", {})) != expected_patch_names:
+            raise ValueError("ambient build manifest does not pin exactly patches 0009-0011")
+        markers = set(build.get("diagnostic_markers", []))
+        if not {"NOUVEAU_DIAG_BAR2_MAP", "NOUVEAU_DIAG_BAR2_RESET"} <= markers:
+            raise ValueError("ambient module build lacks BAR2 mapping/reset markers")
     if build.get("srcversion") != plan.get("expected_srcversion"):
         raise ValueError("build srcversion does not match deployment plan")
     if build.get("vermagic") != plan.get("expected_vermagic"):
@@ -118,8 +221,9 @@ def validate_inputs(
     if not isinstance(build.get("vermagic"), str) or not build["vermagic"].startswith(kernel + " "):
         raise ValueError("build manifest vermagic does not match target kernel")
     params = plan.get("module_parameters")
-    if params != {"diag_ctxsw": "N"}:
-        raise ValueError("only the reviewed diag_ctxsw=N parameter set is allowed")
+    module_options = plan.get("module_options")
+    retired_module_options = plan.get("retired_module_options")
+    validate_module_options(params, module_options, retired_module_options)
     for variant in ("A", "B"):
         item = plan.get("mesa_variants", {}).get(variant)
         if not isinstance(item, dict):
@@ -137,6 +241,8 @@ def validate_inputs(
         "admission_check", "deployment_finalizer", "retained_module_builder",
     } <= tools.keys():
         raise ValueError("deployment plan lacks one or more required pinned tools")
+    if "diag_bar2_map" in params and "ambient_correlator" not in tools:
+        raise ValueError("ambient deployment plan lacks the ambient correlator")
     for name, item in tools.items():
         if not isinstance(item, dict):
             raise ValueError(f"invalid pinned tool record {name}")
@@ -192,6 +298,8 @@ def validate_inputs(
         "input": input_item,
         "software_reference": reference,
         "module_parameters": params,
+        "module_options": module_options,
+        "retired_module_options": retired_module_options,
     }
 
 
@@ -239,14 +347,7 @@ def compress_module(source: Path, destination: Path) -> None:
 
 def embedded_module_hashes(initramfs: Path, temporary_root: Path) -> list[dict[str, str]]:
     extract = temporary_root / "initramfs"
-    extract.mkdir(parents=True)
-    subprocess.run(
-        ["unmkinitramfs", str(initramfs), str(extract)],
-        check=True,
-        timeout=180,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.STDOUT,
-    )
+    extract_initramfs(initramfs, extract)
     candidates = sorted(
         path for path in extract.rglob("nouveau.ko*") if path.is_file()
     )
@@ -261,6 +362,230 @@ def embedded_module_hashes(initramfs: Path, temporary_root: Path) -> list[dict[s
     if not results:
         raise RuntimeError("rebuilt initramfs contains no Nouveau module")
     return results
+
+
+def extract_initramfs(initramfs: Path, extract: Path) -> None:
+    extract.mkdir(parents=True)
+    subprocess.run(
+        ["unmkinitramfs", str(initramfs), str(extract)],
+        check=True,
+        timeout=180,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
+    )
+
+
+def embedded_module_options(
+    initramfs: Path,
+    options_path: Path,
+    expected_sha256: str,
+    expected_parameters: dict[str, str],
+    temporary_root: Path,
+) -> list[dict[str, str]] | None:
+    if not initramfs.is_file():
+        return None
+    try:
+        extract = temporary_root / "initramfs"
+        extract_initramfs(initramfs, extract)
+        suffix = Path(*options_path.parts[1:]).parts
+        candidates = []
+        for path in extract.rglob(options_path.name):
+            if not path.is_file():
+                continue
+            relative = path.relative_to(extract).parts
+            if len(relative) >= len(suffix) and relative[-len(suffix):] == suffix:
+                candidates.append(path)
+        if not candidates:
+            return None
+        results = []
+        for path in sorted(candidates):
+            digest = sha256_file(path)
+            results.append({
+                "path_in_initramfs": path.relative_to(extract).as_posix(),
+                "sha256": digest,
+            })
+        if {item["sha256"] for item in results} != {expected_sha256}:
+            return None
+        effective: dict[str, str] = {}
+        config_files = []
+        for path in extract.rglob("*.conf"):
+            parts = path.relative_to(extract).parts
+            if any(
+                parts[index:index + 2] in {
+                    ("etc", "modprobe.d"),
+                    ("lib", "modprobe.d"),
+                }
+                or parts[index:index + 3] == ("usr", "lib", "modprobe.d")
+                for index in range(len(parts))
+            ):
+                config_files.append(path)
+        for config in config_files:
+            try:
+                lines = config.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeError):
+                return None
+            for line in lines:
+                try:
+                    fields = shlex.split(line, comments=True, posix=True)
+                except ValueError:
+                    return None
+                if fields[:2] != ["options", "nouveau"]:
+                    continue
+                for item in fields[2:]:
+                    if item.count("=") != 1:
+                        return None
+                    key, value = item.split("=", 1)
+                    if not key or not value or key in effective:
+                        return None
+                    effective[key] = value
+        if effective != expected_parameters:
+            return None
+        return results
+    except (OSError, RuntimeError, subprocess.SubprocessError):
+        return None
+
+
+def active_nouveau_option_files(
+    directories: tuple[Path, ...] | list[Path] | None = None,
+) -> set[Path]:
+    active: set[Path] = set()
+    if directories is None:
+        directories = (
+            Path("/etc/modprobe.d"),
+            Path("/lib/modprobe.d"),
+            Path("/usr/lib/modprobe.d"),
+        )
+    for directory in directories:
+        if not directory.is_dir():
+            continue
+        for path in directory.glob("*.conf"):
+            try:
+                lines = path.read_text(encoding="utf-8").splitlines()
+            except (OSError, UnicodeError) as exc:
+                raise RuntimeError(f"cannot inspect modprobe config {path}: {exc}") from exc
+            for line in lines:
+                try:
+                    fields = shlex.split(line, comments=True, posix=True)
+                except ValueError as exc:
+                    raise RuntimeError(f"malformed modprobe config line in {path}") from exc
+                if fields[:2] == ["options", "nouveau"]:
+                    active.add(path.resolve())
+                    break
+    return active
+
+
+def preflight_module_options(
+    plan: dict[str, Any],
+    manifest_path: Path,
+    *,
+    config_directories: tuple[Path, ...] | list[Path] | None = None,
+) -> dict[str, Any] | None:
+    options = plan.get("module_options")
+    if options is None:
+        return None
+    target = Path(options["path"])
+    retired = plan["retired_module_options"]
+    retired_path = Path(retired["path"])
+    target_resolved = target.resolve()
+    retired_resolved = retired_path.resolve()
+    backup = Path(retired["backup_path"])
+    if backup.parent.resolve() != manifest_path.parent.resolve():
+        raise RuntimeError("superseded modprobe backup must stay in the deployment root")
+    if backup.is_symlink():
+        raise RuntimeError(f"superseded modprobe backup may not be a symlink: {backup}")
+    if not retired_path.is_file() or retired_path.is_symlink():
+        raise RuntimeError(f"superseded modprobe config is missing or not a regular file: {retired_path}")
+    original = retired_path.read_bytes()
+    original_sha = retired["sha256"]
+    disabled_content = b"# Superseded by the ambient BAR2 diagnostic deployment.\n"
+    current_sha = sha256_file_from_bytes(original)
+    if current_sha == original_sha:
+        pass
+    elif current_sha == sha256_file_from_bytes(disabled_content):
+        if not backup.is_file() or sha256_file(backup) != original_sha:
+            raise RuntimeError("superseded module options were changed without the pinned backup")
+        original = backup.read_bytes()
+    else:
+        raise RuntimeError("superseded modprobe config hash changed")
+    if target.is_symlink():
+        raise RuntimeError(f"ambient modprobe config may not be a symlink: {target}")
+    if target.exists() and target_resolved != retired_resolved:
+        if target.is_symlink() or not target.is_file():
+            raise RuntimeError(f"ambient modprobe config is not a regular file: {target}")
+        if target.read_bytes() != options["content"].encode("ascii"):
+            raise RuntimeError(f"ambient modprobe config already exists with different bytes: {target}")
+    expected_active = {retired_resolved}
+    unexpected = active_nouveau_option_files(config_directories) - expected_active - {target_resolved}
+    if unexpected:
+        raise RuntimeError(
+            "additional Nouveau modprobe option files require review: "
+            + ", ".join(str(path) for path in sorted(unexpected))
+        )
+    if backup.exists() and (not backup.is_file() or sha256_file(backup) != original_sha):
+        raise RuntimeError("saved prior modprobe config backup has unexpected bytes")
+    return {
+        "options": options,
+        "target": target,
+        "target_resolved": target_resolved,
+        "retired": retired,
+        "retired_path": retired_path,
+        "retired_resolved": retired_resolved,
+        "backup": backup,
+        "original": original,
+        "original_sha": original_sha,
+        "current_sha": current_sha,
+        "disabled_content": disabled_content,
+    }
+
+
+def apply_module_options(
+    plan: dict[str, Any],
+    manifest_path: Path,
+    *,
+    config_directories: tuple[Path, ...] | list[Path] | None = None,
+) -> dict[str, Any] | None:
+    state = preflight_module_options(
+        plan, manifest_path, config_directories=config_directories
+    )
+    if state is None:
+        return None
+    options = state["options"]
+    target = state["target"]
+    target_resolved = state["target_resolved"]
+    retired_path = state["retired_path"]
+    retired_resolved = state["retired_resolved"]
+    backup = state["backup"]
+    original = state["original"]
+    original_sha = state["original_sha"]
+    current_sha = state["current_sha"]
+    disabled_content = state["disabled_content"]
+    content = options["content"].encode("ascii")
+    if not backup.exists():
+        if current_sha != original_sha:
+            raise RuntimeError("cannot reconstruct the original options backup")
+        atomic_write(backup, original)
+    if target_resolved != retired_resolved and current_sha == original_sha:
+        atomic_write(retired_path, disabled_content)
+    if not target.exists() or target_resolved == retired_resolved:
+        atomic_write(target, content)
+
+    if active_nouveau_option_files(config_directories) != {target_resolved}:
+        raise RuntimeError("effective Nouveau modprobe option file set is ambiguous")
+    active_content = target.read_text(encoding="ascii")
+    if parse_module_options(active_content) != plan["module_parameters"]:
+        raise RuntimeError("installed early-load Nouveau options do not match the plan")
+    return {
+        "path": str(target),
+        "content_sha256": sha256_file_from_bytes(content),
+        "parameters": plan["module_parameters"],
+        "superseded": {
+            "path": str(retired_path),
+            "original_sha256": original_sha,
+            "backup_path": str(backup.resolve()),
+            "backup_sha256": sha256_file(backup),
+            "disabled_file_sha256": sha256_file(retired_path),
+        },
+    }
 
 
 def matching_embedded_modules(
@@ -294,6 +619,8 @@ def build_final_manifest(
     initramfs_path: Path,
     initramfs_sha256: str,
     embedded: list[dict[str, str]],
+    embedded_options: list[dict[str, str]] | None,
+    installed_options: dict[str, Any] | None,
     plan: dict[str, Any],
     signed: bool,
     certificate_sha256: str | None,
@@ -305,10 +632,13 @@ def build_final_manifest(
         )
     if observed_module_path.resolve() != Path(plan["module_install_path"]).resolve():
         raise RuntimeError("modinfo-selected path does not match deployment plan")
-    return {
+    review_head = plan.get("review_head", build["review_commit"])
+    final = {
         "schema": 2,
         "status": "FINALIZED_NOT_REBOOTED_NOT_RUNTIME_VERIFIED",
-        "review_commit": build["review_commit"],
+        "review_commit": review_head,
+        "review_head": review_head,
+        "driver_source_head": build["review_commit"],
         "review_branch": build["review_branch"],
         "main_commit": build["main_commit"],
         "build_manifest": {
@@ -327,6 +657,9 @@ def build_final_manifest(
             "patch_sha256": build["patch_sha256"],
             "patch_0009_sha256": build["patch_sha256"]["0009-drm-nouveau-log-nvif-duplicate-layer.patch"],
             "patch_0010_sha256": build["patch_sha256"]["0010-drm-nouveau-correlate-instmem-vma-selftest.patch"],
+            "patch_0011_sha256": build["patch_sha256"].get(
+                "0011-drm-nouveau-trace-ambient-bar2-lifetimes.patch"
+            ),
         },
         "nouveau": {
             "module_path": str(observed_module_path.resolve()),
@@ -347,6 +680,7 @@ def build_final_manifest(
             "sha256": initramfs_sha256,
             "embedded_nouveau_modules": embedded,
             "embedded_uncompressed_sha256": installed_uncompressed_sha256,
+            "embedded_module_options": embedded_options or [],
         },
         "mesa": {
             "variants": plan["mesa_variants"],
@@ -373,6 +707,19 @@ def build_final_manifest(
             "container_sha256": plan["software_reference"]["container_sha256"],
         },
     }
+    if plan.get("module_options") is not None:
+        if not embedded_options or installed_options is None:
+            raise RuntimeError("ambient module options were not verified in the initramfs")
+        option_hashes = {item["sha256"] for item in embedded_options}
+        expected_options_sha = plan["module_options"]["sha256"]
+        if option_hashes != {expected_options_sha}:
+            raise RuntimeError("embedded module option bytes do not match the plan")
+        final["module_options"] = {
+            **installed_options,
+            "content": plan["module_options"]["content"],
+            "embedded_initramfs_entries": embedded_options,
+        }
+    return final
 
 
 def apply_install(
@@ -423,6 +770,7 @@ def apply_install(
         if enrollment.returncode:
             raise RuntimeError("module signing certificate is not reported enrolled by mokutil")
 
+    preflight_module_options(plan, manifest_path)
     target = Path(plan["module_install_path"])
     target.parent.mkdir(parents=True, exist_ok=True)
     initramfs = Path(plan["initramfs_path"])
@@ -453,7 +801,19 @@ def apply_install(
             uncompressed_sha,
             root / "current-initramfs-check",
         )
-        if embedded is None:
+        installed_options = apply_module_options(plan, manifest_path)
+        embedded_options = None
+        if plan.get("module_options") is not None:
+            embedded_options = embedded_module_options(
+                initramfs,
+                Path(plan["module_options"]["path"]),
+                plan["module_options"]["sha256"],
+                plan["module_parameters"],
+                root / "current-initramfs-options-check",
+            )
+        if embedded is None or (
+            plan.get("module_options") is not None and embedded_options is None
+        ):
             subprocess.run(
                 ["update-initramfs", "-u", "-k", kernel],
                 check=True,
@@ -469,6 +829,18 @@ def apply_install(
                 raise RuntimeError(
                     "rebuilt initramfs Nouveau module bytes do not match installed module"
                 )
+            if plan.get("module_options") is not None:
+                embedded_options = embedded_module_options(
+                    initramfs,
+                    Path(plan["module_options"]["path"]),
+                    plan["module_options"]["sha256"],
+                    plan["module_parameters"],
+                    root / "rebuilt-initramfs-options-check",
+                )
+                if embedded_options is None:
+                    raise RuntimeError(
+                        "rebuilt initramfs does not contain the exact early-load Nouveau options"
+                    )
 
         selected = Path(command_output(["modinfo", "-n", "nouveau"])).resolve(strict=True)
         if selected != target.resolve(strict=True):
@@ -493,6 +865,8 @@ def apply_install(
             initramfs_path=initramfs,
             initramfs_sha256=sha256_file(initramfs),
             embedded=embedded,
+            embedded_options=embedded_options,
+            installed_options=installed_options,
             plan=plan,
             signed=signing_key is not None,
             certificate_sha256=(
@@ -525,6 +899,9 @@ def main(argv: list[str] | None = None) -> int:
             print(f"KERNEL={values['kernel_release']}")
             print(f"MODULE_TARGET={values['module_install_path']}")
             print(f"INITRAMFS_TARGET={values['initramfs_path']}")
+            if values.get("module_options") is not None:
+                print("DIAG_BAR2_MAP_BOOT_OPTION=Y")
+                print(f"MODULE_OPTIONS_FILE={values['module_options']['path']}")
             print("NO_SYSTEM_CHANGES=true")
             print("To install, sign if required, rebuild initramfs, and finalize provenance, rerun with --apply as root from the controlled desktop.")
             return 0
@@ -532,7 +909,7 @@ def main(argv: list[str] | None = None) -> int:
             build=build,
             build_manifest_path=args.build_manifest.resolve(strict=True),
             build_manifest_sha256=sha256_file(args.build_manifest.resolve(strict=True)),
-            plan=plan,
+            plan={**plan, "review_head": current_review_head(plan)},
             deployment_plan_path=args.plan.resolve(strict=True),
             deployment_plan_sha256=sha256_file(args.plan.resolve(strict=True)),
             raw_module=args.raw_module.resolve(strict=True),

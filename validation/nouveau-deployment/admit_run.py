@@ -16,6 +16,7 @@ from typing import Any
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 from finalize_install import decompress_module, embedded_module_hashes, sha256_file
+from finalize_install import embedded_module_options
 
 ROOT = Path(__file__).resolve().parents[2]
 sys.path.insert(0, str(ROOT / "validation/detached-mpv-supervisor"))
@@ -49,6 +50,11 @@ def load_manifest(path: Path) -> dict[str, Any]:
     }
     if not required <= manifest.keys():
         raise ValueError(f"deployment manifest lacks {sorted(required - manifest.keys())}")
+    if "diag_bar2_map" in manifest["nouveau"].get("parameters", {}):
+        if not isinstance(manifest.get("module_options"), dict):
+            raise ValueError("ambient manifest lacks verified early-load module options")
+        if not isinstance(manifest.get("tools", {}).get("ambient_correlator"), dict):
+            raise ValueError("ambient manifest lacks a pinned ambient correlator")
     return manifest
 
 
@@ -73,6 +79,56 @@ def verify_execution_identity(
             )
         if sha256_file(actual_path) != item.get("sha256"):
             raise ValueError(f"running {name} SHA-256 mismatch")
+    if "diag_bar2_map" in manifest["nouveau"].get("parameters", {}):
+        item = manifest["tools"]["ambient_correlator"]
+        path = Path(item["path"]).resolve(strict=True)
+        if not path.is_file() or sha256_file(path) != item.get("sha256"):
+            raise ValueError("pinned ambient correlator path/hash mismatch")
+
+
+def read_loaded_module_parameter(name: str) -> str:
+    path = Path("/sys/module/nouveau/parameters") / name
+    if os.geteuid() == 0:
+        result = command(["/usr/bin/cat", str(path)], timeout=5)
+    else:
+        result = command(["sudo", "-n", "/usr/bin/cat", str(path)], timeout=5)
+    return result.stdout.strip() if result.returncode == 0 else "MISSING"
+
+
+def parse_ambient_journal(
+    payload: str,
+    manifest: dict[str, Any],
+    boot_id: str,
+) -> tuple[bool, dict[str, Any] | None, str]:
+    item = manifest["tools"].get("ambient_correlator")
+    if not isinstance(item, dict):
+        return False, None, "ambient correlator is not pinned"
+    path = Path(item.get("path", ""))
+    if not path.is_file() or sha256_file(path) != item.get("sha256"):
+        return False, None, "ambient correlator identity mismatch"
+    try:
+        with tempfile.TemporaryDirectory(prefix="nouveau-ambient-admission-") as temporary:
+            journal = Path(temporary) / "kernel.jsonl"
+            journal.write_text(payload, encoding="utf-8")
+            result = command([sys.executable, str(path), str(journal)], timeout=30)
+    except (OSError, subprocess.SubprocessError) as exc:
+        return False, None, f"ambient correlator execution failed: {exc}"
+    if result.returncode:
+        return False, None, result.stderr.strip() or "ambient correlator rejected journal"
+    try:
+        report = json.loads(result.stdout)
+    except json.JSONDecodeError:
+        return False, None, "ambient correlator output is invalid JSON"
+    normalized_boot = boot_id.replace("-", "").lower()
+    if report.get("boot_id") != normalized_boot:
+        return False, report, "ambient report boot ID mismatch"
+    if report.get("module_load_epoch_policy") != "single_nouveau_module_instance_per_boot":
+        return False, report, "ambient report lacks the single-module-epoch policy"
+    if not report.get("diagnostic_sequence_gaps_rejected"):
+        return False, report, "ambient report does not reject sequence gaps"
+    if report.get("fault_count", 0) <= 0:
+        return False, report, "ambient diagnostic report contains no decoded faults"
+    return True, report, "ambient journal parsed with one nonrepeating diagnostic sequence"
 
 
 def session_errors(env: dict[str, str] | None = None) -> list[str]:
@@ -190,18 +246,13 @@ def collect_snapshot(manifest: dict[str, Any]) -> dict[str, Any]:
         vermagic = vm.stdout.strip() if vm.returncode == 0 else ""
 
     loaded_srcversion = ""
-    param_value = ""
+    loaded_parameters: dict[str, str] = {}
     try:
         loaded_srcversion = Path("/sys/module/nouveau/srcversion").read_text().strip()
     except OSError:
         pass
-    try:
-        parameter_path = Path("/sys/module/nouveau/parameters/diag_ctxsw")
-        param_value = parameter_path.read_text(encoding="ascii").strip()
-    except OSError:
-        read = command(["sudo", "-n", "/usr/bin/cat", "/sys/module/nouveau/parameters/diag_ctxsw"], timeout=5)
-        if read.returncode == 0:
-            param_value = read.stdout.strip()
+    for name in module.get("parameters", {}):
+        loaded_parameters[name] = read_loaded_module_parameter(name)
 
     initramfs_path = Path(initramfs_info["path"])
     initramfs_sha = sha256_file(initramfs_path) if initramfs_path.is_file() else ""
@@ -216,11 +267,32 @@ def collect_snapshot(manifest: dict[str, Any]) -> dict[str, Any]:
             except (OSError, RuntimeError, subprocess.SubprocessError):
                 embedded_sha = "UNAVAILABLE"
 
+    module_options = manifest.get("module_options")
+    module_options_sha = ""
+    embedded_options: list[dict[str, str]] | None = None
+    if isinstance(module_options, dict):
+        options_path = Path(module_options["path"])
+        if options_path.is_file():
+            module_options_sha = sha256_file(options_path)
+        if initramfs_path.is_file():
+            with tempfile.TemporaryDirectory(prefix="nouveau-admission-options-") as temporary:
+                embedded_options = embedded_module_options(
+                    initramfs_path,
+                    options_path,
+                    module_options["content_sha256"],
+                    module["parameters"],
+                    Path(temporary),
+                )
+
     visible = False
     current_boot_records_match = False
     bar2_count = 0
     hard_stops: list[str] = []
     journal_detail = ""
+    ambient_parseable = False
+    ambient_report: dict[str, Any] | None = None
+    ambient_parse_detail = "not required"
+    kernel_journal_payload = ""
     try:
         sync = command(["journalctl", "--sync"], timeout=8)
         probe = command(
@@ -238,6 +310,7 @@ def collect_snapshot(manifest: dict[str, Any]) -> dict[str, Any]:
             full_ok, full_boot_ok, bar2_count, messages, journal_detail = parse_journal_json(
                 full.stdout, boot_id.replace("-", "")
             )
+            kernel_journal_payload = full.stdout
             current_boot_records_match = full_ok and full_boot_ok
             if visible and not probe_detail:
                 journal_detail = probe_detail
@@ -248,6 +321,11 @@ def collect_snapshot(manifest: dict[str, Any]) -> dict[str, Any]:
                         break
     except (OSError, subprocess.SubprocessError) as exc:
         journal_detail = f"journal query raised: {exc}"
+
+    if "diag_bar2_map" in module.get("parameters", {}) and bar2_count:
+        ambient_parseable, ambient_report, ambient_parse_detail = parse_ambient_journal(
+            kernel_journal_payload, manifest, boot_id
+        )
 
     mesa_hashes: dict[str, str] = {}
     for variant, item in manifest["mesa"]["variants"].items():
@@ -291,7 +369,10 @@ def collect_snapshot(manifest: dict[str, Any]) -> dict[str, Any]:
         "installed_uncompressed_sha256": installed_uncompressed_sha,
         "installed_srcversion": installed_srcversion,
         "vermagic": vermagic,
-        "diag_ctxsw": param_value,
+        "diag_ctxsw": loaded_parameters.get("diag_ctxsw", ""),
+        "module_parameters": loaded_parameters,
+        "module_options_file_sha256": module_options_sha,
+        "embedded_module_options": embedded_options,
         "initramfs_path": str(initramfs_path.resolve()) if initramfs_path.exists() else "MISSING",
         "initramfs_sha256": initramfs_sha,
         "embedded_nouveau_sha256": embedded_sha,
@@ -300,6 +381,9 @@ def collect_snapshot(manifest: dict[str, Any]) -> dict[str, Any]:
         "journal_current_boot": current_boot_records_match,
         "journal_detail": journal_detail,
         "bar2_pte_count": bar2_count,
+        "ambient_fault_correlation_parseable": ambient_parseable,
+        "ambient_fault_correlation_report": ambient_report,
+        "ambient_fault_correlation_detail": ambient_parse_detail,
         "hard_stops": hard_stops,
         "desktop_errors": session_errors(),
         "players": current_players(),
@@ -331,6 +415,12 @@ def evaluate_snapshot(manifest: dict[str, Any], snapshot: dict[str, Any]) -> lis
         reasons.append("installed module bytes hash mismatch")
     if snapshot.get("vermagic") != module["vermagic"]:
         reasons.append("installed module vermagic mismatch")
+    for name, expected in module["parameters"].items():
+        observed = snapshot.get("module_parameters", {}).get(name)
+        if observed is None and name == "diag_ctxsw":
+            observed = snapshot.get("diag_ctxsw")
+        if observed != expected:
+            reasons.append(f"loaded {name} parameter mismatch")
     if snapshot.get("diag_ctxsw") != module["parameters"].get("diag_ctxsw"):
         reasons.append("loaded diag_ctxsw parameter mismatch")
     if snapshot.get("initramfs_path") != initramfs["path"]:
@@ -339,6 +429,12 @@ def evaluate_snapshot(manifest: dict[str, Any], snapshot: dict[str, Any]) -> lis
         reasons.append("initramfs hash mismatch")
     if snapshot.get("embedded_nouveau_sha256") != initramfs["embedded_uncompressed_sha256"]:
         reasons.append("initramfs embedded Nouveau hash mismatch")
+    options = manifest.get("module_options")
+    if options is not None:
+        if snapshot.get("module_options_file_sha256") != options.get("content_sha256"):
+            reasons.append("installed early-load Nouveau options file hash mismatch")
+        if snapshot.get("embedded_module_options") != options.get("embedded_initramfs_entries"):
+            reasons.append("initramfs early-load Nouveau options mismatch")
     if not snapshot.get("journal_visible"):
         reasons.append("current-boot kernel journal visibility not proven")
     if not snapshot.get("journal_current_boot"):
@@ -376,14 +472,103 @@ def evaluate_snapshot(manifest: dict[str, Any], snapshot: dict[str, Any]) -> lis
     return reasons
 
 
+def evaluate_ambient_capture(
+    manifest: dict[str, Any],
+    snapshot: dict[str, Any],
+    *,
+    confirmed_no_reload: bool,
+) -> list[str]:
+    """Validate read-only evidence capture without admitting any workload."""
+    reasons: list[str] = []
+    module = manifest["nouveau"]
+    initramfs = manifest["initramfs"]
+    options = manifest.get("module_options")
+    if options is None or module.get("parameters", {}).get("diag_bar2_map") != "Y":
+        reasons.append("manifest does not pin diag_bar2_map=Y")
+    if snapshot.get("kernel_release") != manifest.get("kernel"):
+        reasons.append("running kernel mismatch")
+    if snapshot.get("loaded_srcversion") != module.get("srcversion"):
+        reasons.append("loaded Nouveau srcversion mismatch")
+    if snapshot.get("installed_srcversion") != module.get("srcversion"):
+        reasons.append("selected installed module srcversion mismatch")
+    if snapshot.get("selected_module_path") != module.get("module_path"):
+        reasons.append("modinfo-selected module path mismatch")
+    if snapshot.get("installed_compressed_sha256") != module.get("installed_compressed_sha256"):
+        reasons.append("installed compressed module hash mismatch")
+    if snapshot.get("installed_uncompressed_sha256") != module.get("installed_uncompressed_sha256"):
+        reasons.append("installed module bytes hash mismatch")
+    if snapshot.get("vermagic") != module.get("vermagic"):
+        reasons.append("installed module vermagic mismatch")
+    for name, expected in module.get("parameters", {}).items():
+        if snapshot.get("module_parameters", {}).get(name) != expected:
+            reasons.append(f"loaded {name} parameter mismatch")
+    if options is not None:
+        if snapshot.get("module_options_file_sha256") != options.get("content_sha256"):
+            reasons.append("installed early-load Nouveau options file hash mismatch")
+        if snapshot.get("embedded_module_options") != options.get("embedded_initramfs_entries"):
+            reasons.append("initramfs early-load Nouveau options mismatch")
+    if snapshot.get("initramfs_path") != initramfs.get("path"):
+        reasons.append("initramfs path mismatch")
+    if snapshot.get("initramfs_sha256") != initramfs.get("sha256"):
+        reasons.append("initramfs hash mismatch")
+    if snapshot.get("embedded_nouveau_sha256") != initramfs.get("embedded_uncompressed_sha256"):
+        reasons.append("initramfs embedded Nouveau module hash mismatch")
+    if not snapshot.get("journal_visible") or not snapshot.get("journal_current_boot"):
+        reasons.append("current-boot kernel journal provenance not proven")
+    if snapshot.get("bar2_pte_count", 0) <= 0:
+        reasons.append("no BAR2/HOST_CPU/PTE fault is present for archival")
+    if not snapshot.get("ambient_fault_correlation_parseable"):
+        reasons.append(
+            "ambient fault journal is not parseable: "
+            + str(snapshot.get("ambient_fault_correlation_detail", "unknown"))
+        )
+    if not confirmed_no_reload:
+        reasons.append("operator has not confirmed that Nouveau was not unloaded or reloaded")
+    report = snapshot.get("ambient_fault_correlation_report") or {}
+    if report.get("fault_count", 0) <= 0:
+        reasons.append("ambient correlation contains no fault records")
+    if report.get("module_load_epoch_policy") != "single_nouveau_module_instance_per_boot":
+        reasons.append("ambient correlation does not use the single-module-epoch policy")
+    if not report.get("diagnostic_sequence_gaps_rejected"):
+        reasons.append("ambient diagnostic sequence was not validated")
+    return reasons
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--manifest", type=Path, required=True)
+    parser.add_argument(
+        "--ambient-fault-capture",
+        action="store_true",
+        help="check provenance for read-only post-fault archival; never admits workloads",
+    )
+    parser.add_argument(
+        "--confirm-no-nouveau-reload",
+        action="store_true",
+        help="operator assertion that Nouveau was not unloaded or reloaded this boot",
+    )
     args = parser.parse_args(argv)
     try:
         manifest = load_manifest(args.manifest.resolve(strict=True))
         verify_execution_identity(manifest)
         snapshot = collect_snapshot(manifest)
+        if args.ambient_fault_capture:
+            reasons = evaluate_ambient_capture(
+                manifest,
+                snapshot,
+                confirmed_no_reload=args.confirm_no_nouveau_reload,
+            )
+            print("RUN_ELIGIBLE=false")
+            print("AMBIENT_FAULT_CAPTURE_ELIGIBLE=" + ("false" if reasons else "true"))
+            print("BAR2_HOST_CPU_PTE_COUNT=" + str(snapshot["bar2_pte_count"]))
+            print("MODULE_RELOAD_ASSERTION=" + (
+                "operator_confirmed" if args.confirm_no_nouveau_reload else "missing"
+            ))
+            if reasons:
+                for reason in reasons:
+                    print(f"REASON={reason}")
+                return 2
+            return 0
         reasons = evaluate_snapshot(manifest, snapshot)
         if reasons:
             print("RUN_ELIGIBLE=false")
