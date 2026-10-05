@@ -1,0 +1,56 @@
+From: Keivan Moradi <18602635+k1moradi@users.noreply.github.com>
+Subject: [PATCH] drm/nouveau: mark BAR2 instobj teardown subphases
+
+Add opt-in process-context markers around the existing BAR2 ioremap removal
+and VMM release. These low-volume events distinguish a fault within PTE
+teardown from one before or after. The IRQ path is unchanged.
+
+Signed-off-by: Keivan Moradi <18602635+k1moradi@users.noreply.github.com>
+
+diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
+index 032cee686924..33857e36522b 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
+@@ -672,15 +672,41 @@
+ 
+ 	if (map) {
+ 		struct nvkm_vmm *vmm = nvkm_bar_bar2_vmm(imem->subdev.device);
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++		if (diag_enabled)
++			nv50_instobj_diag_log(subdev, &diag, "OBJECT_IOUNMAP_BEGIN", 0,
++					      bar2_va, bar2_len, "resident", "none",
++					      "none", "none", refs, 0);
++#endif
+ 		iounmap(map);
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++		if (diag_enabled)
++			nv50_instobj_diag_log(subdev, &diag, "OBJECT_IOUNMAP_DONE", 0,
++					      bar2_va, bar2_len, "resident", "none",
++					      "none", "none", refs, 0);
++#endif
+ 		if (likely(vmm)) { /* Can be NULL during BAR destructor. */
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++			if (diag_enabled)
++				nv50_instobj_diag_log(subdev, &diag, "OBJECT_VMM_PUT_BEGIN", 0,
++						      bar2_va, bar2_len, "resident", "none",
++						      "none", "none", refs, 0);
++#endif
+ 			nvkm_vmm_put(vmm, &bar);
+ #if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
+-			if (diag_enabled && bar2_len)
++			if (diag_enabled && bar2_len) {
+ 				vma_destroyed = true;
++				nv50_instobj_diag_log(subdev, &diag, "OBJECT_VMM_PUT_DONE", 0,
++						      bar2_va, bar2_len, "destroyed", "none",
++						      "none", "none", refs, 0);
++			}
+ 		} else {
+ 			vma_state = "unknown";
+ 			destroy_rc = -ENODEV;
++			if (diag_enabled)
++				nv50_instobj_diag_log(subdev, &diag, "OBJECT_VMM_PUT_SKIPPED", 0,
++						      bar2_va, bar2_len, vma_state, "none",
++						      "none", "none", refs, destroy_rc);
+ #endif
+ 		}
+ 	}
