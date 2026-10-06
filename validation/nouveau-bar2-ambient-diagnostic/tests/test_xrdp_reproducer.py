@@ -198,8 +198,8 @@ class XrdpReproducerTests(unittest.TestCase):
 
     def test_profile_requires_explicit_trigger_event_budget(self):
         profile = RUNNER.load_json(RUNNER.PROFILE)
-        self.assertEqual(profile["workload"]["expected_trigger_events"], 65_536)
-        for invalid in (None, 1, 65_535, -1, "65536", True):
+        self.assertEqual(profile["workload"]["expected_trigger_events"], 219_478)
+        for invalid in (None, 1, 219_477, -1, "219478", True):
             workload = dict(profile["workload"])
             if invalid is None:
                 workload.pop("expected_trigger_events")
@@ -211,9 +211,9 @@ class XrdpReproducerTests(unittest.TestCase):
                 RUNNER.validate_trigger_event_budget(workload)
         self.assertEqual(
             RUNNER.validate_trigger_event_budget(
-                {"expected_trigger_events": 65_536}
+                {"expected_trigger_events": 219_478}
             ),
-            65_536,
+            219_478,
         )
 
     def test_headroom_policy_rejects_weakened_or_coerced_profile_values(self):
@@ -221,7 +221,7 @@ class XrdpReproducerTests(unittest.TestCase):
         original = dict(profile["workload"])
         self.assertEqual(
             RUNNER.validate_headroom_policy(original),
-            (65_536, 30_000, 1.5, 5_000),
+            (219_478, 30_000, 1.5, 5_000),
         )
         weakened = (
             ("minimum_ring_headroom", 0),
