@@ -75,6 +75,21 @@ class RingParserTests(unittest.TestCase):
         })
         self.assertEqual([event["index"] for event in events], [0, 1])
 
+    def test_vmm_teardown_records_are_accepted_in_ring(self):
+        event = (
+            0, 5_000_000,
+            "NOUVEAU_DIAG_BAR2_VMM seq=1 op=1 target_id=7 "
+            "phase=VMM_PUT_BEGIN target_va=0x4000 target_len=0x1000 "
+            "target_map_refs=0 pt_id=0 pte_va=0x0 pte_first=0 pte_count=0 "
+            "pte_shift=0 map_reset_valid=1 map_reset_gen=0 "
+            "current_reset_gen=0 flush_depth=-1",
+        )
+        header, events = self.parse(ring_text(
+            head=1, captured=1, events=(event,), cutoff_ns=6_000_000,
+        ))
+        self.assertEqual(header["captured"], 1)
+        self.assertIn("NOUVEAU_DIAG_BAR2_VMM", events[0]["message"])
+
     def test_reported_drop_is_rejected(self):
         with self.assertRaisesRegex(EXPORTER.RingCaptureError, "dropped events"):
             self.parse(ring_text(dropped=1))
@@ -249,6 +264,19 @@ class RingExportTests(unittest.TestCase):
             ring.write_text(ring_text(), encoding="ascii")
             journal.write_text(journal_row(
                 MESSAGE="NOUVEAU_DIAG_BAR2_MAP seq=9 id=4 stage=MAP_READY"
+            ) + "\n", encoding="utf-8")
+            with self.assertRaisesRegex(EXPORTER.RingCaptureError, "replaced by the ring"):
+                EXPORTER.export_ring(ring, journal, output)
+
+    def test_old_printk_vmm_records_are_not_merged_with_ring(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            ring = root / "ring.txt"
+            journal = root / "kernel.jsonl"
+            output = root / "merged.jsonl"
+            ring.write_text(ring_text(), encoding="ascii")
+            journal.write_text(journal_row(
+                MESSAGE="NOUVEAU_DIAG_BAR2_VMM seq=1 op=1 target_id=7"
             ) + "\n", encoding="utf-8")
             with self.assertRaisesRegex(EXPORTER.RingCaptureError, "replaced by the ring"):
                 EXPORTER.export_ring(ring, journal, output)

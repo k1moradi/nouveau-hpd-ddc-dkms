@@ -19,13 +19,13 @@ SPEC.loader.exec_module(BUILDER)
 
 
 class PatchInputTests(unittest.TestCase):
-    def test_builder_cli_accepts_the_pinned_ring_unwind_patch(self):
+    def test_builder_cli_accepts_the_pinned_vmm_teardown_patch(self):
         source = SCRIPT.read_text(encoding="utf-8")
         self.assertIn(
-            'parser.add_argument("--ambient-ring-unwind-patch", type=Path, required=True)',
+            'parser.add_argument("--ambient-vmm-teardown-patch", type=Path, required=True)',
             source,
         )
-        self.assertIn("args.ambient_ring_unwind_patch,", source)
+        self.assertIn("args.ambient_vmm_teardown_patch,", source)
 
     def test_retained_build_guard_detects_repository_or_input_changes(self):
         before = BUILDER.ReviewTreeSnapshot(
@@ -62,6 +62,9 @@ class PatchInputTests(unittest.TestCase):
             "NOUVEAU_DIAG_BAR2_RING_STATUS",
             "OBJECT_IOUNMAP_BEGIN",
             "OBJECT_VMM_PUT_BEGIN",
+            "NOUVEAU_DIAG_BAR2_VMM",
+            "PT_LAST_REF_BEGIN",
+            "VMM_FLUSH_BEGIN",
             "diag_bar2_map",
         ):
             with self.subTest(marker=marker):
@@ -93,9 +96,13 @@ class PatchInputTests(unittest.TestCase):
             ROOT / "validation/nouveau-bar2-ambient-diagnostic/patches/"
             "0014-drm-nouveau-unwind-ambient-bar2-ring-init.patch"
         )
+        vmm_teardown = (
+            ROOT / "validation/nouveau-bar2-ambient-diagnostic/patches/"
+            "0015-drm-nouveau-correlate-bar2-vmm-pte-teardown.patch"
+        )
 
         paths = BUILDER.verify_patch_inputs(
-            nvif, vma, ambient, teardown, ring, unwind
+            nvif, vma, ambient, teardown, ring, unwind, vmm_teardown
         )
 
         self.assertEqual(paths["0009-drm-nouveau-log-nvif-duplicate-layer.patch"], nvif)

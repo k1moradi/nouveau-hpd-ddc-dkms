@@ -19,13 +19,14 @@ HEADER = re.compile(
 )
 EVENT = re.compile(
     r"NOUVEAU_DIAG_BAR2_RING_EVENT index=(\d+) mono_ns=(\d+) "
-    r"message=(NOUVEAU_DIAG_BAR2_(?:MAP|RESET) .+)"
+    r"message=(NOUVEAU_DIAG_BAR2_(?:MAP|RESET|VMM) .+)"
 )
 GAP = re.compile(r"NOUVEAU_DIAG_BAR2_RING_GAP index=(\d+)")
 FOOTER = re.compile(r"NOUVEAU_DIAG_BAR2_RING_END head=(\d+) dropped=(\d+)")
 REPLACED_JOURNAL_TAGS = (
     "NOUVEAU_DIAG_BAR2_MAP ",
     "NOUVEAU_DIAG_BAR2_RESET ",
+    "NOUVEAU_DIAG_BAR2_VMM ",
 )
 KERNEL_LOG_LOSS = re.compile(
     r"/dev/kmsg buffer overrun,\s*some messages lost", re.IGNORECASE,

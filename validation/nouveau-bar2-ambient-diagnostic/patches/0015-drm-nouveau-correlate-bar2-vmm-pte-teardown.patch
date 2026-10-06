@@ -1,0 +1,406 @@
+diff --git a/drivers/gpu/drm/nouveau/include/nvkm/core/memory.h b/drivers/gpu/drm/nouveau/include/nvkm/core/memory.h
+index 153c1912e29fbcd24c5b3b99963bb1b4125ca815..89433f4fe1edba781ee8ae9490bfa50ef2c352b7 100644
+--- a/drivers/gpu/drm/nouveau/include/nvkm/core/memory.h
++++ b/drivers/gpu/drm/nouveau/include/nvkm/core/memory.h
+@@ -35,0 +36 @@ struct nvkm_memory_func {
++	u64 (*diag_id)(struct nvkm_memory *memory);
+@@ -74,0 +76,8 @@ nvkm_memory_bar2_vma_snapshot(struct nvkm_memory *memory,
++
++static inline u64
++nvkm_memory_diag_id(struct nvkm_memory *memory)
++{
++	if (!memory || !memory->func || !memory->func->diag_id)
++		return 0;
++	return memory->func->diag_id(memory);
++}
+diff --git a/drivers/gpu/drm/nouveau/include/nvkm/subdev/bar.h b/drivers/gpu/drm/nouveau/include/nvkm/subdev/bar.h
+index 1497480f209388f152873ea242a0ad09ea1d8f49..1713a85377bdf8813a6718365d0ce56952321e22 100644
+--- a/drivers/gpu/drm/nouveau/include/nvkm/subdev/bar.h
++++ b/drivers/gpu/drm/nouveau/include/nvkm/subdev/bar.h
+@@ -5,0 +6 @@ struct nvkm_vma;
++struct nvkm_bar2_vmm_diag;
+@@ -27,0 +29,22 @@ void nvkm_bar_bar2_reset(struct nvkm_device *);
++struct nvkm_bar2_vmm_diag {
++	u64 operation_id;
++	u64 target_id;
++	u64 target_va;
++	u64 target_len;
++	u32 target_map_refs;
++	u64 map_reset_gen;
++	bool map_reset_valid;
++};
++
++enum nvkm_bar2_vmm_diag_phase {
++	NVKM_BAR2_VMM_PUT_BEGIN,
++	NVKM_BAR2_VMM_PTE_UNMAP_BEGIN,
++	NVKM_BAR2_VMM_PTE_WRITE_DONE,
++	NVKM_BAR2_VMM_PT_LAST_REF_BEGIN,
++	NVKM_BAR2_VMM_PT_LAST_REF_DONE,
++	NVKM_BAR2_VMM_FLUSH_BEGIN,
++	NVKM_BAR2_VMM_FLUSH_DONE,
++	NVKM_BAR2_VMM_VMA_RANGE_RELEASE,
++	NVKM_BAR2_VMM_PUT_DONE,
++};
++
+@@ -34,0 +58,5 @@ void nvkm_bar2_diag_ring_record(const char *message);
++u64 nvkm_bar2_diag_vmm_operation(void);
++void nvkm_bar2_diag_vmm_phase(const struct nvkm_bar2_vmm_diag *diag,
++			      enum nvkm_bar2_vmm_diag_phase phase,
++			      u64 pt_id, u64 pte_va, u32 pte_first,
++			      u32 pte_count, u8 pte_shift, int flush_depth);
+diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/bar/base.c b/drivers/gpu/drm/nouveau/nvkm/subdev/bar/base.c
+index 779ba3df2d0ae8064d1b8bfacb109abe5036a436..8dadd8c2595019e2db728194ee6c92156a42e5d4 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/bar/base.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/bar/base.c
+@@ -38,0 +39 @@ static atomic64_t nvkm_bar2_diag_gen = ATOMIC64_INIT(0);
++static atomic64_t nvkm_bar2_diag_vmm_op = ATOMIC64_INIT(0);
+@@ -143,0 +145,58 @@ nvkm_bar2_diag_enabled(void)
++u64
++nvkm_bar2_diag_vmm_operation(void)
++{
++	return atomic64_inc_return(&nvkm_bar2_diag_vmm_op);
++}
++
++void
++nvkm_bar2_diag_vmm_phase(const struct nvkm_bar2_vmm_diag *diag,
++			 enum nvkm_bar2_vmm_diag_phase phase,
++			 u64 pt_id, u64 pte_va,
++			 u32 pte_first, u32 pte_count, u8 pte_shift,
++			 int flush_depth)
++{
++	static const char * const phases[] = {
++		[NVKM_BAR2_VMM_PUT_BEGIN] = "VMM_PUT_BEGIN",
++		[NVKM_BAR2_VMM_PTE_UNMAP_BEGIN] = "PTE_UNMAP_BEGIN",
++		[NVKM_BAR2_VMM_PTE_WRITE_DONE] = "PTE_WRITE_DONE",
++		[NVKM_BAR2_VMM_PT_LAST_REF_BEGIN] = "PT_LAST_REF_BEGIN",
++		[NVKM_BAR2_VMM_PT_LAST_REF_DONE] = "PT_LAST_REF_DONE",
++		[NVKM_BAR2_VMM_FLUSH_BEGIN] = "VMM_FLUSH_BEGIN",
++		[NVKM_BAR2_VMM_FLUSH_DONE] = "VMM_FLUSH_DONE",
++		[NVKM_BAR2_VMM_VMA_RANGE_RELEASE] = "VMA_RANGE_RELEASE",
++		[NVKM_BAR2_VMM_PUT_DONE] = "VMM_PUT_DONE",
++	};
++	char message[512];
++	u64 map_reset_gen;
++	size_t length;
++
++	if (!diag || !nvkm_bar2_diag_enabled() ||
++	    (unsigned int)phase >= ARRAY_SIZE(phases) || !phases[phase])
++		return;
++
++	map_reset_gen = diag->map_reset_valid ? diag->map_reset_gen : 0;
++
++	length = scnprintf(message, sizeof(message),
++			   "NOUVEAU_DIAG_BAR2_VMM seq=%llu op=%llu target_id=%llu phase=%s",
++			   (unsigned long long)nvkm_bar2_diag_sequence(),
++			   (unsigned long long)diag->operation_id,
++			   (unsigned long long)diag->target_id, phases[phase]);
++	length += scnprintf(message + length, sizeof(message) - length,
++			     " target_va=%#llx target_len=%#llx target_map_refs=%u",
++			     (unsigned long long)diag->target_va,
++			     (unsigned long long)diag->target_len,
++			     diag->target_map_refs);
++	length += scnprintf(message + length, sizeof(message) - length,
++			     " pt_id=%llu pte_va=%#llx pte_first=%u pte_count=%u",
++			     (unsigned long long)pt_id, (unsigned long long)pte_va,
++			     pte_first, pte_count);
++	length += scnprintf(message + length, sizeof(message) - length,
++			     " pte_shift=%u map_reset_valid=%u map_reset_gen=%llu",
++			     pte_shift, diag->map_reset_valid,
++			     (unsigned long long)map_reset_gen);
++	scnprintf(message + length, sizeof(message) - length,
++		  " current_reset_gen=%llu flush_depth=%d",
++		  (unsigned long long)nvkm_bar2_diag_reset_generation(), flush_depth);
++	nvkm_bar2_diag_ring_record(message);
++}
++
+diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c b/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
+index adb0f38249e1daa8c0e9a016149f9ce664efe15f..515e0eead9645f72314ba12bad542ac6d4da9ce7 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c
+@@ -36,0 +37 @@
++#include <subdev/mmu/vmm.h>
+@@ -67 +68 @@ struct nv50_instobj {
+-static atomic64_t nv50_instobj_diag_id = ATOMIC64_INIT(0);
++static atomic64_t nv50_instobj_diag_id_seq = ATOMIC64_INIT(0);
+@@ -88,0 +90,6 @@ nv50_instobj_diag_identity(struct nv50_instobj *iobj,
++static u64
++nv50_instobj_diag_id(struct nvkm_memory *memory)
++{
++	return nv50_instobj(memory)->diag_id;
++}
++
+@@ -245,0 +253 @@ nv50_instobj_kmap(struct nv50_instobj *iobj, struct nvkm_vmm *vmm)
++	struct nvkm_bar2_vmm_diag evmm_diag;
+@@ -248,0 +257 @@ nv50_instobj_kmap(struct nv50_instobj *iobj, struct nvkm_vmm *vmm)
++	u32 evict_refs;
+@@ -280,0 +290 @@ nv50_instobj_kmap(struct nv50_instobj *iobj, struct nvkm_vmm *vmm)
++				evict_refs = refcount_read(&eobj->maps);
+@@ -301,0 +312,14 @@ nv50_instobj_kmap(struct nv50_instobj *iobj, struct nvkm_vmm *vmm)
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++		if (nvkm_bar2_diag_enabled()) {
++			evmm_diag.operation_id = nvkm_bar2_diag_vmm_operation();
++			evmm_diag.target_id = ediag.id;
++			evmm_diag.target_va = evict_va;
++			evmm_diag.target_len = evict_len;
++			evmm_diag.target_map_refs = evict_refs;
++			evmm_diag.map_reset_gen = ediag.map_reset_gen;
++			evmm_diag.map_reset_valid = ediag.map_reset_valid;
++			nvkm_vmm_put_diag(vmm, &ebar, &evmm_diag);
++		} else {
++			nvkm_vmm_put(vmm, &ebar);
++		}
++#else
+@@ -302,0 +327 @@ nv50_instobj_kmap(struct nv50_instobj *iobj, struct nvkm_vmm *vmm)
++#endif
+@@ -634,0 +660 @@ nv50_instobj_dtor(struct nvkm_memory *memory)
++	struct nvkm_bar2_vmm_diag vmm_diag;
+@@ -696 +722,12 @@ nv50_instobj_dtor(struct nvkm_memory *memory)
+-			nvkm_vmm_put(vmm, &bar);
++			if (diag_enabled) {
++				vmm_diag.operation_id = nvkm_bar2_diag_vmm_operation();
++				vmm_diag.target_id = diag.id;
++				vmm_diag.target_va = bar2_va;
++				vmm_diag.target_len = bar2_len;
++				vmm_diag.target_map_refs = refs;
++				vmm_diag.map_reset_gen = diag.map_reset_gen;
++				vmm_diag.map_reset_valid = diag.map_reset_valid;
++				nvkm_vmm_put_diag(vmm, &bar, &vmm_diag);
++			} else {
++				nvkm_vmm_put(vmm, &bar);
++			}
+@@ -735,0 +773 @@ nv50_instobj_func = {
++	.diag_id = nv50_instobj_diag_id,
+@@ -766 +804 @@ nv50_instobj_wrap(struct nvkm_instmem *base,
+-		iobj->diag_id = atomic64_inc_return(&nv50_instobj_diag_id);
++		iobj->diag_id = atomic64_inc_return(&nv50_instobj_diag_id_seq);
+diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmm.c b/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmm.c
+index c2d854c7af99c61cc53f532b474e6f7abfc08083..90d8b7fd3627df4e75eb31fefb28ca538990178d 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmm.c
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmm.c
+@@ -24,0 +25,3 @@
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++#include <subdev/bar.h>
++#endif
+@@ -80,0 +84,4 @@ struct nvkm_vmm_iter {
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	const struct nvkm_bar2_vmm_diag *diag;
++	u64 diag_va;
++#endif
+@@ -82,0 +90,21 @@ struct nvkm_vmm_iter {
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++static inline void
++nvkm_vmm_diag_pte(struct nvkm_vmm_iter *it,
++		  enum nvkm_bar2_vmm_diag_phase phase, u64 pt_id,
++		  u32 pte_first, u32 pte_count)
++{
++	if (it->diag)
++		nvkm_bar2_diag_vmm_phase(it->diag, phase, pt_id, it->diag_va,
++					 pte_first, pte_count, it->page->shift, -1);
++}
++
++static inline void
++nvkm_vmm_diag_flush(struct nvkm_vmm_iter *it,
++		    enum nvkm_bar2_vmm_diag_phase phase)
++{
++	if (it->diag)
++		nvkm_bar2_diag_vmm_phase(it->diag, phase, 0, 0, 0, 0, 0,
++					 it->flush);
++}
++#endif
++
+@@ -129,0 +158,3 @@ nvkm_vmm_flush(struct nvkm_vmm_iter *it)
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++			nvkm_vmm_diag_flush(it, NVKM_BAR2_VMM_FLUSH_BEGIN);
++#endif
+@@ -131,0 +163,3 @@ nvkm_vmm_flush(struct nvkm_vmm_iter *it)
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++			nvkm_vmm_diag_flush(it, NVKM_BAR2_VMM_FLUSH_DONE);
++#endif
+@@ -263,0 +298,9 @@ nvkm_vmm_unref_ptes(struct nvkm_vmm_iter *it, bool pfn, u32 ptei, u32 ptes)
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	struct nvkm_mmu_pt *pt = pgt->pt[type];
++	u64 diag_pt_id = 0;
++	u64 diag_va = it->diag_va;
++	u32 diag_ptes = ptes;
++
++	if (it->diag && pt && pt->memory)
++		diag_pt_id = nvkm_memory_diag_id(pt->memory);
++#endif
+@@ -296,0 +340,4 @@ nvkm_vmm_unref_ptes(struct nvkm_vmm_iter *it, bool pfn, u32 ptei, u32 ptes)
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++		nvkm_vmm_diag_pte(it, NVKM_BAR2_VMM_PT_LAST_REF_BEGIN,
++				  diag_pt_id, ptei, diag_ptes);
++#endif
+@@ -297,0 +345,4 @@ nvkm_vmm_unref_ptes(struct nvkm_vmm_iter *it, bool pfn, u32 ptei, u32 ptes)
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++		nvkm_vmm_diag_pte(it, NVKM_BAR2_VMM_PT_LAST_REF_DONE,
++				  diag_pt_id, ptei, diag_ptes);
++#endif
+@@ -526 +577,2 @@ nvkm_vmm_iter(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-	      nvkm_vmm_pxe_func CLR_PTES)
++	      nvkm_vmm_pxe_func CLR_PTES,
++	      const struct nvkm_bar2_vmm_diag *diag)
+@@ -530,0 +583,3 @@ nvkm_vmm_iter(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
++#if !IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	(void)diag;
++#endif
+@@ -536,0 +592,4 @@ nvkm_vmm_iter(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	it.diag = diag;
++	it.diag_va = addr;
++#endif
+@@ -585,0 +645,4 @@ nvkm_vmm_iter(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++			u64 diag_pt_id = it.diag && pt && pt->memory ?
++				nvkm_memory_diag_id(pt->memory) : 0;
++#endif
+@@ -587 +650 @@ nvkm_vmm_iter(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-				if (MAP_PTES)
++				if (MAP_PTES) {
+@@ -589 +652,6 @@ nvkm_vmm_iter(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-				else
++				} else {
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++					nvkm_vmm_diag_pte(&it,
++							  NVKM_BAR2_VMM_PTE_UNMAP_BEGIN,
++							  diag_pt_id, ptei, ptes);
++#endif
+@@ -590,0 +659,6 @@ nvkm_vmm_iter(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++					nvkm_vmm_diag_pte(&it,
++							  NVKM_BAR2_VMM_PTE_WRITE_DONE,
++							  diag_pt_id, ptei, ptes);
++#endif
++				}
+@@ -596,0 +671,3 @@ nvkm_vmm_iter(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++		it.diag_va += (u64)ptes << page->shift;
++#endif
+@@ -629 +706 @@ nvkm_vmm_ptes_sparse_put(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-		      page->desc->func->invalid : page->desc->func->unmap);
++		      page->desc->func->invalid : page->desc->func->unmap, NULL);
+@@ -639 +716 @@ nvkm_vmm_ptes_sparse_get(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-					 NULL, NULL, page->desc->func->sparse);
++					 NULL, NULL, page->desc->func->sparse, NULL);
+@@ -701,2 +778,4 @@ static void
+-nvkm_vmm_ptes_unmap(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-		    u64 addr, u64 size, bool sparse, bool pfn)
++nvkm_vmm_ptes_unmap_diag(struct nvkm_vmm *vmm,
++			 const struct nvkm_vmm_page *page,
++			 u64 addr, u64 size, bool sparse, bool pfn,
++			 const struct nvkm_bar2_vmm_diag *diag)
+@@ -710 +789,2 @@ nvkm_vmm_ptes_unmap(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-							      func->unmap);
++							      func->unmap,
++		      diag);
+@@ -713,0 +794,7 @@ nvkm_vmm_ptes_unmap(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
++static void
++nvkm_vmm_ptes_unmap(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
++		    u64 addr, u64 size, bool sparse, bool pfn)
++{
++	nvkm_vmm_ptes_unmap_diag(vmm, page, addr, size, sparse, pfn, NULL);
++}
++
+@@ -721 +808 @@ nvkm_vmm_ptes_map(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-		      NULL, func, map, NULL);
++		      NULL, func, map, NULL, NULL);
+@@ -730 +817 @@ nvkm_vmm_ptes_put_locked(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-		      nvkm_vmm_unref_ptes, NULL, NULL, NULL);
++		      nvkm_vmm_unref_ptes, NULL, NULL, NULL, NULL);
+@@ -750 +837 @@ nvkm_vmm_ptes_get(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-			     nvkm_vmm_ref_ptes, NULL, NULL, NULL);
++			     nvkm_vmm_ref_ptes, NULL, NULL, NULL, NULL);
+@@ -763 +850,2 @@ __nvkm_vmm_ptes_unmap_put(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page
+-			  u64 addr, u64 size, bool sparse, bool pfn)
++			  u64 addr, u64 size, bool sparse, bool pfn,
++			  const struct nvkm_bar2_vmm_diag *diag)
+@@ -770 +858,2 @@ __nvkm_vmm_ptes_unmap_put(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page
+-							      func->unmap);
++							      func->unmap,
++		      diag);
+@@ -774,2 +863,4 @@ static void
+-nvkm_vmm_ptes_unmap_put(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-			u64 addr, u64 size, bool sparse, bool pfn)
++nvkm_vmm_ptes_unmap_put_diag(struct nvkm_vmm *vmm,
++			     const struct nvkm_vmm_page *page,
++			     u64 addr, u64 size, bool sparse, bool pfn,
++			     const struct nvkm_bar2_vmm_diag *diag)
+@@ -778 +869 @@ nvkm_vmm_ptes_unmap_put(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-		nvkm_vmm_ptes_unmap(vmm, page, addr, size, sparse, pfn);
++		nvkm_vmm_ptes_unmap_diag(vmm, page, addr, size, sparse, pfn, diag);
+@@ -781 +872,2 @@ nvkm_vmm_ptes_unmap_put(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-		__nvkm_vmm_ptes_unmap_put(vmm, page, addr, size, sparse, pfn);
++		__nvkm_vmm_ptes_unmap_put(vmm, page, addr, size, sparse, pfn,
++					  diag);
+@@ -784,0 +877,7 @@ nvkm_vmm_ptes_unmap_put(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
++static void
++nvkm_vmm_ptes_unmap_put(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
++			u64 addr, u64 size, bool sparse, bool pfn)
++{
++	nvkm_vmm_ptes_unmap_put_diag(vmm, page, addr, size, sparse, pfn, NULL);
++}
++
+@@ -791 +890 @@ __nvkm_vmm_ptes_get_map(struct nvkm_vmm *vmm, const struct nvkm_vmm_page *page,
+-				 false, nvkm_vmm_ref_ptes, func, map, NULL);
++				 false, nvkm_vmm_ref_ptes, func, map, NULL, NULL);
+@@ -1627,2 +1726,3 @@ nvkm_vmm_put_region(struct nvkm_vmm *vmm, struct nvkm_vma *vma)
+-void
+-nvkm_vmm_put_locked(struct nvkm_vmm *vmm, struct nvkm_vma *vma)
++static void
++nvkm_vmm_put_locked_impl(struct nvkm_vmm *vmm, struct nvkm_vma *vma,
++			 const struct nvkm_bar2_vmm_diag *diag)
+@@ -1655,3 +1755,3 @@ nvkm_vmm_put_locked(struct nvkm_vmm *vmm, struct nvkm_vma *vma)
+-				nvkm_vmm_ptes_unmap_put(vmm, &page[refd], addr,
+-							size, vma->sparse,
+-							!mem);
++				nvkm_vmm_ptes_unmap_put_diag(vmm, &page[refd], addr,
++							     size, vma->sparse,
++							     !mem, diag);
+@@ -1706,0 +1807,12 @@ nvkm_vmm_put_locked(struct nvkm_vmm *vmm, struct nvkm_vma *vma)
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++	if (diag)
++		nvkm_bar2_diag_vmm_phase(diag,
++					 NVKM_BAR2_VMM_VMA_RANGE_RELEASE,
++					 0, 0, 0, 0, 0, -1);
++#endif
++}
++
++void
++nvkm_vmm_put_locked(struct nvkm_vmm *vmm, struct nvkm_vma *vma)
++{
++	nvkm_vmm_put_locked_impl(vmm, vma, NULL);
+@@ -1720,0 +1833,20 @@ nvkm_vmm_put(struct nvkm_vmm *vmm, struct nvkm_vma **pvma)
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++void
++nvkm_vmm_put_diag(struct nvkm_vmm *vmm, struct nvkm_vma **pvma,
++		  const struct nvkm_bar2_vmm_diag *diag)
++{
++	struct nvkm_vma *vma = *pvma;
++
++	if (vma) {
++		nvkm_bar2_diag_vmm_phase(diag, NVKM_BAR2_VMM_PUT_BEGIN,
++					 0, 0, 0, 0, 0, -1);
++		mutex_lock(&vmm->mutex.vmm);
++		nvkm_vmm_put_locked_impl(vmm, vma, diag);
++		mutex_unlock(&vmm->mutex.vmm);
++		*pvma = NULL;
++		nvkm_bar2_diag_vmm_phase(diag, NVKM_BAR2_VMM_PUT_DONE,
++					 0, 0, 0, 0, 0, -1);
++	}
++}
++#endif
++
+@@ -1955 +2087 @@ nvkm_vmm_boot(struct nvkm_vmm *vmm)
+-		      nvkm_vmm_boot_ptes, NULL, NULL, NULL);
++		      nvkm_vmm_boot_ptes, NULL, NULL, NULL, NULL);
+diff --git a/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmm.h b/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmm.h
+index 4ec0a3a211690f732f3c47cf569e7361a08d113b..000604786d08318f1bb0e270ca9959189fc67155 100644
+--- a/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmm.h
++++ b/drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmm.h
+@@ -4,0 +5 @@
++struct nvkm_bar2_vmm_diag;
+@@ -183,0 +185,4 @@ void nvkm_vmm_put_locked(struct nvkm_vmm *, struct nvkm_vma *);
++#if IS_ENABLED(CONFIG_DRM_NOUVEAU_SELFTEST)
++void nvkm_vmm_put_diag(struct nvkm_vmm *, struct nvkm_vma **,
++		       const struct nvkm_bar2_vmm_diag *);
++#endif

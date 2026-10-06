@@ -42,6 +42,10 @@ CANONICAL_BASE_FILE_SHA256 = {
         "e0d5ec84f39c2ca3335489c96303144c41abe88a3bd2276359fa186ba16b6cd8",
     "drivers/gpu/drm/nouveau/nvkm/subdev/instmem/nv50.c":
         "19060f6a69bfae03044443d310cbe15806f161f2bf1c0f5b24e72f704796894e",
+    "drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmm.c":
+        "3f2e59cca34f6e05d7b977837295c1a04a3a702cedaba942fbd63c365634b951",
+    "drivers/gpu/drm/nouveau/nvkm/subdev/mmu/vmm.h":
+        "10978e0c267b4c6e46207c320985fa6bb7e9f84192903c0d41259509645b3e26",
 }
 PATCHES = {
     "0009-drm-nouveau-log-nvif-duplicate-layer.patch":
@@ -56,6 +60,8 @@ PATCHES = {
         "d74002da984b672c510f7ecc1eb05e397f4ab869454276ab5c4c58c60740d6eb",
     "0014-drm-nouveau-unwind-ambient-bar2-ring-init.patch":
         "f4b92d317356dae0d105537a07f7293862cdb37bdee9eefa641e5310fb49752c",
+    "0015-drm-nouveau-correlate-bar2-vmm-pte-teardown.patch":
+        "4964ee345c991da602df2c74a135a0558a76f2b8261b50bc74c22e37c7c77506",
 }
 PATCH_ARGUMENTS = tuple(PATCHES)
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -83,6 +89,9 @@ REQUIRED_MARKERS = (
     "ambient_bar2_events",
     "NOUVEAU_DIAG_BAR2_RING_STATUS",
     "ambient_bar2_status",
+    "NOUVEAU_DIAG_BAR2_VMM",
+    "PT_LAST_REF_BEGIN",
+    "VMM_FLUSH_BEGIN",
     "diag_bar2_map",
 )
 DISABLED_MARKERS = (
@@ -394,6 +403,7 @@ def main() -> int:
     parser.add_argument("--teardown-phase-patch", type=Path, required=True)
     parser.add_argument("--ambient-ring-patch", type=Path, required=True)
     parser.add_argument("--ambient-ring-unwind-patch", type=Path, required=True)
+    parser.add_argument("--ambient-vmm-teardown-patch", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--review-commit", required=True)
     args = parser.parse_args()
@@ -409,6 +419,7 @@ def main() -> int:
         args.teardown_phase_patch,
         args.ambient_ring_patch,
         args.ambient_ring_unwind_patch,
+        args.ambient_vmm_teardown_patch,
     )
     review_before = review_tree_snapshot(patch_paths)
     review_branch = review_before.branch

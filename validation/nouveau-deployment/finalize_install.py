@@ -249,9 +249,10 @@ def validate_inputs(
             "0012-drm-nouveau-mark-bar2-teardown-phases.patch",
             "0013-drm-nouveau-capture-ambient-bar2-events.patch",
             "0014-drm-nouveau-unwind-ambient-bar2-ring-init.patch",
+            "0015-drm-nouveau-correlate-bar2-vmm-pte-teardown.patch",
         }
         if set(build.get("patch_sha256", {})) != expected_patch_names:
-            raise ValueError("ambient build manifest does not pin exactly patches 0009-0014")
+            raise ValueError("ambient build manifest does not pin exactly patches 0009-0015")
         markers = set(build.get("diagnostic_markers", []))
         if not {
             "NOUVEAU_DIAG_BAR2_MAP",
@@ -260,6 +261,9 @@ def validate_inputs(
             "OBJECT_VMM_PUT_BEGIN",
             "NOUVEAU_DIAG_BAR2_RING_EVENT",
             "NOUVEAU_DIAG_BAR2_RING_STATUS",
+            "NOUVEAU_DIAG_BAR2_VMM",
+            "PT_LAST_REF_BEGIN",
+            "VMM_FLUSH_BEGIN",
         } <= markers:
             raise ValueError("ambient module build lacks BAR2 ring/teardown markers")
     if build.get("srcversion") != plan.get("expected_srcversion"):
@@ -767,6 +771,9 @@ def build_final_manifest(
             ),
             "patch_0014_sha256": build["patch_sha256"].get(
                 "0014-drm-nouveau-unwind-ambient-bar2-ring-init.patch"
+            ),
+            "patch_0015_sha256": build["patch_sha256"].get(
+                "0015-drm-nouveau-correlate-bar2-vmm-pte-teardown.patch"
             ),
         },
         "nouveau": {

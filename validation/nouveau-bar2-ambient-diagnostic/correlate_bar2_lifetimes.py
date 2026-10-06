@@ -18,6 +18,7 @@ from typing import Any
 U64_MAX = (1 << 64) - 1
 MAP_TAG = "NOUVEAU_DIAG_BAR2_MAP "
 RESET_TAG = "NOUVEAU_DIAG_BAR2_RESET "
+VMM_TAG = "NOUVEAU_DIAG_BAR2_VMM "
 FAULT_TAG = "NOUVEAU_DIAG_BAR2_FAULT "
 MAP_FIELDS = {
     "seq", "id", "stage", "attempt", "vmm", "mem_addr", "mem_len",
@@ -26,6 +27,18 @@ MAP_FIELDS = {
     "comm", "rc",
 }
 RESET_FIELDS = {"seq", "gen", "stage"}
+VMM_FIELDS = {
+    "seq", "op", "target_id", "phase", "target_va", "target_len",
+    "target_map_refs", "pt_id", "pte_va", "pte_first", "pte_count",
+    "pte_shift", "map_reset_valid", "map_reset_gen", "current_reset_gen",
+    "flush_depth",
+}
+VMM_PHASES = {
+    "VMM_PUT_BEGIN", "PTE_UNMAP_BEGIN", "PTE_WRITE_DONE",
+    "PT_LAST_REF_BEGIN", "PT_LAST_REF_DONE",
+    "VMM_FLUSH_BEGIN", "VMM_FLUSH_DONE", "VMA_RANGE_RELEASE",
+    "VMM_PUT_DONE",
+}
 MAP_STAGES = {
     "ALLOCATED", "MAP_BEGIN", "MAP_VMA_RESERVED", "MAP_VMM_MAP_OK",
     "MAP_READY", "MAP_FAILED", "MAP_DISCARDED", "MAP_ROLLBACK_BEGIN",
@@ -192,6 +205,39 @@ class ResetEvent:
 
 
 @dataclass(frozen=True)
+class VmmEvent:
+    line: int
+    boot_id: str
+    mono_usec: int
+    ring_mono_ns: int
+    seq: int
+    operation_id: int
+    target_id: int
+    phase: str
+    target_va: int
+    target_len: int
+    target_map_refs: int
+    pt_id: int
+    pte_va: int
+    pte_first: int
+    pte_count: int
+    pte_shift: int
+    map_reset_valid: bool
+    map_reset_gen: int
+    current_reset_gen: int
+    flush_depth: int
+
+    def target_contains(self, address: int) -> bool:
+        return self.target_va <= address < self.target_va + self.target_len
+
+    def pte_contains(self, address: int) -> bool:
+        if not self.pte_count:
+            return False
+        size = self.pte_count << self.pte_shift
+        return self.pte_va <= address < self.pte_va + size
+
+
+@dataclass(frozen=True)
 class FaultEvent:
     raw_line: int
     decoded_line: int
@@ -246,6 +292,7 @@ class ParsedInput:
     rows: list[JournalRow]
     maps: list[MapEvent]
     resets: list[ResetEvent]
+    vmm_events: list[VmmEvent]
     faults: list[FaultEvent]
 
 
@@ -253,6 +300,7 @@ def parse_journal(path: Path) -> ParsedInput:
     rows: list[JournalRow] = []
     map_events: list[MapEvent] = []
     reset_events: list[ResetEvent] = []
+    vmm_events: list[VmmEvent] = []
     raw_faults: list[tuple[JournalRow, tuple[int, int, int, int, int]]] = []
     decoded_faults: list[tuple[JournalRow, re.Match[str]]] = []
     boots: set[str] = set()
@@ -308,7 +356,7 @@ def parse_journal(path: Path) -> ParsedInput:
                     raise CorrelationInputError(
                         f"line {line_number}: ring timestamp is not kernel transport"
                     )
-                if MAP_TAG not in message and RESET_TAG not in message:
+                if MAP_TAG not in message and RESET_TAG not in message and VMM_TAG not in message:
                     raise CorrelationInputError(
                         f"line {line_number}: ring timestamp is not attached to a lifecycle event"
                     )
@@ -401,6 +449,72 @@ def parse_journal(path: Path) -> ParsedInput:
                 diagnostic_sequences.add(seq)
                 reset_events.append(ResetEvent(line_number, boot, mono, seq, generation, fields["stage"]))
 
+            if VMM_TAG in message:
+                if record.get("_TRANSPORT") != "kernel":
+                    raise CorrelationInputError(f"line {line_number}: BAR2 VMM record is not kernel transport")
+                if message.count(VMM_TAG) != 1:
+                    raise CorrelationInputError(f"line {line_number}: repeated BAR2 VMM tag")
+                if ring_mono_ns is None:
+                    raise CorrelationInputError(f"line {line_number}: BAR2 VMM record lacks exact ring timestamp")
+                fields = _fields(message.split(VMM_TAG, 1)[1], VMM_FIELDS, line_number, "BAR2 VMM")
+                seq = _uint(fields["seq"], "sequence", line_number, maximum=U64_MAX)
+                operation_id = _uint(fields["op"], "VMM operation ID", line_number)
+                target_id = _uint(fields["target_id"], "target allocation ID", line_number)
+                target_va = _uint(fields["target_va"], "target VMA start", line_number, base=0)
+                target_len = _uint(fields["target_len"], "target VMA length", line_number, base=0)
+                target_map_refs = _uint(fields["target_map_refs"], "target kmap refs", line_number, maximum=2**31 - 1)
+                pt_id = _uint(fields["pt_id"], "page-table memory ID", line_number)
+                pte_va = _uint(fields["pte_va"], "PTE range start", line_number, base=0)
+                pte_first = _uint(fields["pte_first"], "first PTE index", line_number, maximum=0xFFFFFFFF)
+                pte_count = _uint(fields["pte_count"], "PTE count", line_number, maximum=0xFFFFFFFF)
+                pte_shift = _uint(fields["pte_shift"], "PTE page shift", line_number, maximum=63)
+                map_reset_valid = _uint(fields["map_reset_valid"], "map reset validity", line_number, maximum=1)
+                map_reset_gen = _uint(fields["map_reset_gen"], "mapping reset generation", line_number)
+                current_reset_gen = _uint(fields["current_reset_gen"], "current reset generation", line_number)
+                flush_depth = _signed(fields["flush_depth"], "flush depth", line_number, -1, 5)
+                phase = fields["phase"]
+
+                if seq == 0 or operation_id == 0 or target_id == 0:
+                    raise CorrelationInputError(f"line {line_number}: VMM IDs and sequence must be nonzero")
+                if phase not in VMM_PHASES:
+                    raise CorrelationInputError(f"line {line_number}: unknown VMM teardown phase")
+                if not target_len or target_va > U64_MAX - target_len:
+                    raise CorrelationInputError(f"line {line_number}: invalid or overflowing target VMA range")
+                if map_reset_valid and map_reset_gen > current_reset_gen:
+                    raise CorrelationInputError(f"line {line_number}: map reset generation exceeds current generation")
+                if not map_reset_valid and map_reset_gen:
+                    raise CorrelationInputError(f"line {line_number}: invalid map reset state carries a generation")
+
+                has_pte_range = phase in {
+                    "PTE_UNMAP_BEGIN", "PTE_WRITE_DONE",
+                    "PT_LAST_REF_BEGIN", "PT_LAST_REF_DONE",
+                }
+                has_flush_depth = phase in {"VMM_FLUSH_BEGIN", "VMM_FLUSH_DONE"}
+                if has_pte_range:
+                    if (not pte_count or pte_shift < 12 or
+                            pte_va > U64_MAX - (pte_count << pte_shift)):
+                        raise CorrelationInputError(f"line {line_number}: invalid PTE memory/range")
+                    if pte_va < target_va or pte_va + (pte_count << pte_shift) > target_va + target_len:
+                        raise CorrelationInputError(f"line {line_number}: PTE range lies outside target VMA")
+                    if flush_depth != -1:
+                        raise CorrelationInputError(f"line {line_number}: PTE event has flush depth")
+                else:
+                    if pt_id or pte_va or pte_first or pte_count or pte_shift:
+                        raise CorrelationInputError(f"line {line_number}: non-PTE event carries PTE fields")
+                    if has_flush_depth != (flush_depth >= 0):
+                        raise CorrelationInputError(f"line {line_number}: invalid flush depth for VMM phase")
+
+                if seq in diagnostic_sequences:
+                    raise CorrelationInputError(f"line {line_number}: duplicate diagnostic sequence")
+                diagnostic_sequences.add(seq)
+                vmm_events.append(VmmEvent(
+                    line_number, boot, mono, ring_mono_ns, seq, operation_id,
+                    target_id, phase, target_va, target_len, target_map_refs,
+                    pt_id, pte_va, pte_first, pte_count, pte_shift,
+                    bool(map_reset_valid), map_reset_gen, current_reset_gen,
+                    flush_depth,
+                ))
+
             if FAULT_TAG in message:
                 if record.get("_TRANSPORT") != "kernel":
                     raise CorrelationInputError(f"line {line_number}: raw BAR2 fault is not kernel transport")
@@ -469,20 +583,109 @@ def parse_journal(path: Path) -> ParsedInput:
         missing = sorted(set(row.line for row, _ in raw_faults) - used_raw)
         raise CorrelationInputError(f"unmatched raw BAR2 fault records at lines {missing[:8]}")
 
-    _validate_global_sequences(map_events, reset_events)
+    _validate_global_sequences(map_events, reset_events, vmm_events)
     _validate_attempts(map_events)
     _validate_map_records(map_events)
     _validate_reset_records(reset_events)
-    return ParsedInput(next(iter(boots)), rows, map_events, reset_events, faults)
+    _validate_vmm_operations(vmm_events)
+    return ParsedInput(next(iter(boots)), rows, map_events, reset_events, vmm_events, faults)
 
 
 
-def _validate_global_sequences(maps: list[MapEvent], resets: list[ResetEvent]) -> None:
-    sequences = sorted([event.seq for event in [*maps, *resets]])
+def _validate_global_sequences(
+    maps: list[MapEvent], resets: list[ResetEvent], vmm_events: list[VmmEvent],
+) -> None:
+    sequences = sorted([event.seq for event in [*maps, *resets, *vmm_events]])
     if len(set(sequences)) != len(sequences):
         raise CorrelationInputError("duplicate ambient diagnostic sequence")
     if sequences and sequences != list(range(1, sequences[-1] + 1)):
         raise CorrelationInputError("ambient diagnostic sequence gap; lifecycle log is incomplete")
+
+
+def _validate_vmm_operations(events: list[VmmEvent]) -> None:
+    grouped: dict[int, list[VmmEvent]] = {}
+    for event in events:
+        grouped.setdefault(event.operation_id, []).append(event)
+
+    for operation_id, records in grouped.items():
+        records.sort(key=lambda event: event.seq)
+        first = records[0]
+        if first.phase != "VMM_PUT_BEGIN":
+            raise CorrelationInputError(f"VMM operation {operation_id}: missing leading PUT_BEGIN")
+        stable = (
+            first.target_id, first.target_va, first.target_len, first.target_map_refs,
+            first.map_reset_valid, first.map_reset_gen,
+        )
+        if any((
+            event.target_id, event.target_va, event.target_len, event.target_map_refs,
+            event.map_reset_valid, event.map_reset_gen,
+        ) != stable for event in records):
+            raise CorrelationInputError(f"VMM operation {operation_id}: target identity/state changed")
+        if sum(event.phase == "VMM_PUT_BEGIN" for event in records) != 1:
+            raise CorrelationInputError(f"VMM operation {operation_id}: duplicate PUT_BEGIN")
+        if sum(event.phase == "VMM_PUT_DONE" for event in records) > 1:
+            raise CorrelationInputError(f"VMM operation {operation_id}: duplicate PUT_DONE")
+        if sum(event.phase == "VMA_RANGE_RELEASE" for event in records) > 1:
+            raise CorrelationInputError(f"VMM operation {operation_id}: duplicate VMA_RANGE_RELEASE")
+
+        pending_pte: VmmEvent | None = None
+        pending_last_ref: VmmEvent | None = None
+        pending_flush_depth: int | None = None
+        range_released = False
+        put_done = False
+        for event in records[1:]:
+            if put_done:
+                raise CorrelationInputError(f"VMM operation {operation_id}: event after PUT_DONE")
+            if event.phase == "VMM_PUT_BEGIN":
+                raise CorrelationInputError(f"VMM operation {operation_id}: duplicate PUT_BEGIN")
+            if event.phase == "PTE_UNMAP_BEGIN":
+                if (pending_pte is not None or pending_last_ref is not None or
+                        pending_flush_depth is not None or range_released):
+                    raise CorrelationInputError(f"VMM operation {operation_id}: impossible PTE_UNMAP_BEGIN")
+                pending_pte = event
+            elif event.phase == "PTE_WRITE_DONE":
+                if pending_pte is None or pending_last_ref is not None:
+                    raise CorrelationInputError(f"VMM operation {operation_id}: PTE_WRITE_DONE without begin")
+                if (event.pt_id, event.pte_va, event.pte_first, event.pte_count, event.pte_shift) != (
+                    pending_pte.pt_id, pending_pte.pte_va, pending_pte.pte_first,
+                    pending_pte.pte_count, pending_pte.pte_shift):
+                    raise CorrelationInputError(f"VMM operation {operation_id}: PTE begin/done mismatch")
+                pending_pte = None
+            elif event.phase == "PT_LAST_REF_BEGIN":
+                if (pending_pte is not None or pending_last_ref is not None or
+                        pending_flush_depth is not None or range_released):
+                    raise CorrelationInputError(f"VMM operation {operation_id}: impossible PT_LAST_REF_BEGIN")
+                pending_last_ref = event
+            elif event.phase == "PT_LAST_REF_DONE":
+                if pending_last_ref is None:
+                    raise CorrelationInputError(f"VMM operation {operation_id}: PT_LAST_REF_DONE without begin")
+                if (event.pt_id, event.pte_va, event.pte_first, event.pte_count, event.pte_shift) != (
+                    pending_last_ref.pt_id, pending_last_ref.pte_va,
+                    pending_last_ref.pte_first, pending_last_ref.pte_count,
+                    pending_last_ref.pte_shift):
+                    raise CorrelationInputError(f"VMM operation {operation_id}: PT_LAST_REF begin/done mismatch")
+                pending_last_ref = None
+            elif event.phase == "VMM_FLUSH_BEGIN":
+                if pending_pte is not None or pending_flush_depth is not None or range_released:
+                    raise CorrelationInputError(f"VMM operation {operation_id}: impossible FLUSH_BEGIN")
+                pending_flush_depth = event.flush_depth
+            elif event.phase == "VMM_FLUSH_DONE":
+                if pending_flush_depth is None or event.flush_depth != pending_flush_depth:
+                    raise CorrelationInputError(f"VMM operation {operation_id}: FLUSH_DONE without matching begin")
+                pending_flush_depth = None
+            elif event.phase == "VMA_RANGE_RELEASE":
+                if (pending_pte is not None or pending_last_ref is not None or
+                        pending_flush_depth is not None or range_released):
+                    raise CorrelationInputError(f"VMM operation {operation_id}: invalid VMA_RANGE_RELEASE")
+                range_released = True
+            elif event.phase == "VMM_PUT_DONE":
+                if (not range_released or pending_pte is not None or
+                        pending_last_ref is not None or pending_flush_depth is not None):
+                    raise CorrelationInputError(f"VMM operation {operation_id}: PUT_DONE before release/completion")
+                put_done = True
+
+        if put_done and not range_released:
+            raise CorrelationInputError(f"VMM operation {operation_id}: completed without range release")
 
 
 def _validate_attempts(events: list[MapEvent]) -> None:
@@ -1344,6 +1547,194 @@ def _transition_records(parsed: ParsedInput, fault: FaultEvent) -> list[dict[str
     return transitions
 
 
+def _vmm_teardown_at_fault(
+    events: list[VmmEvent], fault: FaultEvent, current_reset_gen: int | None,
+    *, timestamp_inconclusive: bool = False,
+) -> dict[str, Any]:
+    grouped: dict[int, list[VmmEvent]] = {}
+    for event in events:
+        grouped.setdefault(event.operation_id, []).append(event)
+
+    matching: list[tuple[list[VmmEvent], list[VmmEvent], str]] = []
+    future: list[list[VmmEvent]] = []
+    raw_start_ns = fault.raw_mono_usec * 1000
+    raw_end_ns = raw_start_ns + 999
+
+    for records in grouped.values():
+        records.sort(key=lambda event: event.seq)
+        first = records[0]
+        if not first.target_contains(fault.va):
+            continue
+        before = [event for event in records if event.ring_mono_ns < raw_start_ns]
+        after = [event for event in records if event.ring_mono_ns > raw_end_ns]
+        if not before or before[0].phase != "VMM_PUT_BEGIN":
+            future.append(records)
+            continue
+
+        phases_before = [event.phase for event in before]
+        if "VMM_PUT_DONE" in phases_before:
+            phase = "AFTER_VMM_PUT_DONE"
+        else:
+            last = before[-1]
+            if last.phase == "VMM_PUT_BEGIN":
+                phase = "BEFORE_PTE_UNMAP"
+            elif last.phase == "PTE_UNMAP_BEGIN":
+                phase = "DURING_PTE_UNMAP"
+            elif last.phase == "PT_LAST_REF_BEGIN":
+                phase = "DURING_PT_LAST_REF"
+            elif last.phase == "PT_LAST_REF_DONE":
+                phase = "AFTER_PT_LAST_REF"
+            elif last.phase == "PTE_WRITE_DONE":
+                next_phase = next((event.phase for event in after), None)
+                if next_phase == "VMM_FLUSH_BEGIN":
+                    phase = "AFTER_PTE_WRITE_BEFORE_FLUSH"
+                elif next_phase in {"VMA_RANGE_RELEASE", "VMM_PUT_DONE"}:
+                    phase = "AFTER_PTE_WRITE_BEFORE_VMA_RELEASE"
+                else:
+                    phase = "BETWEEN_PTE_RANGES"
+            elif last.phase == "VMM_FLUSH_BEGIN":
+                phase = "DURING_VMM_FLUSH"
+            elif last.phase == "VMM_FLUSH_DONE":
+                next_phase = next((event.phase for event in after), None)
+                phase = (
+                    "BETWEEN_PTE_RANGES"
+                    if next_phase in {"PTE_UNMAP_BEGIN", "PT_LAST_REF_BEGIN"}
+                    else "AFTER_FLUSH_BEFORE_VMA_RELEASE"
+                )
+            elif last.phase == "VMA_RANGE_RELEASE":
+                phase = "AFTER_VMA_RELEASE_BEFORE_VMM_PUT_DONE"
+            else:
+                phase = "AMBIGUOUS"
+        matching.append((records, before, phase))
+
+    def describe(records: list[VmmEvent], phase: str) -> dict[str, Any]:
+        first = records[0]
+        pte_records = [event for event in records if event.pte_contains(fault.va)]
+        unique_ranges: dict[tuple[int, int, int, int, int], VmmEvent] = {}
+        for event in pte_records:
+            unique_ranges.setdefault(
+                (event.pt_id, event.pte_va, event.pte_first,
+                 event.pte_count, event.pte_shift),
+                event,
+            )
+        pte_ranges = [
+            {
+                "page_table_memory_id": event.pt_id,
+                "page_table_memory_identity_known": event.pt_id != 0,
+                "pte_va": f"0x{event.pte_va:x}",
+                "pte_first": event.pte_first,
+                "pte_count": event.pte_count,
+                "pte_shift": event.pte_shift,
+                "pte_end_exclusive": f"0x{event.pte_va + (event.pte_count << event.pte_shift):x}",
+                "first_event_phase": event.phase,
+                "first_event_monotonic_ns": event.ring_mono_ns,
+                "observed_before_fault": event.ring_mono_ns < raw_start_ns,
+            }
+            for event in unique_ranges.values()
+        ]
+        matching_phase = None
+        if phase == "DURING_PTE_UNMAP":
+            matching_phase = next((
+                event for event in reversed(records)
+                if event.phase == "PTE_UNMAP_BEGIN"
+                and event.ring_mono_ns < raw_start_ns
+                and event.pte_contains(fault.va)
+            ), None)
+        elif phase == "DURING_PT_LAST_REF":
+            matching_phase = next((
+                event for event in reversed(records)
+                if event.phase == "PT_LAST_REF_BEGIN"
+                and event.ring_mono_ns < raw_start_ns
+                and event.pte_contains(fault.va)
+            ), None)
+        pte_ranges_before_fault = [
+            event for event in pte_records
+            if event.ring_mono_ns < raw_start_ns
+        ]
+        pt_operation_match = bool(pte_ranges_before_fault) and phase in {
+            "DURING_PTE_UNMAP", "AFTER_PTE_WRITE_BEFORE_FLUSH",
+            "AFTER_PTE_WRITE_BEFORE_VMA_RELEASE", "BETWEEN_PTE_RANGES",
+            "DURING_PT_LAST_REF", "AFTER_PT_LAST_REF", "DURING_VMM_FLUSH",
+            "AFTER_FLUSH_BEFORE_VMA_RELEASE",
+        }
+        matching_pte_range = bool(matching_phase or pte_ranges_before_fault)
+        observed_pt_ids = {event.pt_id for event in pte_ranges_before_fault}
+        pt_identity_known = (
+            bool(pte_ranges_before_fault)
+            and 0 not in observed_pt_ids
+            and len(observed_pt_ids) == 1
+        )
+        return {
+            "operation_id": first.operation_id,
+            "target_instobj_id": first.target_id,
+            "target_vma_start": f"0x{first.target_va:x}",
+            "target_vma_length": f"0x{first.target_len:x}",
+            "target_map_refs_at_teardown": first.target_map_refs,
+            "map_reset_generation": first.map_reset_gen if first.map_reset_valid else None,
+            "current_reset_generation_at_fault": current_reset_gen,
+            "phase": phase,
+            "pte_ranges_containing_fault_va": pte_ranges,
+            "page_table_memory_id": (
+                next(iter(observed_pt_ids)) if pt_identity_known else None
+            ),
+            "page_table_memory_identity_known": pt_identity_known,
+            "numeric_target_range_match": True,
+            "exact_pte_range_match": matching_pte_range,
+            "pt_operation_match_at_fault": pt_operation_match,
+            "causal_ownership_proven": False,
+        }
+
+    if timestamp_inconclusive:
+        candidates = [describe(records, "TIMESTAMP_INCONCLUSIVE")
+                      for records, _, _ in matching]
+        return {
+            "outcome": "TIMESTAMP_INCONCLUSIVE",
+            "numeric_address_correlation_only": True,
+            "causal_ownership_proven": False,
+            "candidates": candidates,
+        }
+    if len(matching) > 1:
+        return {
+            "outcome": "MULTIPLE_NUMERIC_TARGET_TEARDOWN_CANDIDATES",
+            "numeric_address_correlation_only": True,
+            "causal_ownership_proven": False,
+            "candidates": [describe(records, phase) for records, _, phase in matching],
+        }
+    if len(matching) == 1:
+        records, _, phase = matching[0]
+        candidate = describe(records, phase)
+        return {
+            "outcome": phase,
+            "numeric_address_correlation_only": True,
+            "causal_ownership_proven": False,
+            "candidate": candidate,
+        }
+    if future:
+        return {
+            "outcome": "NO_TRACKED_TARGET_TEARDOWN",
+            "numeric_address_correlation_only": True,
+            "causal_ownership_proven": False,
+            "numeric_target_range_match": True,
+            "teardown_started_after_fault": True,
+            "future_operations": [
+                {
+                    "operation_id": records[0].operation_id,
+                    "target_instobj_id": records[0].target_id,
+                    "first_event_phase": records[0].phase,
+                    "first_event_monotonic_ns": records[0].ring_mono_ns,
+                }
+                for records in future
+            ],
+        }
+    return {
+        "outcome": "NO_TRACKED_TARGET_TEARDOWN",
+        "numeric_address_correlation_only": True,
+        "causal_ownership_proven": False,
+        "numeric_target_range_match": False,
+        "teardown_started_after_fault": False,
+    }
+
+
 def correlate(parsed: ParsedInput) -> dict[str, Any]:
     maps_by_id: dict[int, list[MapEvent]] = {}
     for event in parsed.maps:
@@ -1394,11 +1785,17 @@ def correlate(parsed: ParsedInput) -> dict[str, Any]:
                 "recently_evicted_ranges": [],
                 "incomplete_lifecycles": [],
                 "transition_records": [],
+                "vmm_teardown": _vmm_teardown_at_fault(
+                    parsed.vmm_events, fault, None, timestamp_inconclusive=True,
+                ),
             })
             previous_fault = fault
             continue
 
         current_gen, reset_in_progress = _reset_state_at_fault(parsed.resets, fault)
+        vmm_teardown = _vmm_teardown_at_fault(
+            parsed.vmm_events, fault, current_gen,
+        )
         active_candidates: list[dict[str, Any]] = []
         zero_ref_candidates: list[dict[str, Any]] = []
         resident_candidates: list[dict[str, Any]] = []
@@ -1585,6 +1982,7 @@ def correlate(parsed: ParsedInput) -> dict[str, Any]:
             "recently_evicted_ranges": recently_evicted,
             "incomplete_lifecycles": incomplete,
             "transition_records": transitions,
+            "vmm_teardown": vmm_teardown,
         })
         previous_fault = fault
 
@@ -1605,7 +2003,14 @@ def correlate(parsed: ParsedInput) -> dict[str, Any]:
         ),
         "mapping_event_count": len(parsed.maps),
         "reset_event_count": len(parsed.resets),
+        "vmm_teardown_event_count": len(parsed.vmm_events),
         "allocation_id_count": len({event.allocation_id for event in parsed.maps}),
+        "vmm_phase_semantics": {
+            "PTE_WRITE_DONE": "CLR_PTES callback returned; no hardware readback implied",
+            "VMM_FLUSH_DONE": "void backend flush callback returned; no separate hardware acknowledgement implied",
+            "VMA_RANGE_RELEASE": "VMA returned to software free tree while VMM mutex remained held",
+            "numeric_match": "address correlation only; does not prove fault ownership",
+        },
         "outcomes": {name: sum(item["outcome"] == name for item in fault_results)
                      for name in outcomes},
         "faults": fault_results,

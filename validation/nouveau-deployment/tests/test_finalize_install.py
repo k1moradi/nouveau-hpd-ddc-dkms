@@ -541,7 +541,7 @@ class FinalManifestTests(unittest.TestCase):
             }
             ambient_plan["gpu"] = {"pci_bdf": "0000:01:00.0"}
             with self.assertRaisesRegex(
-                ValueError, "ambient build manifest does not pin exactly patches 0009-0014"
+                ValueError, "ambient build manifest does not pin exactly patches 0009-0015"
             ):
                 FINALIZER.validate_inputs(build, ambient_plan, raw_module)
 
@@ -552,6 +552,7 @@ class FinalManifestTests(unittest.TestCase):
                 "0012-drm-nouveau-mark-bar2-teardown-phases.patch",
                 "0013-drm-nouveau-capture-ambient-bar2-events.patch",
                 "0014-drm-nouveau-unwind-ambient-bar2-ring-init.patch",
+                "0015-drm-nouveau-correlate-bar2-vmm-pte-teardown.patch",
             )
             build["patch_sha256"] = {
                 name: str(index) * 64
@@ -649,6 +650,9 @@ class FinalManifestTests(unittest.TestCase):
             build["patch_sha256"][
                 "0014-drm-nouveau-unwind-ambient-bar2-ring-init.patch"
             ] = "1" * 64
+            build["patch_sha256"][
+                "0015-drm-nouveau-correlate-bar2-vmm-pte-teardown.patch"
+            ] = "2" * 64
             plan["review_head"] = "e" * 40
             plan["module_parameters"] = {"diag_bar2_map": "Y", "diag_ctxsw": "N"}
             plan["gpu"] = {"pci_bdf": "0000:01:00.0"}
@@ -699,6 +703,10 @@ class FinalManifestTests(unittest.TestCase):
             )
             self.assertEqual(
                 ambient_result["source"]["patch_0014_sha256"], "1" * 64
+            )
+            self.assertEqual(
+                ambient_result["source"]["patch_0015_sha256"],
+                "2" * 64,
             )
             self.assertEqual(
                 ambient_result["module_options"]["content_sha256"], option_hash
