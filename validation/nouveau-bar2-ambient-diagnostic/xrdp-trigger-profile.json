@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "workspace": "/home/keivan/xrdp-console",
-  "review_commit": "dc94f36fc562df99f7ce1f00798196c01f220f9a",
+  "review_commit": "6be7bb58bfad323ff6826cbe31de651f7f78bc36",
   "artifacts": {
     "python": {
       "path": "/usr/bin/python3.14",
@@ -9,11 +9,11 @@
     },
     "benchmark": {
       "path": "/home/keivan/xrdp-console/tools/benchmark/xrdp_console_bench.py",
-      "sha256": "b17a256aa9b01b803cf0a01dcd05417f3616c27b46f31de64553c8018172b2cc"
+      "sha256": "114790ae5ed84bf970bb96b17aecbc45852365ad713d4e9c3e17cc521b6c388a"
     },
     "gpu_stimulus": {
       "path": "/home/keivan/xrdp-console/build-direct-console/bin/x11-gpu-stimulus",
-      "sha256": "cea92614796f8c2cdf0b25f3970e62f6ad8f77ff5afe261a32e480335043cd86"
+      "sha256": "45910f12b5984ed2e281fd1066026801dd0f7920e8c4561bb7a653f4334d994b"
     },
     "churn_stimulus": {
       "path": "/home/keivan/xrdp-console/build-direct-console/bin/x11-latency-stimulus",
@@ -78,6 +78,8 @@
     "post_trigger_capture_seconds": 35,
     "shutdown_budget_seconds": 10,
     "passive_baseline_seconds": 10,
-    "stop_on_first_kernel_hard_stop": true
+    "stop_on_first_kernel_hard_stop": true,
+    "gl_readback_32x32": true,
+    "gl_readback_note": "Each GL frame synchronously reads and checksums a 32x32 RGBA patch from GL_BACK before swap; the first completed frame requires the Mesa Nouveau NVxx renderer marker."
   }
 }

@@ -47,7 +47,9 @@ MINIMUM_RING_HEADROOM_SAFETY_FACTOR = 1.5
 MINIMUM_RING_HEADROOM_SAFETY_MARGIN = 5_000
 PCI_BDF = re.compile(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]")
 GPU_CHURN_MARKER = re.compile(
-    r"^GPU_CHURN_FIRST_FRAME monotonic_ns=([1-9][0-9]*)$", re.MULTILINE,
+    r"^GPU_CHURN_FIRST_FRAME monotonic_ns=([1-9][0-9]*)"
+    r"(?: gl_readback=32x32 checksum=([1-9][0-9]*))?$",
+    re.MULTILINE,
 )
 GPU_CHURN_MARKER_PREFIX = re.compile(r"^GPU_CHURN_FIRST_FRAME\b", re.MULTILINE)
 HEADROOM_STATUS = re.compile(
@@ -143,6 +145,7 @@ def benchmark_argv(
         "width": 1024,
         "height": 640,
         "passive_baseline_seconds": 10,
+        "gl_readback_32x32": True,
     }
     for key, value in expected.items():
         if workload.get(key) != value:
@@ -165,18 +168,35 @@ def benchmark_argv(
         "--display", display,
         "--width", str(workload["width"]),
         "--height", str(workload["height"]),
+        "--gl-readback-32x32",
     ]
     return argv
 
 
-def first_gpu_churn_frame(payload: str) -> int | None:
+def first_gpu_churn_frame(
+    payload: str, *, require_readback: bool = False,
+) -> int | None:
     prefixes = GPU_CHURN_MARKER_PREFIX.findall(payload)
     matches = GPU_CHURN_MARKER.findall(payload)
     if not prefixes:
         return None
     if len(prefixes) != 1 or len(matches) != 1:
         raise ReproducerError("benchmark has a malformed or duplicate GPU churn marker")
-    return int(matches[0])
+    checksum_text = matches[0][1] or None
+    if require_readback and checksum_text is None:
+        raise ReproducerError("first completed GPU frame lacks GL readback proof")
+    if not require_readback and checksum_text is not None:
+        raise ReproducerError("benchmark unexpectedly reported a GL readback frame")
+    if checksum_text is not None and not 0 < int(checksum_text) <= 0xFFFFFFFF:
+        raise ReproducerError("first completed GPU frame has an invalid readback checksum")
+    return int(matches[0][0])
+
+
+def first_gpu_readback_checksum(payload: str) -> int | None:
+    first_gpu_churn_frame(payload, require_readback=True)
+    matches = GPU_CHURN_MARKER.findall(payload)
+    checksum_text = matches[0][1] if matches else ""
+    return int(checksum_text) if checksum_text else None
 
 
 def validate_trigger_event_budget(workload: dict[str, Any]) -> int:
@@ -959,13 +979,26 @@ def execute(args: argparse.Namespace) -> int:
 
     if process is None and stop_reason is None:
         stop_reason = "TRIGGER_NOT_STARTED"
+    capture = capture_and_correlate(run_dir, status_path, events_path)
     benchmark_log_path = run_dir / "benchmark.log"
     first_frame_ns = None
+    first_readback_checksum = None
+    stimulus_marker_error = None
     if benchmark_log_path.is_file():
-        first_frame_ns = first_gpu_churn_frame(
-            benchmark_log_path.read_text(encoding="utf-8", errors="replace"),
+        benchmark_text = benchmark_log_path.read_text(
+            encoding="utf-8", errors="replace",
         )
-    capture = capture_and_correlate(run_dir, status_path, events_path)
+        try:
+            require_readback = workload.get("gl_readback_32x32") is True
+            first_frame_ns = first_gpu_churn_frame(
+                benchmark_text, require_readback=require_readback,
+            )
+            if require_readback:
+                first_readback_checksum = first_gpu_readback_checksum(
+                    benchmark_text,
+                )
+        except ReproducerError as exc:
+            stimulus_marker_error = str(exc)
     capture_metadata = capture.get("capture_metadata")
     ring_end_head = (
         capture_metadata.get("ring_head")
@@ -1014,13 +1047,18 @@ def execute(args: argparse.Namespace) -> int:
     result = {
         "boot_id": boot_id,
         "admission": "RUN_ELIGIBLE=true",
-        "experiment": "pinned xrdp-console direct-X11 GFX Planar graphics-under-churn",
+        "experiment": (
+            "pinned xrdp-console direct-X11 GFX Planar graphics-under-churn "
+            "with checksummed 32x32 GL_BACK readback"
+        ),
         "stop_reason": stop_reason,
         "benchmark_exit_status": benchmark_rc,
         "benchmark_cleanup_timeout": cleanup_timeout,
         "journal_monitor_failure": monitor_failure,
         "STIMULUS_STARTED": stimulus_started,
         "first_gpu_churn_frame_monotonic_ns": first_frame_ns,
+        "first_gpu_gl_readback_checksum": first_readback_checksum,
+        "stimulus_marker_error": stimulus_marker_error,
         "TRIGGER_COMPLETED": trigger_completed,
         "EXPERIMENTAL_SAMPLE_VALID": sample_valid,
         "kernel_stop_observed_after_stimulus_start": (
@@ -1038,6 +1076,8 @@ def execute(args: argparse.Namespace) -> int:
         return 4
     if not trigger_completed or not evidence_complete:
         return 5
+    if not sample_valid:
+        return 6
     return 0
 
 

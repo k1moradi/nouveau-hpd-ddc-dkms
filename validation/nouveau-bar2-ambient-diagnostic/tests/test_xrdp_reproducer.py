@@ -188,6 +188,8 @@ class XrdpReproducerTests(unittest.TestCase):
         )
         self.assertEqual(argv[argv.index("--duration") + 1], "20")
         self.assertEqual(argv[argv.index("--repetitions") + 1], "1")
+        self.assertIn("--gl-readback-32x32", argv)
+        self.assertIs(workload["gl_readback_32x32"], True)
         self.assertFalse(any(
             name in " ".join(argv).lower()
             for name in ("mpv", "ffmpeg", "ffplay", "vainfo")
@@ -283,6 +285,30 @@ class XrdpReproducerTests(unittest.TestCase):
                 RUNNER.ReproducerError, "malformed or duplicate",
             ):
                 RUNNER.first_gpu_churn_frame(invalid)
+
+    def test_first_gpu_frame_can_require_checksumming_gl_back_readback(self):
+        marker = (
+            "GPU_CHURN_FIRST_FRAME monotonic_ns=123456789 "
+            "gl_readback=32x32 checksum=3948571\n"
+        )
+        self.assertEqual(
+            RUNNER.first_gpu_churn_frame(marker, require_readback=True),
+            123456789,
+        )
+        self.assertEqual(RUNNER.first_gpu_readback_checksum(marker), 3948571)
+        with self.assertRaisesRegex(RUNNER.ReproducerError, "lacks GL readback"):
+            RUNNER.first_gpu_churn_frame(
+                "GPU_CHURN_FIRST_FRAME monotonic_ns=123456789\n",
+                require_readback=True,
+            )
+        with self.assertRaisesRegex(RUNNER.ReproducerError, "unexpectedly reported"):
+            RUNNER.first_gpu_churn_frame(marker)
+        with self.assertRaisesRegex(RUNNER.ReproducerError, "invalid readback checksum"):
+            RUNNER.first_gpu_churn_frame(
+                "GPU_CHURN_FIRST_FRAME monotonic_ns=123456789 "
+                "gl_readback=32x32 checksum=4294967296\n",
+                require_readback=True,
+            )
 
     def test_sample_is_never_valid_without_a_completed_gpu_frame(self):
         self.assertFalse(RUNNER.experimental_sample_validity(
