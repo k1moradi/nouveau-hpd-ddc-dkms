@@ -55,7 +55,7 @@ PATCHES = {
     "0013-drm-nouveau-capture-ambient-bar2-events.patch":
         "d74002da984b672c510f7ecc1eb05e397f4ab869454276ab5c4c58c60740d6eb",
     "0014-drm-nouveau-unwind-ambient-bar2-ring-init.patch":
-        "c088618113f51916af8a769162daeca9a4425b54b5168a49ee23e8e2fcb40f0d",
+        "f4b92d317356dae0d105537a07f7293862cdb37bdee9eefa641e5310fb49752c",
 }
 PATCH_ARGUMENTS = tuple(PATCHES)
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]
@@ -393,6 +393,7 @@ def main() -> int:
     parser.add_argument("--ambient-lifetime-patch", type=Path, required=True)
     parser.add_argument("--teardown-phase-patch", type=Path, required=True)
     parser.add_argument("--ambient-ring-patch", type=Path, required=True)
+    parser.add_argument("--ambient-ring-unwind-patch", type=Path, required=True)
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--review-commit", required=True)
     args = parser.parse_args()
@@ -407,6 +408,7 @@ def main() -> int:
         args.ambient_lifetime_patch,
         args.teardown_phase_patch,
         args.ambient_ring_patch,
+        args.ambient_ring_unwind_patch,
     )
     review_before = review_tree_snapshot(patch_paths)
     review_branch = review_before.branch

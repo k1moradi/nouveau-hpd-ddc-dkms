@@ -19,6 +19,14 @@ SPEC.loader.exec_module(BUILDER)
 
 
 class PatchInputTests(unittest.TestCase):
+    def test_builder_cli_accepts_the_pinned_ring_unwind_patch(self):
+        source = SCRIPT.read_text(encoding="utf-8")
+        self.assertIn(
+            'parser.add_argument("--ambient-ring-unwind-patch", type=Path, required=True)',
+            source,
+        )
+        self.assertIn("args.ambient_ring_unwind_patch,", source)
+
     def test_retained_build_guard_detects_repository_or_input_changes(self):
         before = BUILDER.ReviewTreeSnapshot(
             branch="review",

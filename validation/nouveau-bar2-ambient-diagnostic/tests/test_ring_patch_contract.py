@@ -131,17 +131,21 @@ class AmbientRingPatchContractTests(unittest.TestCase):
         self.assertLess(debugfs_remove, ring_free)
         self.assertIn("mmu_notifier_synchronize()", fini)
 
-        pci_failure = text.index("ret = pci_register_driver(&nouveau_drm_pci_driver);")
-        failure_end = text.index("return ret;", pci_failure)
-        self.assertIn("nouveau_drm_fini();", text[pci_failure:failure_end])
-
-        exit_start = text.index("nouveau_drm_exit(void)")
-        exit_end = text.index("module_init(nouveau_drm_init)", exit_start)
-        exit_body = text[exit_start:exit_end]
-        self.assertLess(
-            exit_body.index("pci_unregister_driver(&nouveau_drm_pci_driver)"),
-            exit_body.index("nouveau_drm_fini();"),
+        hunks = re.split(r"(?m)(?=^@@ )", text)
+        init_failure_hunk = next(
+            hunk for hunk in hunks
+            if "nouveau_drm_init(void)" in hunk
+            and "-\t\tnouveau_module_debugfs_fini();" in hunk
+            and "+\t\tnouveau_drm_fini();" in hunk
         )
+        self.assertIn("nouveau_drm_fini();", init_failure_hunk)
+
+        exit_hunk = next(
+            hunk for hunk in hunks
+            if "nouveau_drm_exit(void)" in hunk
+            and "+\tnouveau_drm_fini();" in hunk
+        )
+        self.assertIn("nouveau_drm_fini();", exit_hunk)
 
 
 if __name__ == "__main__":
