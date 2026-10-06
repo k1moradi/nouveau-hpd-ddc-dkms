@@ -81,8 +81,14 @@ class PatchInputTests(unittest.TestCase):
             ROOT / "validation/nouveau-bar2-ambient-diagnostic/patches/"
             "0013-drm-nouveau-capture-ambient-bar2-events.patch"
         )
+        unwind = (
+            ROOT / "validation/nouveau-bar2-ambient-diagnostic/patches/"
+            "0014-drm-nouveau-unwind-ambient-bar2-ring-init.patch"
+        )
 
-        paths = BUILDER.verify_patch_inputs(nvif, vma, ambient, teardown, ring)
+        paths = BUILDER.verify_patch_inputs(
+            nvif, vma, ambient, teardown, ring, unwind
+        )
 
         self.assertEqual(paths["0009-drm-nouveau-log-nvif-duplicate-layer.patch"], nvif)
         self.assertEqual(paths["0010-drm-nouveau-correlate-instmem-vma-selftest.patch"], vma)

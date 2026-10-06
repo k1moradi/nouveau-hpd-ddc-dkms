@@ -54,6 +54,8 @@ PATCHES = {
         "b0b549a128a77ade7dbcccd88fcd2d37ce30558fdf23d1a8f4792546c267266b",
     "0013-drm-nouveau-capture-ambient-bar2-events.patch":
         "d74002da984b672c510f7ecc1eb05e397f4ab869454276ab5c4c58c60740d6eb",
+    "0014-drm-nouveau-unwind-ambient-bar2-ring-init.patch":
+        "c088618113f51916af8a769162daeca9a4425b54b5168a49ee23e8e2fcb40f0d",
 }
 PATCH_ARGUMENTS = tuple(PATCHES)
 REPOSITORY_ROOT = Path(__file__).resolve().parents[2]

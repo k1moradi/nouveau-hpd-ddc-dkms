@@ -8,6 +8,9 @@ from pathlib import Path
 PATCH = Path(__file__).resolve().parents[1] / "patches" / (
     "0013-drm-nouveau-capture-ambient-bar2-events.patch"
 )
+UNWIND_PATCH = Path(__file__).resolve().parents[1] / "patches" / (
+    "0014-drm-nouveau-unwind-ambient-bar2-ring-init.patch"
+)
 
 
 class AmbientRingPatchContractTests(unittest.TestCase):
@@ -101,6 +104,44 @@ class AmbientRingPatchContractTests(unittest.TestCase):
         self.assertIn("dropped_before=%llu dropped_after=%llu", body)
         self.assertIn("nvkm_bar2_diag_ring_head()", body)
         self.assertNotIn("nvkm_bar2_diag_ring_read(", body)
+
+    def test_ring_unwind_quiesces_registered_platform_producer_before_free(self):
+        text = UNWIND_PATCH.read_text(encoding="utf-8")
+        files = set(re.findall(r"^diff --git a/(\S+) b/\S+$", text, re.MULTILINE))
+        self.assertEqual(files, {"drivers/gpu/drm/nouveau/nouveau_drm.c"})
+        additions = "\n".join(
+            line[1:] for line in text.splitlines()
+            if line.startswith("+") and not line.startswith("+++")
+        )
+
+        self.assertIn("static bool nouveau_platform_driver_registered;", additions)
+        self.assertIn(
+            "platform_driver_register(&nouveau_platform_driver) == 0;",
+            additions,
+        )
+        self.assertIn("if (nouveau_platform_driver_registered) {", additions)
+
+        fini_start = text.index("nouveau_drm_fini(void)")
+        fini_end = text.index("nouveau_drm_init(void)", fini_start)
+        fini = text[fini_start:fini_end]
+        unregister = fini.index("platform_driver_unregister(&nouveau_platform_driver)")
+        debugfs_remove = fini.index("nouveau_module_debugfs_fini()")
+        ring_free = fini.index("nvkm_bar2_diag_ring_fini()")
+        self.assertLess(unregister, debugfs_remove)
+        self.assertLess(debugfs_remove, ring_free)
+        self.assertIn("mmu_notifier_synchronize()", fini)
+
+        pci_failure = text.index("ret = pci_register_driver(&nouveau_drm_pci_driver);")
+        failure_end = text.index("return ret;", pci_failure)
+        self.assertIn("nouveau_drm_fini();", text[pci_failure:failure_end])
+
+        exit_start = text.index("nouveau_drm_exit(void)")
+        exit_end = text.index("module_init(nouveau_drm_init)", exit_start)
+        exit_body = text[exit_start:exit_end]
+        self.assertLess(
+            exit_body.index("pci_unregister_driver(&nouveau_drm_pci_driver)"),
+            exit_body.index("nouveau_drm_fini();"),
+        )
 
 
 if __name__ == "__main__":

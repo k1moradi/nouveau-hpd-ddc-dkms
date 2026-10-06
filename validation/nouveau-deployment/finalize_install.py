@@ -248,9 +248,10 @@ def validate_inputs(
             "0011-drm-nouveau-trace-ambient-bar2-lifetimes.patch",
             "0012-drm-nouveau-mark-bar2-teardown-phases.patch",
             "0013-drm-nouveau-capture-ambient-bar2-events.patch",
+            "0014-drm-nouveau-unwind-ambient-bar2-ring-init.patch",
         }
         if set(build.get("patch_sha256", {})) != expected_patch_names:
-            raise ValueError("ambient build manifest does not pin exactly patches 0009-0013")
+            raise ValueError("ambient build manifest does not pin exactly patches 0009-0014")
         markers = set(build.get("diagnostic_markers", []))
         if not {
             "NOUVEAU_DIAG_BAR2_MAP",
@@ -763,6 +764,9 @@ def build_final_manifest(
             ),
             "patch_0013_sha256": build["patch_sha256"].get(
                 "0013-drm-nouveau-capture-ambient-bar2-events.patch"
+            ),
+            "patch_0014_sha256": build["patch_sha256"].get(
+                "0014-drm-nouveau-unwind-ambient-bar2-ring-init.patch"
             ),
         },
         "nouveau": {
