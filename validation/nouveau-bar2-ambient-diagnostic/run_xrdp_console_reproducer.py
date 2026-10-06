@@ -30,7 +30,9 @@ sys.path.insert(0, str(DETACHED_SUPERVISOR))
 sys.path.insert(0, str(AMBIENT_DIR))
 
 from detached_mpv_supervisor import stop_reason_for_line  # noqa: E402
-from check_ring_headroom import RingHeadroomError, check_sampled_headroom  # noqa: E402
+from check_ring_headroom import (  # noqa: E402
+    RingHeadroomError, check_sampled_headroom, check_status,
+)
 
 KERNEL_LOG_LOSS = re.compile(
     r"/dev/kmsg buffer overrun,\s*some messages lost", re.IGNORECASE,
@@ -44,6 +46,15 @@ MINIMUM_RING_HEADROOM = 30_000
 MINIMUM_RING_HEADROOM_SAFETY_FACTOR = 1.5
 MINIMUM_RING_HEADROOM_SAFETY_MARGIN = 5_000
 PCI_BDF = re.compile(r"[0-9a-fA-F]{4}:[0-9a-fA-F]{2}:[0-9a-fA-F]{2}\.[0-7]")
+GPU_CHURN_MARKER = re.compile(
+    r"^GPU_CHURN_FIRST_FRAME monotonic_ns=([1-9][0-9]*)$", re.MULTILINE,
+)
+GPU_CHURN_MARKER_PREFIX = re.compile(r"^GPU_CHURN_FIRST_FRAME\b", re.MULTILINE)
+HEADROOM_STATUS = re.compile(
+    r"NOUVEAU_DIAG_BAR2_RING_STATUS enabled=(\d+) capacity=(\d+) "
+    r"head_before=(\d+) head_after=(\d+) "
+    r"dropped_before=(\d+) dropped_after=(\d+)"
+)
 
 
 class ReproducerError(RuntimeError):
@@ -117,23 +128,21 @@ def verify_trigger_profile(profile: dict[str, Any]) -> dict[str, Path]:
 
 def benchmark_argv(
     workspace: Path, display: str, python: Path, workload: dict[str, Any],
-    *, no_chansrv: bool = False,
+    direct_module: Path,
 ) -> list[str]:
-    if type(no_chansrv) is not bool:
-        raise ReproducerError("no_chansrv variant must be a boolean")
     script = workspace / "tools/benchmark/xrdp_console_bench.py"
     expected = {
-        "backend": "vnc",
+        "backend": "direct-x11",
         "transport": "rdp",
         "mode": "graphics-under-churn",
         "network_mode": "localhost",
-        "pipeline": "gfx",
+        "direct_graphics_transport": "gfx-planar",
         "fps": 30,
         "duration_seconds": 20,
         "repetitions": 1,
         "width": 1024,
         "height": 640,
-        "enable_gfx_for_vnc": True,
+        "passive_baseline_seconds": 10,
     }
     for key, value in expected.items():
         if workload.get(key) != value:
@@ -147,7 +156,9 @@ def benchmark_argv(
         "--transport", str(workload["transport"]),
         "--mode", str(workload["mode"]),
         "--network-mode", str(workload["network_mode"]),
-        "--pipeline", str(workload["pipeline"]),
+        "--direct-graphics-transport",
+        str(workload["direct_graphics_transport"]),
+        "--direct-module", str(direct_module.resolve(strict=True)),
         "--fps", str(workload["fps"]),
         "--duration", str(workload["duration_seconds"]),
         "--repetitions", str(workload["repetitions"]),
@@ -155,11 +166,17 @@ def benchmark_argv(
         "--width", str(workload["width"]),
         "--height", str(workload["height"]),
     ]
-    if workload["enable_gfx_for_vnc"]:
-        argv.append("--enable-gfx-for-vnc")
-    if no_chansrv:
-        argv.append("--no-chansrv")
     return argv
+
+
+def first_gpu_churn_frame(payload: str) -> int | None:
+    prefixes = GPU_CHURN_MARKER_PREFIX.findall(payload)
+    matches = GPU_CHURN_MARKER.findall(payload)
+    if not prefixes:
+        return None
+    if len(prefixes) != 1 or len(matches) != 1:
+        raise ReproducerError("benchmark has a malformed or duplicate GPU churn marker")
+    return int(matches[0])
 
 
 def validate_trigger_event_budget(workload: dict[str, Any]) -> int:
@@ -261,7 +278,9 @@ def parse_cursor(payload: str) -> str:
     return cursors[-1]
 
 
-def journal_records_after(cursor: str, boot_id: str) -> tuple[list[str], str]:
+def journal_records_after(
+    cursor: str, boot_id: str,
+) -> tuple[list[str], str, str | None]:
     result = run_command([
         "journalctl", "-k", "-b", "--after-cursor", cursor,
         "--no-pager", "-o", "json",
@@ -270,6 +289,7 @@ def journal_records_after(cursor: str, boot_id: str) -> tuple[list[str], str]:
         raise ReproducerError(f"cannot inspect pre-trigger kernel journal: {result.stderr.strip()}")
     lines = [line for line in result.stdout.splitlines() if line.strip()]
     latest = cursor
+    first_stop_reason: str | None = None
     for line in lines:
         try:
             record = json.loads(line)
@@ -285,9 +305,183 @@ def journal_records_after(cursor: str, boot_id: str) -> tuple[list[str], str]:
         if isinstance(latest_cursor, str) and latest_cursor:
             latest = latest_cursor
         reason = kernel_record_stop_reason(line, boot_id)
+        if reason and first_stop_reason is None:
+            first_stop_reason = reason
+    return lines, latest, first_stop_reason
+
+
+def append_journal_delta(path: Path, lines: list[str]) -> None:
+    if not lines:
+        return
+    with path.open("a", encoding="utf-8") as stream:
+        for line in lines:
+            stream.write(line + "\n")
+        stream.flush()
+
+
+def wait_passive_baseline(
+    seconds: float, cursor: str, boot_id: str, delta_path: Path,
+    *, poll_seconds: float = 0.5,
+) -> tuple[str, str | None]:
+    if (
+        isinstance(seconds, bool) or not isinstance(seconds, (int, float))
+        or not math.isfinite(seconds) or seconds != 10
+    ):
+        raise ReproducerError("passive baseline must remain exactly 10 seconds")
+    deadline = time.monotonic() + seconds
+    while True:
+        lines, cursor, reason = journal_records_after(cursor, boot_id)
+        append_journal_delta(delta_path, lines)
         if reason:
-            raise ReproducerError(f"kernel hard stop appeared during preflight: {reason}")
-    return lines, latest
+            return cursor, reason
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            return cursor, None
+        time.sleep(min(poll_seconds, remaining))
+
+
+def capture_and_correlate(
+    run_dir: Path, status_path: Path, events_path: Path,
+) -> dict[str, Any]:
+    ring_path = run_dir / "ambient-bar2-ring.txt"
+    capture_root_debugfs(events_path, ring_path)
+
+    status_path_out = run_dir / "ring-status-at-stop.txt"
+    status_text = read_root_debugfs(status_path)
+    status_path_out.write_text(status_text, encoding="ascii")
+    try:
+        status_record: dict[str, int] | None = parse_ring_status(status_text)
+    except ReproducerError:
+        status_record = None
+
+    kernel_journal, all_journal = archive_journals(run_dir)
+    export_path = run_dir / "ring-merged-kernel.jsonl"
+    export = run_command([
+        sys.executable, str(EXPORTER), "--ring", str(ring_path),
+        "--kernel-journal", str(kernel_journal), "--output", str(export_path),
+    ], timeout=180)
+    (run_dir / "ring-export.log").write_text(
+        export.stdout + export.stderr, encoding="utf-8",
+    )
+    metadata_path = export_path.with_suffix(export_path.suffix + ".capture.json")
+    capture_metadata: dict[str, Any] | None = None
+    if metadata_path.is_file():
+        capture_metadata = load_json(metadata_path)
+
+    correlation_rc: int | None = None
+    fault_count: int | None = None
+    if export.returncode == 0:
+        correlation_path = run_dir / "ambient-correlation.json"
+        correlation = run_command([
+            sys.executable, str(CORRELATOR), str(export_path),
+            "--output", str(correlation_path),
+        ], timeout=180)
+        (run_dir / "ambient-correlation.log").write_text(
+            correlation.stdout + correlation.stderr, encoding="utf-8",
+        )
+        correlation_rc = correlation.returncode
+        if correlation_rc == 0 and correlation_path.is_file():
+            fault_count = load_json(correlation_path).get("fault_count")
+
+    paths = (
+        status_path_out, ring_path, kernel_journal, all_journal, export_path,
+        metadata_path, run_dir / "ambient-correlation.json",
+    )
+    return {
+        "ring_export_exit_status": export.returncode,
+        "correlator_exit_status": correlation_rc,
+        "ring_status": status_record,
+        "capture_metadata": capture_metadata,
+        "fault_count": fault_count,
+        "artifact_sha256": {
+            path.name: file_sha256(path) for path in paths if path.is_file()
+        },
+    }
+
+
+def parse_ring_status(payload: str) -> dict[str, int]:
+    match = HEADROOM_STATUS.fullmatch(payload.strip())
+    if match is None:
+        raise ReproducerError("BAR2 ring status has an unknown or malformed schema")
+    enabled, capacity, head_before, head_after, dropped_before, dropped_after = (
+        int(value) for value in match.groups()
+    )
+    if head_before != head_after or dropped_before != dropped_after:
+        raise ReproducerError("BAR2 ring status changed during its read")
+    return {
+        "enabled": enabled,
+        "capacity": capacity,
+        "head": head_after,
+        "dropped": dropped_after,
+    }
+
+
+def write_result(run_dir: Path, result: dict[str, Any]) -> None:
+    (run_dir / "result.json").write_text(
+        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8",
+    )
+    print(json.dumps(result, sort_keys=True))
+
+
+def admission_reports_hard_stop(payload: str) -> bool:
+    for name in ("BAR2_HOST_CPU_PTE_COUNT", "HARD_STOP_COUNT"):
+        match = re.search(rf"^{name}=([0-9]+)$", payload, re.MULTILINE)
+        if match and int(match.group(1)) > 0:
+            return True
+    return False
+
+
+def experimental_sample_validity(
+    *,
+    first_frame_ns: int | None,
+    evidence_complete: bool,
+    monitor_failure: bool,
+    trigger_completed: bool,
+    kernel_stop_observed: bool,
+) -> bool:
+    return (
+        first_frame_ns is not None
+        and evidence_complete
+        and not monitor_failure
+        and (trigger_completed or kernel_stop_observed)
+    )
+
+
+def finish_pretrigger_stop(
+    run_dir: Path,
+    status_path: Path,
+    events_path: Path,
+    boot_id: str,
+    reason: str,
+    admission: str,
+) -> int:
+    capture: dict[str, Any] | None = None
+    capture_error: str | None = None
+    try:
+        capture = capture_and_correlate(run_dir, status_path, events_path)
+    except (OSError, ReproducerError, subprocess.SubprocessError) as exc:
+        capture_error = str(exc)
+    result = {
+        "boot_id": boot_id,
+        "admission": admission,
+        "experiment": "pre-trigger stop; no xrdp/GL workload started",
+        "pretrigger_stop_reason": reason,
+        "STIMULUS_STARTED": False,
+        "TRIGGER_COMPLETED": False,
+        "EXPERIMENTAL_SAMPLE_VALID": False,
+        "capture": capture,
+        "capture_error": capture_error,
+    }
+    write_result(run_dir, result)
+    if capture is None:
+        return 5
+    complete = (
+        capture["ring_export_exit_status"] == 0
+        and capture["correlator_exit_status"] == 0
+        and isinstance(capture.get("capture_metadata"), dict)
+        and capture["capture_metadata"].get("ring_loss_proven_through_cutoff") is True
+    )
+    return 4 if complete else 5
 
 
 def find_debugfs_ring_files(
@@ -485,6 +679,9 @@ def execute(args: argparse.Namespace) -> int:
         raise ReproducerError(
             "running Python interpreter does not match the pinned xrdp profile"
         )
+    direct_module = artifacts.get("direct_module")
+    if direct_module is None:
+        raise ReproducerError("xrdp profile lacks the pinned direct-X11 module")
     workload = profile.get("workload")
     if not isinstance(workload, dict) or workload.get("stop_on_first_kernel_hard_stop") is not True:
         raise ReproducerError("trigger profile does not require stop-on-first-hard-stop")
@@ -499,6 +696,12 @@ def execute(args: argparse.Namespace) -> int:
     if not display:
         raise ReproducerError("DISPLAY is empty; run from the admitted local X11 desktop")
 
+    gpu = manifest.get("gpu")
+    expected_bdf = gpu.get("pci_bdf") if isinstance(gpu, dict) else None
+    if not isinstance(expected_bdf, str):
+        raise ReproducerError("deployment manifest lacks the pinned Nouveau PCI BDF")
+    status_path, events_path = find_debugfs_ring_files(expected_bdf)
+
     cursor_result = run_command([
         "journalctl", "-k", "-b", "-n", "0", "--no-pager", "-o", "json",
         "--show-cursor",
@@ -511,12 +714,43 @@ def execute(args: argparse.Namespace) -> int:
     admission = run_command(
         admission_command(manifest_path, display), timeout=180,
     )
+    admission_text = admission.stdout + admission.stderr
     (run_dir / "admission.log").write_text(
-        admission.stdout + admission.stderr, encoding="utf-8",
+        admission_text, encoding="utf-8",
     )
     admission_lines = set(admission.stdout.splitlines())
+    system_boot_id = Path("/proc/sys/kernel/random/boot_id").read_text(
+        encoding="ascii",
+    ).strip()
     if admission.returncode or "RUN_ELIGIBLE=true" not in admission_lines:
-        raise ReproducerError("post-boot admission did not return RUN_ELIGIBLE=true")
+        try:
+            records, _latest, delta_reason = journal_records_after(cursor, system_boot_id)
+            delta_path = run_dir / "pretrigger-journal-delta.jsonl"
+            delta_path.write_text(
+                "".join(line + "\n" for line in records), encoding="utf-8",
+            )
+        except ReproducerError as exc:
+            delta_reason = None
+            (run_dir / "pretrigger-journal-error.txt").write_text(
+                str(exc) + "\n", encoding="utf-8",
+            )
+        if delta_reason or admission_reports_hard_stop(admission_text):
+            return finish_pretrigger_stop(
+                run_dir, status_path, events_path, system_boot_id,
+                delta_reason or "ADMISSION_REPORTED_PREEXISTING_HARD_STOP",
+                "RUN_ELIGIBLE=false",
+            )
+        result = {
+            "boot_id": system_boot_id,
+            "admission": "RUN_ELIGIBLE=false",
+            "admission_exit_status": admission.returncode,
+            "experiment": "admission rejected; no xrdp/GL workload started",
+            "STIMULUS_STARTED": False,
+            "TRIGGER_COMPLETED": False,
+            "EXPERIMENTAL_SAMPLE_VALID": False,
+        }
+        write_result(run_dir, result)
+        return 2
     boot_line = next(
         (line for line in admission.stdout.splitlines() if line.startswith("BOOT_ID=")),
         None,
@@ -524,16 +758,31 @@ def execute(args: argparse.Namespace) -> int:
     if boot_line is None:
         raise ReproducerError("admission output lacks BOOT_ID")
     boot_id = boot_line.split("=", 1)[1]
+    if boot_id != system_boot_id:
+        raise ReproducerError("admission BOOT_ID differs from the current boot ID")
 
-    pretrigger_records, latest_cursor = journal_records_after(cursor, boot_id)
-    (run_dir / "pretrigger-journal-delta.jsonl").write_text(
-        "".join(line + "\n" for line in pretrigger_records), encoding="utf-8",
+    delta_path = run_dir / "pretrigger-journal-delta.jsonl"
+    delta_path.write_text("", encoding="utf-8")
+    pretrigger_records, latest_cursor, pretrigger_reason = journal_records_after(
+        cursor, boot_id,
     )
-    gpu = manifest.get("gpu")
-    expected_bdf = gpu.get("pci_bdf") if isinstance(gpu, dict) else None
-    if not isinstance(expected_bdf, str):
-        raise ReproducerError("deployment manifest lacks the pinned Nouveau PCI BDF")
-    status_path, events_path = find_debugfs_ring_files(expected_bdf)
+    append_journal_delta(delta_path, pretrigger_records)
+    if pretrigger_reason:
+        return finish_pretrigger_stop(
+            run_dir, status_path, events_path, boot_id, pretrigger_reason,
+            "RUN_ELIGIBLE=true; pre-trigger hard stop observed",
+        )
+
+    baseline_seconds = workload.get("passive_baseline_seconds")
+    latest_cursor, baseline_reason = wait_passive_baseline(
+        baseline_seconds, latest_cursor, boot_id, delta_path,
+    )
+    if baseline_reason:
+        return finish_pretrigger_stop(
+            run_dir, status_path, events_path, boot_id, baseline_reason,
+            "RUN_ELIGIBLE=true; passive baseline hard stop observed",
+        )
+
     try:
         sample_delay = float(workload.get("ring_headroom_sample_seconds", 1.0))
     except (TypeError, ValueError) as exc:
@@ -546,6 +795,15 @@ def execute(args: argparse.Namespace) -> int:
             time.sleep(sample_delay)
         status_sample = read_root_debugfs(status_path)
         samples.append((time.monotonic(), status_sample))
+        sample_records, latest_cursor, sample_reason = journal_records_after(
+            latest_cursor, boot_id,
+        )
+        append_journal_delta(delta_path, sample_records)
+        if sample_reason:
+            return finish_pretrigger_stop(
+                run_dir, status_path, events_path, boot_id, sample_reason,
+                "RUN_ELIGIBLE=true; headroom-sampling hard stop observed",
+            )
     try:
         projection_seconds = (
             float(workload.get("startup_budget_seconds", 20.0))
@@ -562,24 +820,31 @@ def execute(args: argparse.Namespace) -> int:
             safety_margin=ring_headroom_safety_margin,
         )
     except RingHeadroomError as exc:
-        raise ReproducerError(f"refusing xrdp trigger: {exc}") from exc
+        result = {
+            "boot_id": boot_id,
+            "admission": "RUN_ELIGIBLE=true",
+            "experiment": "ring headroom refused trigger; no xrdp/GL workload started",
+            "ring_headroom_error": str(exc),
+            "STIMULUS_STARTED": False,
+            "TRIGGER_COMPLETED": False,
+            "EXPERIMENTAL_SAMPLE_VALID": False,
+        }
+        write_result(run_dir, result)
+        return 2
     (run_dir / "ring-headroom.json").write_text(
         json.dumps(headroom, indent=2, sort_keys=True) + "\n", encoding="utf-8",
     )
 
     workspace = Path(str(profile["workspace"])).resolve(strict=True)
-    argv = benchmark_argv(
-        workspace, display, python, workload, no_chansrv=args.no_chansrv,
-    )
+    argv = benchmark_argv(workspace, display, python, workload, direct_module)
     env = os.environ.copy()
     env.update({
         "XRDP_CONSOLE_WORKSPACE": str(workspace),
         "XRDP_CONSOLE_BUILD_DIR": str(workspace / "build-direct-console"),
         "XRDP_CONSOLE_HELPER_DIR": str(workspace / "build-direct-console/bin"),
         "XRDP_CONSOLE_XRDP": str(artifacts["xrdp"]),
-        "XRDP_CONSOLE_X11VNC": str(artifacts["x11vnc"]),
+        "XRDP_CONSOLE_MODULE": str(direct_module),
         "XRDP_CONSOLE_FREERDP": str(artifacts["freerdp"]),
-        "XRDP_CONSOLE_CHANSRV": str(artifacts["xrdp_chansrv"]),
         "XRDP_CONSOLE_RESULTS": str(run_dir / "xrdp-console-results"),
     })
     invocation = {
@@ -588,13 +853,11 @@ def execute(args: argparse.Namespace) -> int:
         "bar2_ring_status_path": str(status_path),
         "bar2_ring_events_path": str(events_path),
         "argv": argv,
+        "backend": "direct-x11",
+        "direct_graphics_transport": "gfx-planar",
         "xrdp_profile": PROFILE.name,
         "xrdp_profile_sha256": sha256_file(PROFILE),
         "xrdp_workspace_commit": profile["review_commit"],
-        "chansrv_mode": (
-            "disabled_diagnostic_variant" if args.no_chansrv
-            else "profile_default"
-        ),
         "artifact_sha256": {
             name: sha256_file(path) for name, path in artifacts.items()
         },
@@ -613,6 +876,7 @@ def execute(args: argparse.Namespace) -> int:
     monitor_failure = False
     benchmark_rc = 0
     cleanup_timeout = False
+    trigger_start_head: int | None = None
     try:
         follower = subprocess.Popen(
             [
@@ -627,52 +891,59 @@ def execute(args: argparse.Namespace) -> int:
         )
         time.sleep(FOLLOW_READY_SECONDS)
         if follower.poll() is not None:
-            error_path = run_dir / "journal-follower.stderr"
-            raise ReproducerError(
-                "kernel journal follower exited before trigger: "
-                + error_path.read_text(encoding="utf-8", errors="replace")
-            )
+            stop_reason = "JOURNAL_FOLLOWER_FAILED"
+            monitor_failure = True
 
         # Catch a stop event that arrived while the ring capacity was checked.
-        early_reason, early_monitor_failed = read_live_journal(
-            follower, selector, run_dir / "journal-follow.jsonl", boot_id,
-            follower_buffer,
-        )
-        if early_monitor_failed or early_reason:
-            raise ReproducerError(
-                f"refusing trigger because journal monitoring is not clean: "
-                f"reason={early_reason or 'follower failed'}"
+        if stop_reason is None and follower is not None:
+            early_reason, early_monitor_failed = read_live_journal(
+                follower, selector, run_dir / "journal-follow.jsonl", boot_id,
+                follower_buffer,
             )
+            if early_monitor_failed or early_reason:
+                stop_reason = early_reason or "JOURNAL_FOLLOWER_FAILED"
+                monitor_failure = early_monitor_failed or early_reason is None
 
-        with (run_dir / "benchmark.log").open("wb") as benchmark_log:
-            process = subprocess.Popen(
-                argv,
-                cwd=workspace,
-                env=env,
-                stdin=subprocess.DEVNULL,
-                stdout=benchmark_log,
-                stderr=subprocess.STDOUT,
-                start_new_session=True,
-            )
-            deadline = time.monotonic() + DEFAULT_MAX_RUNTIME_SECONDS
-            while process.poll() is None:
-                if time.monotonic() >= deadline:
-                    stop_reason = "TRIGGER_WALL_TIMEOUT"
-                    break
-                reason, failed = read_live_journal(
-                    follower, selector, run_dir / "journal-follow.jsonl", boot_id,
-                    follower_buffer,
+        if stop_reason is None:
+            try:
+                start_status = check_status(
+                    read_root_debugfs(status_path),
+                    minimum_free=headroom["required_free"],
                 )
-                if failed:
-                    stop_reason = "JOURNAL_FOLLOWER_FAILED"
-                    monitor_failure = True
-                    break
-                if reason:
-                    stop_reason = reason
-                    break
-            benchmark_rc, cleanup_timeout = terminate_benchmark(
-                process, interrupt=stop_reason is not None,
-            )
+                trigger_start_head = start_status["head"]
+            except RingHeadroomError as exc:
+                stop_reason = f"PRETRIGGER_RING_REFUSAL: {exc}"
+
+        if stop_reason is None:
+            with (run_dir / "benchmark.log").open("wb") as benchmark_log:
+                process = subprocess.Popen(
+                    argv,
+                    cwd=workspace,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=benchmark_log,
+                    stderr=subprocess.STDOUT,
+                    start_new_session=True,
+                )
+                deadline = time.monotonic() + DEFAULT_MAX_RUNTIME_SECONDS
+                while process.poll() is None:
+                    if time.monotonic() >= deadline:
+                        stop_reason = "TRIGGER_WALL_TIMEOUT"
+                        break
+                    reason, failed = read_live_journal(
+                        follower, selector, run_dir / "journal-follow.jsonl", boot_id,
+                        follower_buffer,
+                    )
+                    if failed:
+                        stop_reason = "JOURNAL_FOLLOWER_FAILED"
+                        monitor_failure = True
+                        break
+                    if reason:
+                        stop_reason = reason
+                        break
+                benchmark_rc, cleanup_timeout = terminate_benchmark(
+                    process, interrupt=stop_reason is not None,
+                )
     finally:
         if process is not None and process.poll() is None:
             benchmark_rc, _cleanup_failed = terminate_benchmark(process, interrupt=True)
@@ -686,31 +957,30 @@ def execute(args: argparse.Namespace) -> int:
         follower_stderr.close()
         selector.close()
 
-    if process is None:
-        raise ReproducerError("xrdp benchmark did not start")
-
-    ring_path = run_dir / "ambient-bar2-ring.txt"
-    capture_root_debugfs(events_path, ring_path)
-    kernel_journal, all_journal = archive_journals(run_dir)
-    export_path = run_dir / "ring-merged-kernel.jsonl"
-    export = run_command([
-        sys.executable, str(EXPORTER), "--ring", str(ring_path),
-        "--kernel-journal", str(kernel_journal), "--output", str(export_path),
-    ], timeout=180)
-    (run_dir / "ring-export.log").write_text(
-        export.stdout + export.stderr, encoding="utf-8",
-    )
-    correlation_rc = None
-    if export.returncode == 0:
-        correlation = run_command([
-            sys.executable, str(CORRELATOR), str(export_path),
-        ], timeout=180)
-        (run_dir / "ambient-correlation.json").write_text(
-            correlation.stdout + correlation.stderr, encoding="utf-8",
+    if process is None and stop_reason is None:
+        stop_reason = "TRIGGER_NOT_STARTED"
+    benchmark_log_path = run_dir / "benchmark.log"
+    first_frame_ns = None
+    if benchmark_log_path.is_file():
+        first_frame_ns = first_gpu_churn_frame(
+            benchmark_log_path.read_text(encoding="utf-8", errors="replace"),
         )
-        correlation_rc = correlation.returncode
+    capture = capture_and_correlate(run_dir, status_path, events_path)
+    capture_metadata = capture.get("capture_metadata")
+    ring_end_head = (
+        capture_metadata.get("ring_head")
+        if isinstance(capture_metadata, dict) else None
+    )
+    ring_event_delta = None
+    if (
+        isinstance(trigger_start_head, int)
+        and isinstance(ring_end_head, int)
+        and ring_end_head >= trigger_start_head
+    ):
+        ring_event_delta = ring_end_head - trigger_start_head
 
     if stop_reason is None:
+        kernel_journal = run_dir / "whole-boot-kernel.jsonl"
         for line in kernel_journal.read_text(encoding="utf-8").splitlines():
             reason = kernel_record_stop_reason(line, boot_id)
             if reason:
@@ -718,34 +988,55 @@ def execute(args: argparse.Namespace) -> int:
                 monitor_failure = True
                 break
 
+    evidence_complete = (
+        capture["ring_export_exit_status"] == 0
+        and capture["correlator_exit_status"] == 0
+        and isinstance(capture_metadata, dict)
+        and capture_metadata.get("ring_loss_proven_through_cutoff") is True
+        and capture_metadata.get("ring_dropped_at_snapshot") == 0
+    )
+    trigger_completed = (
+        process is not None and benchmark_rc == 0 and stop_reason is None
+    )
+    kernel_stop_observed = stop_reason is not None and stop_reason not in {
+        "TRIGGER_WALL_TIMEOUT", "JOURNAL_FOLLOWER_FAILED",
+        "KERNEL_JOURNAL_LOSS", "TRIGGER_NOT_STARTED",
+    } and not stop_reason.startswith("PRETRIGGER_RING_REFUSAL:")
+    stimulus_started = first_frame_ns is not None
+    sample_valid = experimental_sample_validity(
+        first_frame_ns=first_frame_ns,
+        evidence_complete=evidence_complete,
+        monitor_failure=monitor_failure,
+        trigger_completed=trigger_completed,
+        kernel_stop_observed=kernel_stop_observed,
+    )
+
     result = {
         "boot_id": boot_id,
         "admission": "RUN_ELIGIBLE=true",
-        "experiment": "pinned xrdp-console graphics-under-churn VNC/RDP reproducer",
-        "chansrv_mode": (
-            "disabled_diagnostic_variant" if args.no_chansrv
-            else "profile_default"
-        ),
+        "experiment": "pinned xrdp-console direct-X11 GFX Planar graphics-under-churn",
         "stop_reason": stop_reason,
         "benchmark_exit_status": benchmark_rc,
         "benchmark_cleanup_timeout": cleanup_timeout,
         "journal_monitor_failure": monitor_failure,
-        "ring_export_exit_status": export.returncode,
-        "correlator_exit_status": correlation_rc,
-        "artifacts": {
-            path.name: file_sha256(path)
-            for path in (ring_path, kernel_journal, all_journal, export_path)
-            if path.is_file()
-        },
+        "STIMULUS_STARTED": stimulus_started,
+        "first_gpu_churn_frame_monotonic_ns": first_frame_ns,
+        "TRIGGER_COMPLETED": trigger_completed,
+        "EXPERIMENTAL_SAMPLE_VALID": sample_valid,
+        "kernel_stop_observed_after_stimulus_start": (
+            stimulus_started and kernel_stop_observed
+        ),
+        "trigger_start_ring_head": trigger_start_head,
+        "snapshot_ring_head": ring_end_head,
+        "ring_event_delta_through_snapshot": ring_event_delta,
+        "evidence_capture_complete_through_ring_cutoff": evidence_complete,
+        "capture": capture,
     }
-    (run_dir / "result.json").write_text(
-        json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8",
-    )
-    print(json.dumps(result, sort_keys=True))
+    write_result(run_dir, result)
 
     if stop_reason:
         return 4
-    if benchmark_rc != 0 or export.returncode != 0 or correlation_rc != 0:
+    if not trigger_completed or not evidence_complete:
         return 5
     return 0
 
@@ -754,10 +1045,6 @@ def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--manifest", type=Path, required=True)
     parser.add_argument("--run-dir", type=Path, required=True)
-    parser.add_argument(
-        "--no-chansrv", action="store_true",
-        help="omit the private chansrv helper while preserving the VNC/RDP graphics path",
-    )
     args = parser.parse_args()
     try:
         return execute(args)

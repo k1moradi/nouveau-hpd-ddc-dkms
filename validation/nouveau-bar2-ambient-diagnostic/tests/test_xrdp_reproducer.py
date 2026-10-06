@@ -171,30 +171,30 @@ class XrdpReproducerTests(unittest.TestCase):
         profile = RUNNER.load_json(RUNNER.PROFILE)
         workload = profile["workload"]
         python = Path(profile["artifacts"]["python"]["path"])
+        direct_module = Path(profile["artifacts"]["direct_module"]["path"])
         argv = RUNNER.benchmark_argv(
-            Path(profile["workspace"]), ":0", python, workload,
+            Path(profile["workspace"]), ":0", python, workload, direct_module,
         )
         self.assertEqual(argv[0:2], [str(python), "-B"])
+        self.assertEqual(argv[argv.index("--backend") + 1], "direct-x11")
         self.assertIn("--mode", argv)
         self.assertEqual(argv[argv.index("--mode") + 1], "graphics-under-churn")
+        self.assertEqual(
+            argv[argv.index("--direct-graphics-transport") + 1], "gfx-planar",
+        )
+        self.assertEqual(
+            argv[argv.index("--direct-module") + 1],
+            str(direct_module.resolve(strict=True)),
+        )
         self.assertEqual(argv[argv.index("--duration") + 1], "20")
         self.assertEqual(argv[argv.index("--repetitions") + 1], "1")
-        self.assertIn("--enable-gfx-for-vnc", argv)
         self.assertFalse(any(
             name in " ".join(argv).lower()
             for name in ("mpv", "ffmpeg", "ffplay", "vainfo")
         ))
-        variant_argv = RUNNER.benchmark_argv(
-            Path(profile["workspace"]), ":0", python, workload,
-            no_chansrv=True,
-        )
-        self.assertEqual(variant_argv[:-1], argv)
-        self.assertEqual(variant_argv[-1], "--no-chansrv")
-        with self.assertRaisesRegex(RUNNER.ReproducerError, "must be a boolean"):
-            RUNNER.benchmark_argv(
-                Path(profile["workspace"]), ":0", python, workload,
-                no_chansrv=1,  # type: ignore[arg-type]
-            )
+        self.assertNotIn("--no-chansrv", argv)
+        self.assertNotIn("--enable-gfx-for-vnc", argv)
+        self.assertNotIn("--pipeline", argv)
 
     def test_profile_requires_explicit_trigger_event_budget(self):
         profile = RUNNER.load_json(RUNNER.PROFILE)
@@ -252,7 +252,112 @@ class XrdpReproducerTests(unittest.TestCase):
             RUNNER.benchmark_argv(
                 Path(profile["workspace"]), ":0",
                 Path(profile["artifacts"]["python"]["path"]), workload,
+                Path(profile["artifacts"]["direct_module"]["path"]),
             )
+
+    def test_profile_requires_the_pinned_ten_second_passive_baseline(self):
+        profile = RUNNER.load_json(RUNNER.PROFILE)
+        workload = dict(profile["workload"])
+        workload["passive_baseline_seconds"] = 0
+        with self.assertRaisesRegex(RUNNER.ReproducerError, "passive_baseline_seconds"):
+            RUNNER.benchmark_argv(
+                Path(profile["workspace"]), ":0",
+                Path(profile["artifacts"]["python"]["path"]), workload,
+                Path(profile["artifacts"]["direct_module"]["path"]),
+            )
+
+    def test_first_gpu_churn_frame_requires_one_valid_completed_frame_marker(self):
+        self.assertEqual(
+            RUNNER.first_gpu_churn_frame(
+                "startup\nGPU_CHURN_FIRST_FRAME monotonic_ns=123456789\n"
+            ),
+            123456789,
+        )
+        self.assertIsNone(RUNNER.first_gpu_churn_frame("benchmark failed before GL\n"))
+        for invalid in (
+            "GPU_CHURN_FIRST_FRAME monotonic_ns=0\n",
+            "GPU_CHURN_FIRST_FRAME monotonic_ns=12x\n",
+            "GPU_CHURN_FIRST_FRAME monotonic_ns=1\nGPU_CHURN_FIRST_FRAME monotonic_ns=2\n",
+        ):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(
+                RUNNER.ReproducerError, "malformed or duplicate",
+            ):
+                RUNNER.first_gpu_churn_frame(invalid)
+
+    def test_sample_is_never_valid_without_a_completed_gpu_frame(self):
+        self.assertFalse(RUNNER.experimental_sample_validity(
+            first_frame_ns=None,
+            evidence_complete=True,
+            monitor_failure=False,
+            trigger_completed=True,
+            kernel_stop_observed=False,
+        ))
+        self.assertTrue(RUNNER.experimental_sample_validity(
+            first_frame_ns=123,
+            evidence_complete=True,
+            monitor_failure=False,
+            trigger_completed=True,
+            kernel_stop_observed=False,
+        ))
+        self.assertTrue(RUNNER.experimental_sample_validity(
+            first_frame_ns=123,
+            evidence_complete=True,
+            monitor_failure=False,
+            trigger_completed=False,
+            kernel_stop_observed=True,
+        ))
+        self.assertFalse(RUNNER.experimental_sample_validity(
+            first_frame_ns=123,
+            evidence_complete=False,
+            monitor_failure=False,
+            trigger_completed=True,
+            kernel_stop_observed=False,
+        ))
+        self.assertFalse(RUNNER.experimental_sample_validity(
+            first_frame_ns=123,
+            evidence_complete=True,
+            monitor_failure=True,
+            trigger_completed=True,
+            kernel_stop_observed=False,
+        ))
+
+    def test_journal_delta_returns_first_stop_without_discarding_rows(self):
+        payload = journal_line(
+            "nouveau: fifo: fault 00 [READ] at 0x46f000 engine 05 [BAR2] "
+            "client 07 [HUB/HOST_CPU] reason 02 [PTE]"
+        ).decode("ascii").strip()
+        record = json.loads(payload)
+        record["__CURSOR"] = "cursor-2"
+        with mock.patch.object(
+            RUNNER, "run_command",
+            return_value=subprocess.CompletedProcess(
+                [], 0, json.dumps(record) + "\n", "",
+            ),
+        ):
+            lines, cursor, reason = RUNNER.journal_records_after("cursor-1", BOOT)
+
+        self.assertEqual(len(lines), 1)
+        self.assertEqual(cursor, "cursor-2")
+        self.assertEqual(reason, "BAR2/HOST_CPU/PTE")
+
+    def test_passive_baseline_stops_and_saves_first_kernel_fault(self):
+        line = journal_line("NOUVEAU_DIAG_BAR2_FAULT seq=9 va=0x46f000").decode("ascii")
+        with tempfile.TemporaryDirectory() as temporary:
+            delta_path = Path(temporary) / "pretrigger.jsonl"
+            with (
+                mock.patch.object(
+                    RUNNER, "journal_records_after",
+                    return_value=([line.strip()], "cursor-9", "NOUVEAU_DIAGNOSTIC_BAR2_FAULT"),
+                ),
+                mock.patch.object(RUNNER.time, "monotonic", return_value=1.0),
+            ):
+                cursor, reason = RUNNER.wait_passive_baseline(
+                    10, "cursor-8", BOOT, delta_path,
+                )
+
+            self.assertEqual(cursor, "cursor-9")
+            self.assertEqual(reason, "NOUVEAU_DIAGNOSTIC_BAR2_FAULT")
+            self.assertEqual(delta_path.read_text(encoding="utf-8"), line)
 
     def test_kernel_record_detects_fault_ring_fault_and_log_loss(self):
         cases = (

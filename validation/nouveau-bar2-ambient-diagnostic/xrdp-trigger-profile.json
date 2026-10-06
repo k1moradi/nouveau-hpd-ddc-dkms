@@ -1,7 +1,7 @@
 {
   "schema": 1,
   "workspace": "/home/keivan/xrdp-console",
-  "review_commit": "22da3e098a1bccfe2bbfc3876c8bdca8aa6fcabd",
+  "review_commit": "dc94f36fc562df99f7ce1f00798196c01f220f9a",
   "artifacts": {
     "python": {
       "path": "/usr/bin/python3.14",
@@ -9,7 +9,7 @@
     },
     "benchmark": {
       "path": "/home/keivan/xrdp-console/tools/benchmark/xrdp_console_bench.py",
-      "sha256": "3fbfda31957dcd33ccd97bdde8307b5893876cd7c57f532f7bdb616befe2174a"
+      "sha256": "b17a256aa9b01b803cf0a01dcd05417f3616c27b46f31de64553c8018172b2cc"
     },
     "gpu_stimulus": {
       "path": "/home/keivan/xrdp-console/build-direct-console/bin/x11-gpu-stimulus",
@@ -27,17 +27,9 @@
       "path": "/home/keivan/xrdp-console/build-direct-console/_deps/xrdp-install/sbin/xrdp",
       "sha256": "76fc0e594d6429f0d47a4e8ff654202038b5eefd6e7008f3ffd324ccb8b66871"
     },
-    "xrdp_chansrv": {
-      "path": "/home/keivan/xrdp-console/build-direct-console/_deps/xrdp-install/sbin/xrdp-chansrv",
-      "sha256": "62a5c43fe27ebeb17449167da0696a1d2fadbd65ba0a3e7b2e45d56407d6a38c"
-    },
-    "libvnc": {
-      "path": "/home/keivan/xrdp-console/build-direct-console/_deps/xrdp-install/lib/xrdp/libvnc.so",
-      "sha256": "3026df88b3cc4790a553351d965b9eeafb9793dcdf714b5bd9c51f7675680c79"
-    },
-    "x11vnc": {
-      "path": "/usr/bin/x11vnc",
-      "sha256": "35b7306bb13a4115118500ea7db2ee333eef4a6a0a3d9252a469ab8fe8d170d4"
+    "direct_module": {
+      "path": "/home/keivan/xrdp-console/build-direct-console/_deps/xrdp-install/lib/xrdp/libxrdp_console.so",
+      "sha256": "29da88199e8a563b8cc164789f1fc164bb7e00ac73c4821e4ce10f0aacebe53e"
     },
     "freerdp": {
       "path": "/usr/bin/xfreerdp",
@@ -55,23 +47,26 @@
       "path": "/usr/bin/xset",
       "sha256": "4a3dcebef8769e5dd9692ed0b088eb2afc572ff0c7dfadf64c0ab931a0eafae4"
     },
-    "v6_v4_proxy": {
-      "path": "/home/keivan/xrdp-console/tools/benchmark/rfb_v6_v4_proxy.py",
-      "sha256": "d5fd9b957cd23f52282af487383991b6b66211ed6ea5fbfd471ef7893fb412aa"
+    "xdpyinfo": {
+      "path": "/usr/bin/xdpyinfo",
+      "sha256": "dee3230819f850dfa2d6dfc04dafdb2be603e4d6a74d88a747e0443659fd254b"
+    },
+    "openssl": {
+      "path": "/usr/bin/openssl",
+      "sha256": "1d72cbc5bf62be3f3dbd7626c295b63c5fdc1dd8439f323ac47998d8a062b4c9"
     }
   },
   "workload": {
-    "backend": "vnc",
+    "backend": "direct-x11",
     "transport": "rdp",
     "mode": "graphics-under-churn",
     "network_mode": "localhost",
-    "pipeline": "gfx",
+    "direct_graphics_transport": "gfx-planar",
     "fps": 30,
     "duration_seconds": 20,
     "repetitions": 1,
     "width": 1024,
     "height": 640,
-    "enable_gfx_for_vnc": true,
     "expected_trigger_events": 65536,
     "trigger_event_budget_note": "Reserved one quarter of the order-18 ring; unmeasured conservative admission budget, not an observed upper bound.",
     "minimum_ring_headroom": 30000,
@@ -81,6 +76,7 @@
     "startup_budget_seconds": 20,
     "post_trigger_capture_seconds": 35,
     "shutdown_budget_seconds": 10,
+    "passive_baseline_seconds": 10,
     "stop_on_first_kernel_hard_stop": true
   }
 }
